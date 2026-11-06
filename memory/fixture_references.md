@@ -20,3 +20,12 @@ reference integrity run everywhere. Upgrading scanpy fails
 
 **Pyright:** numpy >= 2.3 stubs only type-check at Python >= 3.12, so
 `[tool.pyright] pythonVersion` is 3.13 (user decision, 1.5); ruff keeps the 3.10 floor.
+
+**Breaks (CI, 1.5):** scanpy's own output is not reproducible across runners. Rerunning
+the synthetic references on Linux x86_64/aarch64, macOS arm64 and Windows x86_64 gave
+PCA differences up to 1e-3 (arpack, nearly flat spectrum after the ~3 cell-type
+components), which then flip kNN neighbours, one HVG `highly_variable_nbatches` value
+and `rank_genes_groups` order at ties. qc, normalize/log1p and scale reproduce. So the
+stored `.npz` files are the reference (never regenerate per platform), and parity for
+6.3/6.5-6.10 must compare robustly: PCA on leading components or subspace angles, kNN
+as set overlap, ranks allowing ties.
