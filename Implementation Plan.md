@@ -54,7 +54,7 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 - [x] **1.1 Cargo workspace.** Create the crates in the repo map as a virtual workspace with shared lint settings.
   - Depends: none
   - Done when: `cargo build --workspace` and `cargo test --workspace` pass.
-- [ ] **1.2 Python package.** `kyto-py` as a PyO3 extension (`abi3-py310`), maturin as build backend, mixed Rust/Python layout, dev environment managed with uv.
+- [x] **1.2 Python package.** `kyto-py` as a PyO3 extension (`abi3-py310`), maturin as build backend, mixed Rust/Python layout, dev environment managed with uv.
   - Depends: 1.1
   - Done when: `uv run maturin develop` then `uv run python -c "import kyto; print(kyto.__version__)"` succeeds.
 - [ ] **1.3 Lint and format.** `rustfmt`, `clippy -D warnings`, `ruff format`, `ruff check` (import sorting on), `pyright --strict` on stubs, all in pre-commit.

@@ -1,1 +1,17 @@
+# Rust
 /target
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Compiled extension modules
+*.so
+*.pyd
+*.dylib

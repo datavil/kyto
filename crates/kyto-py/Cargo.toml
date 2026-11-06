@@ -10,4 +10,15 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+# Python imports the compiled module as `kyto._kyto` (see pyproject.toml).
+name = "_kyto"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Turned on only by maturin (`[tool.maturin] features` in pyproject.toml). Leaving it
+# off for plain cargo builds lets `cargo test --workspace` link against libpython.
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
+pyo3 = { version = "0.30.1", features = ["abi3-py310"] }

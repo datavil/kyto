@@ -1,0 +1,40 @@
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kyto"
+description = "Lazy, streaming single-cell analysis, written in Rust, used from Python."
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+]
+# The version comes from the workspace Cargo.toml (single source).
+dynamic = ["version"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.9.4,<2",
+    "pytest>=8",
+]
+
+[tool.maturin]
+manifest-path = "crates/kyto-py/Cargo.toml"
+python-source = "python"
+module-name = "kyto._kyto"
+features = ["extension-module"]
+
+[tool.uv]
+# Rebuild the extension whenever Rust sources or manifests change (memory/build_single_path.md).
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/Cargo.toml" },
+    { file = "crates/**/*.rs" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
