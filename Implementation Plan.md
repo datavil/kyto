@@ -64,7 +64,7 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
   - Depends: 1.3
   - Done when: a PR runs lint, tests and wheel builds, all green.
   - Note: kyto commits straight to `main`, so `.github/workflows/ci.yml` runs on push to `main` as well as on `pull_request`; a green push to `main` satisfies this check.
-- [ ] **1.5 Test fixtures.** A seeded synthetic generator (cells, genes, sparsity, batches) plus a cached public PBMC dataset; reference outputs from scanpy stored for parity tests.
+- [x] **1.5 Test fixtures.** A seeded synthetic generator (cells, genes, sparsity, batches) plus a cached public PBMC dataset; reference outputs from scanpy stored for parity tests.
   - Depends: 1.2
   - Done when: `uv run pytest tests/fixtures` builds every fixture and checks its hash.
 - [ ] **1.6 AGENTS.md.** Copies R1–R12, the task protocol, the repo map and the exact commands for build, test, lint and bench. `CLAUDE.md` links to it.

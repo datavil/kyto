@@ -241,6 +241,8 @@ cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run pytest                             # Python tests (API, parity, property)
+uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
+uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references (on purpose only)
 uv run pre-commit install                 # run the hooks on every git commit (once)
 uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before every commit
 ```

@@ -15,3 +15,6 @@ build/
 *.so
 *.pyd
 *.dylib
+
+# Downloaded test data (tests/fixtures/pbmc.py); never committed
+/.cache/

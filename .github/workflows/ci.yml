@@ -65,6 +65,12 @@ jobs:
           enable-cache: true
       # Builds the extension into .venv (memory/build_single_path.md).
       - run: uv sync
+      # Downloaded test data (tests/fixtures/pbmc.py), verified by SHA-256 on use. The
+      # key changes only when pbmc.py (URL, checksum) does, so runs do not refetch.
+      - uses: actions/cache@v6
+        with:
+          path: .cache/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/pbmc.py') }}
       # Without `extension-module` the Rust test binary links libpython; on Linux the
       # loader only finds it if the interpreter's LIBDIR is on LD_LIBRARY_PATH.
       - name: put libpython on the loader path (Linux)

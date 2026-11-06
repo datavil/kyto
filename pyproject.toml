@@ -17,10 +17,18 @@ dynamic = ["version"]
 [dependency-groups]
 dev = [
     "maturin>=1.9.4,<2",
+    "numpy>=2.2",
     "pre-commit>=4.6.2",
     "pyright[nodejs]>=1.1.414",
     "pytest>=8",
     "ruff>=0.17.4",
+    # Reference implementations for parity (task 1.5), pinned in uv.lock. Only on
+    # Python >= 3.12 (scanpy 1.12) and not on Windows ARM64 or macOS x86_64: numcodecs,
+    # numba, llvmlite or scikit-misc have no wheels there. Parity tests skip without
+    # scanpy; building the fixtures needs only numpy.
+    "anndata>=0.12.19; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "scanpy>=1.12.5; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "scikit-misc>=0.5; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
 
 [tool.maturin]
@@ -41,6 +49,8 @@ cache-keys = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Test helpers (tests/fixtures) import as `fixtures`.
+pythonpath = ["tests"]
 
 [tool.ruff]
 target-version = "py310"
@@ -54,6 +64,11 @@ extend-select = ["I", "UP", "B"]
 # Strict on every Python file in the repo (.pyi stubs included); pyright skips
 # dot-directories such as .venv by default.
 typeCheckingMode = "strict"
-pythonVersion = "3.10"
+# The dev env's version (.python-version). numpy >= 2.3 stubs only type-check on
+# Python >= 3.12 (collections.abc.Buffer); ruff's target-version keeps the 3.10 syntax
+# floor. Decided by the user in task 1.5.
+pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
+# Test helpers (tests/fixtures) import as `fixtures`.
+extraPaths = ["tests"]

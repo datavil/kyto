@@ -9,3 +9,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [One build path: uv](build_single_path.md): (from ggrust) never `uv run --no-sync` after `maturin develop`; it tests a stale extension (false green).
 - [Never let a failing check reach a commit](check_before_commit.md): (from ggrust) don't pipe the check into grep and then `;` commit; gate on its exit status.
 - [Tests need their own seeded generator](test_seed_isolation.md): (from ggrust) a shared RNG drawn at call time makes results depend on test order.
+- [Fixtures and scanpy references](fixture_references.md): canonical digests, no libm samplers, pbmc3k needs gene filter before cell_ranger HVG, scanpy only on some platforms.

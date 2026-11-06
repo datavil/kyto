@@ -1,0 +1,1394 @@
+{
+ "generator": "uv run --directory tests python -m fixtures.make_reference",
+ "references": {
+  "pbmc3k/hvg": {
+   "arrays": {
+    "cell_ranger/dispersions": {
+     "digest": "0216b96684346f69eeb67b6fdf52854a0e5486602e00fb2a38c6734bdaf223a7",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "cell_ranger/dispersions_norm": {
+     "digest": "fa0a15cc8df3bbb209276d0d71e68d11fba07d2e64a2d6373635968fd4208a33",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "cell_ranger/highly_variable": {
+     "digest": "2df63f08df61cdf180507caf1b54589c6d0aab439e4f5bc5a484e5abe0c9f38c",
+     "dtype": "|b1",
+     "shape": [
+      13714
+     ]
+    },
+    "cell_ranger/mean_bin": {
+     "digest": "6c616858f653bb0fef2a9749aa4eeda8e9722ee6914e8be8131809ea69821782",
+     "dtype": "<U18",
+     "shape": [
+      13714
+     ]
+    },
+    "cell_ranger/means": {
+     "digest": "2efa793cd5e27684114a3f26ec22ab2ebc9e3ab5616c459893589a307cdc8352",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "genes/gene_id": {
+     "digest": "d2dd6b132a0056e948fe2b7382748e1199c147d9903bf9c941c1a3a3a0b37c27",
+     "dtype": "<U15",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat/dispersions": {
+     "digest": "0aa9cc19d69015409e9dfedf0cc7d837a40d53728ab1545fc9cf81f6b0c1d848",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat/dispersions_norm": {
+     "digest": "44ddec92ea0e0bf0f5c015bc245da4105ae41cb0033bd69460af3b0fbbd1b016",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat/highly_variable": {
+     "digest": "b2e432769a7bd9a8effd43d312219ef2be16b18b79ad3399e0dc7844e1cc9dc9",
+     "dtype": "|b1",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat/mean_bin": {
+     "digest": "d86651905aeea15b16f8704be4fc2c3b2afcefced8df3ff8e87a0268dfb13fa0",
+     "dtype": "<U17",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat/means": {
+     "digest": "9ed09423e6f08522cd89ff63607e61060ca6c668ca830fc3106101540957a148",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/gene_name": {
+     "digest": "f489737514a44fb98df54addf8fccf41057a65eb91399919204d8672b3f856db",
+     "dtype": "<U15",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/highly_variable": {
+     "digest": "0256379e99ce9585ce1bd27b3e61b500f42ecd4e4944d2fe3469f11b8ec0c290",
+     "dtype": "|b1",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/highly_variable_rank": {
+     "digest": "10e26ea4c15edcc086e1b82b80c45d231e48e94a74d20f218958b904085b7f66",
+     "dtype": "<f4",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/means": {
+     "digest": "cddcbc3a64754aa5519c7118683f79de853d4ff521bad7bc66f35941a655748a",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/variances": {
+     "digest": "be693d2f1a0cd0afac195d8b2a3a639a678239687c4e6d157f32bf56f66cf69e",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    },
+    "seurat_v3/variances_norm": {
+     "digest": "947b9a4997944aa9bff4cd229fe992cf2a32d04d5c42cd36819fc1f76493d3f0",
+     "dtype": "<f8",
+     "shape": [
+      13714
+     ]
+    }
+   },
+   "file": "pbmc3k/hvg.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.highly_variable_genes",
+    "input": "genes in >= min_cells_per_gene cells; seurat and cell_ranger: log1p of target_sum normalisation; seurat_v3: counts",
+    "min_cells_per_gene": 3,
+    "n_top_genes": 2000
+   }
+  },
+  "pbmc3k/neighbors": {
+   "arrays": {
+    "connectivities/data": {
+     "digest": "1eec2f5efa5e59e0b0ac61024c858f5454e0d3e9fd2052b630c63153768c11c7",
+     "dtype": "<f4",
+     "shape": [
+      62096
+     ]
+    },
+    "connectivities/indices": {
+     "digest": "5b9ada6724b0b6d82cdc2aad5df65c9e04683aea6ee37f9eed1ec18eea7029e6",
+     "dtype": "<i8",
+     "shape": [
+      62096
+     ]
+    },
+    "connectivities/indptr": {
+     "digest": "e319cf47da737dfd1e588eff875bd5981df0a2c7559fa67f6551b0d5677e297b",
+     "dtype": "<i8",
+     "shape": [
+      2701
+     ]
+    },
+    "connectivities/shape": {
+     "digest": "a054d64ebea5035083268bc7a5cd0f9bebbdc36959f1ba801d4ec16662580be3",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    },
+    "distances/data": {
+     "digest": "9c8224445db173cce3152020aa159a5029ff349c4631cff1e4d360257f3e168c",
+     "dtype": "<f8",
+     "shape": [
+      37800
+     ]
+    },
+    "distances/indices": {
+     "digest": "b60a11247dbea95d9564bf2cc1dc150e498e71ce9fd9449c3e97ae63ad8b8336",
+     "dtype": "<i8",
+     "shape": [
+      37800
+     ]
+    },
+    "distances/indptr": {
+     "digest": "43543ba952c6915fce16db858fa6ce202440ce539235e5a8ecea220ed822fe58",
+     "dtype": "<i8",
+     "shape": [
+      2701
+     ]
+    },
+    "distances/shape": {
+     "digest": "ee97b48bee09479ccec2fa55650c11cf1832fde63846a564c89691e06f085238",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    }
+   },
+   "file": "pbmc3k/neighbors.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.neighbors",
+    "input": "pca reference embedding",
+    "method": "umap",
+    "metric": "euclidean",
+    "min_cells_per_gene": 3,
+    "n_neighbors": 15,
+    "n_pcs": 50,
+    "random_state": 0,
+    "transformer": "exact (n_obs < 4096)"
+   }
+  },
+  "pbmc3k/normalize_log1p": {
+   "arrays": {
+    "median/log1p/cell_sum": {
+     "digest": "9712180e4a61fb04797e0211e46de2b5da6bbdff426d66979a83269500714aa2",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "median/log1p/gene_sum": {
+     "digest": "704fd63ced676ec4ae44be7485fcf2010650fb27b56ad20c8bce13c9af8653b0",
+     "dtype": "<f8",
+     "shape": [
+      32738
+     ]
+    },
+    "median/log1p/nnz": {
+     "digest": "a17ad91bf2f4e877d51267956dddd25867f2594bb6f3ec15acddbcf4920c356b",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "median/normalized/cell_sum": {
+     "digest": "0ad25fc06dc8c335edac76b64c84a1825c030d01943ccb89cd3305e96953613a",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "median/normalized/gene_sum": {
+     "digest": "d349c0c6d6b111fde0f932b5299deef90459f574ee629882831b4e24243839a6",
+     "dtype": "<f8",
+     "shape": [
+      32738
+     ]
+    },
+    "median/normalized/nnz": {
+     "digest": "f8fb0d9c5895fbe6a205ad9679600423a6bb94f415b3f83849a598864e8b6ba6",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "target/log1p/cell_sum": {
+     "digest": "1451908b6b527d4bd4b1c82facfcafe6e10eb7cec07373cd03ef11fb99441e60",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "target/log1p/gene_sum": {
+     "digest": "5f2b1eb5f7309ea66d4fa6d194fca54db93d27af2807783072c7edbf1657aa14",
+     "dtype": "<f8",
+     "shape": [
+      32738
+     ]
+    },
+    "target/log1p/nnz": {
+     "digest": "d6e8dcb9803a322974f27f6677ea2f1862f8250a2115aa71beb2d2649fd3ef7f",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "target/normalized/cell_sum": {
+     "digest": "f1f3eaae759a8ea6ef5f1e77b341ad3358ada1d0224a7f345ed71ba7db05ac57",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "target/normalized/gene_sum": {
+     "digest": "9b840c0b65efc929a6a6bafa71a3ded0a2b9fdea93bba2418817ef19683e983d",
+     "dtype": "<f8",
+     "shape": [
+      32738
+     ]
+    },
+    "target/normalized/nnz": {
+     "digest": "cd28f948fcc65b2966ed1fce6a5ed602e39219e9debc00abaab4f35f7ef99068",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    }
+   },
+   "file": "pbmc3k/normalize_log1p.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.normalize_total then scanpy.pp.log1p",
+    "median": "target_sum=None",
+    "stored": "sums only",
+    "target_sum": 10000.0
+   }
+  },
+  "pbmc3k/pca": {
+   "arrays": {
+    "components": {
+     "digest": "0ebf83c8c4cbc242d6968b12df7fd42204abaa71cb02eb9e0d1848298bb891be",
+     "dtype": "<f4",
+     "shape": [
+      2000,
+      50
+     ]
+    },
+    "embedding": {
+     "digest": "2cf4c53095689f1456619bcacdd86425fe5e289bad5568a83a4811140f69ab72",
+     "dtype": "<f4",
+     "shape": [
+      2700,
+      50
+     ]
+    },
+    "genes/gene_id": {
+     "digest": "fd24957ed9ab95babbf1e18be29ef87ffcbd191afd75f126fd4e7114774efc27",
+     "dtype": "<U15",
+     "shape": [
+      2000
+     ]
+    },
+    "variance": {
+     "digest": "b85e5ac90b1b551c4ec295db4735762f42ab89e7e70f33dc029b2da3646bad74",
+     "dtype": "<f4",
+     "shape": [
+      50
+     ]
+    },
+    "variance_ratio": {
+     "digest": "1bea631bd2edfc8f8ac3d0e2ced88180ae18f66e2443cb930c57cd9be54ff2ec",
+     "dtype": "<f4",
+     "shape": [
+      50
+     ]
+    }
+   },
+   "file": "pbmc3k/pca.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.pca",
+    "input": "log1p of target_sum normalisation, seurat HVGs, not scaled",
+    "min_cells_per_gene": 3,
+    "n_comps": 50,
+    "random_state": 0,
+    "svd_solver": "arpack",
+    "zero_center": true
+   }
+  },
+  "pbmc3k/qc": {
+   "arrays": {
+    "cells/log1p_n_genes_by_counts": {
+     "digest": "58608bafffda6b4fb0ae163d7249907d96985e706fec6852a9cb4aeac2ba6a99",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/log1p_total_counts": {
+     "digest": "fc4b78ccf9badfb1d6f025c7d301b85ef19b5998be4010f4a49a99f538706ae7",
+     "dtype": "<f4",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/log1p_total_counts_mt": {
+     "digest": "5567d43b5181884a1cf7de0ca20ff349f5a5656a758d71798e47d97068ebe6d6",
+     "dtype": "<f4",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/n_genes_by_counts": {
+     "digest": "33235775288f1308690bda33b5604bf0aef5b3020eff9c5a25fecab4c84118d9",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/pct_counts_in_top_100_genes": {
+     "digest": "a937232a555e50f9b4add097322c1b5d53c4b7f20aa8b394d8596be2c46bb50f",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/pct_counts_in_top_200_genes": {
+     "digest": "e689c9de9b8e96ca18d5bc7f25775b277815b52a30a3e5d602db854cf923a977",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/pct_counts_in_top_50_genes": {
+     "digest": "d16e1369d7100e286285c16e9fb433d2693419fdad33a802dd43b2367a45a611",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/pct_counts_mt": {
+     "digest": "3a26034a1d65eaee859cff0cc54194f55115ce874ee03eba8d16ad08c7eddf98",
+     "dtype": "<f4",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/total_counts": {
+     "digest": "5376c0e7a395424ed286a6cb8de76ab013c86590dc200bc1e24098bd9a05fff2",
+     "dtype": "<f4",
+     "shape": [
+      2700
+     ]
+    },
+    "cells/total_counts_mt": {
+     "digest": "c95838d377d8c83d77647b78de3bf021c7b36378da867ea0c4c13d0c61a83f00",
+     "dtype": "<f4",
+     "shape": [
+      2700
+     ]
+    },
+    "genes/log1p_mean_counts": {
+     "digest": "0da2fdb87b7acec178e6a4b739a599827be00873ae0040218fbb8b354f148448",
+     "dtype": "<f4",
+     "shape": [
+      32738
+     ]
+    },
+    "genes/log1p_total_counts": {
+     "digest": "a050fb4374b166092dda5196f874228cd934db50c983dff2de5512c51ffda089",
+     "dtype": "<f4",
+     "shape": [
+      32738
+     ]
+    },
+    "genes/mean_counts": {
+     "digest": "fd53ffb6cc4fc70a93ed8b998082dfded277ad9b8f4780770b26cf448c91fff5",
+     "dtype": "<f4",
+     "shape": [
+      32738
+     ]
+    },
+    "genes/n_cells_by_counts": {
+     "digest": "8e1ff48cd73c1faef7576c5acd74b54cca3c2ce182782f06b75cbde0ae592e71",
+     "dtype": "<i8",
+     "shape": [
+      32738
+     ]
+    },
+    "genes/pct_dropout_by_counts": {
+     "digest": "42d8c3d570defdacd10414db7e1789dff8e4f0380df50285b000141834c38059",
+     "dtype": "<f8",
+     "shape": [
+      32738
+     ]
+    },
+    "genes/total_counts": {
+     "digest": "648ee38ed62fd4a0015bc37820043d3939c58c4ef6a7985185464ff971f52b3b",
+     "dtype": "<f4",
+     "shape": [
+      32738
+     ]
+    }
+   },
+   "file": "pbmc3k/qc.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.calculate_qc_metrics",
+    "log1p": true,
+    "percent_top": [
+     50,
+     100,
+     200
+    ],
+    "qc_vars": "mt = symbol starts with 'MT-'"
+   }
+  },
+  "pbmc3k/scale": {
+   "arrays": {
+    "genes/gene_id": {
+     "digest": "fd24957ed9ab95babbf1e18be29ef87ffcbd191afd75f126fd4e7114774efc27",
+     "dtype": "<U15",
+     "shape": [
+      2000
+     ]
+    },
+    "genes/mean": {
+     "digest": "118bdb6483b80eb7b7e12f6a97d5ce2345995ac2f2e5d9ddfbb8e421dcb0f619",
+     "dtype": "<f8",
+     "shape": [
+      2000
+     ]
+    },
+    "genes/std": {
+     "digest": "b8851b9de68087c08a57bd7861d950a29cc254678fedd9ee857fdf2559115485",
+     "dtype": "<f8",
+     "shape": [
+      2000
+     ]
+    }
+   },
+   "file": "pbmc3k/scale.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.scale",
+    "input": "log1p of target_sum normalisation, seurat HVGs",
+    "max_value": 10.0,
+    "min_cells_per_gene": 3,
+    "stored": "gene mean and std only",
+    "zero_center": true
+   }
+  },
+  "synthetic/hvg": {
+   "arrays": {
+    "cell_ranger/dispersions": {
+     "digest": "8f2f98fc0dbb0a346dfc82e66dee703a02dd5e8ca0f6c61b7ed1dcb132e98ef9",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger/dispersions_norm": {
+     "digest": "4e74fe5abff98455bf7fbbdf0d72aa77eab5cf7697f941e8dcf9e72524772a74",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger/highly_variable": {
+     "digest": "dcfd34cfc9976b0c27b5121d68092782f95121e6871fef8358332e0538847901",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger/mean_bin": {
+     "digest": "3f5d119caec9e785cbc2e62d3eb542738bf32bb1c108b5297c10f34f4c087dc4",
+     "dtype": "<U16",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger/means": {
+     "digest": "068fced7d4d8bf68956285111d80da5996c71f7b87395ed2238d12786908dfec",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/dispersions": {
+     "digest": "0b339e335f108e7c0eeac6348cb6b51d51740fd3e8c997cb7f6c40a4336015db",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/dispersions_norm": {
+     "digest": "f0337db1f16f040e280574a24be34e3a0d0c39ebf755bd2392481707e5f7c9bd",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/highly_variable": {
+     "digest": "3cf20d385c1847a79b7ad4007475bf93f536b30fa69633429fd9ae93e579d4bd",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/highly_variable_intersection": {
+     "digest": "6ab6a2cf70ca0759201a21151a6260a8b97916adc7737aa5f94c91304eaafdac",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/highly_variable_nbatches": {
+     "digest": "36d49085114bfde6731fcc0919c0321fa1e0d83d40ca3a2786ffcbbb25e5539a",
+     "dtype": "<i8",
+     "shape": [
+      400
+     ]
+    },
+    "cell_ranger_by_batch/means": {
+     "digest": "69cd38037b34b80ae3c4164de85f2e25dd251341b0e876e3642474fa6979d4d7",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "genes/gene_id": {
+     "digest": "8dee19114d38557889ec95f72694e402fb0a4033572d2b4cbec499babefeaae4",
+     "dtype": "<U12",
+     "shape": [
+      400
+     ]
+    },
+    "seurat/dispersions": {
+     "digest": "41f5d69488c623383c3e79339d292e0986e66978c25741cdedc3001af857ce7c",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat/dispersions_norm": {
+     "digest": "b4775b5ead8b240a4b8b61cfefd0580bc170490049f1f38620fcb84be7a9943f",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat/highly_variable": {
+     "digest": "865086f463732f07473c67367af81a99cce3a4ac410e2a8a1cf53bb69e6f7075",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "seurat/mean_bin": {
+     "digest": "fba47b2935c02d639da1483c99ffe333943b76cdf0789d99dce2a4b9ab31fc97",
+     "dtype": "<U17",
+     "shape": [
+      400
+     ]
+    },
+    "seurat/means": {
+     "digest": "92a151b2368d918bbe3b3e6756775d56f184322925d009f0fa857e9b0b75790b",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/dispersions": {
+     "digest": "215ed6929b4d959524166b68d60a1aae2e98fc89c1a3537916787c4b86d70023",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/dispersions_norm": {
+     "digest": "99d2c85042b16bdad87758f259334e6847256dc98c16711bf4bb58912ac27bd0",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/highly_variable": {
+     "digest": "48e115fbcbdba6a1f08cdb4b01c27f473db13e70682c182e0a9173979ca5c444",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/highly_variable_intersection": {
+     "digest": "6b57cf659c7c9982d0832f3e94ddc42213d8932bf27208beffc430c17f76035a",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/highly_variable_nbatches": {
+     "digest": "8a36bc85e76810d3482c027dec16a77c148ed22c6cb4cd16b69cdcad910d1b57",
+     "dtype": "<i8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_by_batch/means": {
+     "digest": "912c1eb692582fa1912aae2320963279ca21fe45c2539f32a9f7db5c5db7ece9",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/gene_name": {
+     "digest": "e64900d29006b35cdd88020bd173bfee80a184e54e1b6bd24c8f646068a878fe",
+     "dtype": "<U12",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/highly_variable": {
+     "digest": "20647134eaac5ee23b88429ac6fb1d91fa413717ffd97a5b644bfb56aa98c409",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/highly_variable_rank": {
+     "digest": "e999ffb197ecda3c1ad4c3ce4a065510d25a0dec09d8649412611cd83c102d6d",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/means": {
+     "digest": "a5072029d5ded935ea8cbb12c3dbb7e0f5481ef1ffde2e36edcd835a652dd65b",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/variances": {
+     "digest": "5c57ddd331b95ee73b50ac48923597930c3604a0d360d0e28331ba89e288c3bd",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3/variances_norm": {
+     "digest": "fea10a3c1b37959313679655e142d88cdd6f92f0137894d9594659bc9f4e3f8e",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/gene_name": {
+     "digest": "4c75e99f93eb9b865d04137ea1c5ce38d195b32e27f7030670e7f9899f5cee11",
+     "dtype": "<U12",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/highly_variable": {
+     "digest": "3018ebca5adf0d63c5d36bd36c4e029529c20624c19aeeebd648a9617bf0df75",
+     "dtype": "|b1",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/highly_variable_nbatches": {
+     "digest": "9581d347e9b79dbe5299c25b43225d8c3194955a57f8ff7beefdacb49486dea4",
+     "dtype": "<i8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/highly_variable_rank": {
+     "digest": "e8815c3918004d05645ddaaa0e53909e920f7fd949a98d38fae60372ee611516",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/means": {
+     "digest": "0d638325fc1e5587c099e23422c88cf96fa7607e0384d268fffe194cc55d9cf6",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/variances": {
+     "digest": "38d417b1a768d83e8e0dd8ce7b37aa9d30c1754062a3d0f980c08964360b0984",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "seurat_v3_by_batch/variances_norm": {
+     "digest": "3b914f1da08ae19c7b0f496f2b466ce5ecb74caf1ed70e9b1aea0d0a482c267b",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    }
+   },
+   "file": "synthetic/hvg.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.highly_variable_genes",
+    "input": "genes in >= min_cells_per_gene cells; seurat and cell_ranger: log1p of target_sum normalisation; seurat_v3: counts",
+    "min_cells_per_gene": 0,
+    "n_top_genes": 100
+   }
+  },
+  "synthetic/neighbors": {
+   "arrays": {
+    "connectivities/data": {
+     "digest": "17e608462ae09e3fd8da929a0d6010369915126346ca0bc5cdf00441bd81b297",
+     "dtype": "<f4",
+     "shape": [
+      9762
+     ]
+    },
+    "connectivities/indices": {
+     "digest": "3dc7c896573b49b09cc4f16a8895b7c9a5bc275af2851dbfd9aaff58a6804d91",
+     "dtype": "<i8",
+     "shape": [
+      9762
+     ]
+    },
+    "connectivities/indptr": {
+     "digest": "f2184fdd72b02cec09a65c384b280f19b36ae89ba05ea047a8760916eb56e802",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "connectivities/shape": {
+     "digest": "887d9df22e638b965f01f2329ceaccf86a2745e65adda56bbe121c1bf44f32c6",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    },
+    "distances/data": {
+     "digest": "3bff93359344c7745fa5e9c3c6089e88faef7afd2d059366759733d14afed51b",
+     "dtype": "<f8",
+     "shape": [
+      7000
+     ]
+    },
+    "distances/indices": {
+     "digest": "69dbfba695df31a07eb93f9de2933e471a6d7db082410594f5c330b2974c5cab",
+     "dtype": "<i8",
+     "shape": [
+      7000
+     ]
+    },
+    "distances/indptr": {
+     "digest": "e5b8b616c64fa91fd237b4fe2dcf92dc00cb856434f18d09b11040e9de51620b",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "distances/shape": {
+     "digest": "97c556117ef0d9b95ee319d963006aa6d83c5fede79f4576afa3da90e606ca90",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    }
+   },
+   "file": "synthetic/neighbors.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.neighbors",
+    "input": "pca reference embedding",
+    "method": "umap",
+    "metric": "euclidean",
+    "min_cells_per_gene": 0,
+    "n_neighbors": 15,
+    "n_pcs": 20,
+    "random_state": 0,
+    "transformer": "exact (n_obs < 4096)"
+   }
+  },
+  "synthetic/normalize_log1p": {
+   "arrays": {
+    "median/log1p/cell_sum": {
+     "digest": "2b721167401d312b48daa6ef9f67c1ae7a122bf6003e527e743ef3677291a29c",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "median/log1p/data": {
+     "digest": "0fb43603984b174a885b5cd0ef80a804881309ca3a592c37aaa77287b53193e9",
+     "dtype": "<f4",
+     "shape": [
+      30277
+     ]
+    },
+    "median/log1p/gene_sum": {
+     "digest": "55488be9f1b1ace24830084ee565f45f620003bde5c97699eb0ecf18d255e40b",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "median/log1p/indices": {
+     "digest": "3d4aa91951732281c356ccba03ed3a42d4c1ec82ff87758ca1138f85b889006a",
+     "dtype": "<i8",
+     "shape": [
+      30277
+     ]
+    },
+    "median/log1p/indptr": {
+     "digest": "ddb137c19d0cd15954d9cc655c3644c4663c6a55c0e9f54f9274041437356076",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "median/log1p/nnz": {
+     "digest": "670b7046707dc9afff97368f6b5ebece03ad72001b4ec28e1d28cac9ecbb83d9",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "median/log1p/shape": {
+     "digest": "f1dae0c7badbc66ebd2fc31b452eb1fe6178e984f29eb3463da1cb55374b76c5",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    },
+    "median/normalized/cell_sum": {
+     "digest": "a8ed9b51249904f747082f474d5612fc9c9a8b51002eefcdd64ee87c2db80625",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "median/normalized/data": {
+     "digest": "216bb7a8eecd2526096a09a6c6144b8231c42367a692338fe2d333437a465679",
+     "dtype": "<f4",
+     "shape": [
+      30277
+     ]
+    },
+    "median/normalized/gene_sum": {
+     "digest": "d04511cff14d3f651159a26685d5ee9537c2f55817959975954da723e3b9bb14",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "median/normalized/indices": {
+     "digest": "33177780b95e4fb5b96e116c8bcb9245351ae58573102dce802e8655c15c7fe2",
+     "dtype": "<i8",
+     "shape": [
+      30277
+     ]
+    },
+    "median/normalized/indptr": {
+     "digest": "3ddd007b276df26173f66e48fdd7560ed962a6d17bc1cc4570c163d9286e9b3a",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "median/normalized/nnz": {
+     "digest": "2075e77fabba1a2f2c1e6f813c11e2aaff8cd29c40dc49487e8f38ad6e3d5d05",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "median/normalized/shape": {
+     "digest": "115580c2989aa9b95aed5905df1b521574f4db88e5ecb5cb76e36f9697482709",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    },
+    "target/log1p/cell_sum": {
+     "digest": "abc1820d10db89b754e846058cc1d35548a500d14816af5adda6ea862851dbde",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "target/log1p/data": {
+     "digest": "33191012ff69694a4f6f007c7c536263faabedadb77849f357516e98219c9d09",
+     "dtype": "<f4",
+     "shape": [
+      30277
+     ]
+    },
+    "target/log1p/gene_sum": {
+     "digest": "f96abc238671ff8c2bc83f34636e90d249db303ecab9c04270868dbe974667b7",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "target/log1p/indices": {
+     "digest": "e9478740a041fc4e469a81b2b8319e4bb73eb5d1acb6e00600e8963c3ffa5162",
+     "dtype": "<i8",
+     "shape": [
+      30277
+     ]
+    },
+    "target/log1p/indptr": {
+     "digest": "dc5b9654f90fb1551cbe778b687a1d5b110dbf3b69b1e4076d28b2030dac03f3",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "target/log1p/nnz": {
+     "digest": "80517326381cf8b23ab04977be8b8990ada28e747664de59b324f10b233aedb0",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "target/log1p/shape": {
+     "digest": "d3720ea941fae2a97af49986d8ce3d93243cc3d9f437643b186686cc90d9beba",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    },
+    "target/normalized/cell_sum": {
+     "digest": "bb3bcd62627d7275510d6a8716d58cd290803465e1ca492390bc65d02d95c7d7",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "target/normalized/data": {
+     "digest": "d7f397c162b8441aae38b4a198ea696a3f5c5128e102297e47cc746a3ad53b04",
+     "dtype": "<f4",
+     "shape": [
+      30277
+     ]
+    },
+    "target/normalized/gene_sum": {
+     "digest": "b23414699a3e9a9730bc6f13da40786ce0b88935ffb24c400c18d83fcb1d5585",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "target/normalized/indices": {
+     "digest": "c5e872048c3d1885105a167d5af922c98f5698d459c25d3d7697fa6cf7290bcd",
+     "dtype": "<i8",
+     "shape": [
+      30277
+     ]
+    },
+    "target/normalized/indptr": {
+     "digest": "876a1976af26107fd15a4cc8b451940bc7766fd108b678ad25bc5197022d1631",
+     "dtype": "<i8",
+     "shape": [
+      501
+     ]
+    },
+    "target/normalized/nnz": {
+     "digest": "938216b1363cc320f038df35581ae6efa50117decedfaafa626176ce9a1a561c",
+     "dtype": "<i8",
+     "shape": [
+      1
+     ]
+    },
+    "target/normalized/shape": {
+     "digest": "e3dfb52508d8b1f4d0d138ea981db1cce0f6d46a2930decdeefabab63ab28536",
+     "dtype": "<i8",
+     "shape": [
+      2
+     ]
+    }
+   },
+   "file": "synthetic/normalize_log1p.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.normalize_total then scanpy.pp.log1p",
+    "median": "target_sum=None",
+    "stored": "full CSR",
+    "target_sum": 10000.0
+   }
+  },
+  "synthetic/pca": {
+   "arrays": {
+    "components": {
+     "digest": "cc6812410bcb11b9bae05c589e498763fe794be1c78b7f28b3a52d17830abcb3",
+     "dtype": "<f4",
+     "shape": [
+      100,
+      20
+     ]
+    },
+    "embedding": {
+     "digest": "46a435e16d325b8374097618411827691e545510c62037685bffcde119b93f28",
+     "dtype": "<f4",
+     "shape": [
+      500,
+      20
+     ]
+    },
+    "genes/gene_id": {
+     "digest": "692ac657dd03e046bfee58c90cc2475eb5714637c6fd6f82d5c76b933a6b0b10",
+     "dtype": "<U12",
+     "shape": [
+      100
+     ]
+    },
+    "variance": {
+     "digest": "fd2ff0b551aa1d8c99640e3c70e2e32f04362f3c2cce9b2fe387680b1fb1270e",
+     "dtype": "<f4",
+     "shape": [
+      20
+     ]
+    },
+    "variance_ratio": {
+     "digest": "005e55696863691a7c0ddb067e2d2a57a0fb1646ec3685570bf7908a107441f4",
+     "dtype": "<f4",
+     "shape": [
+      20
+     ]
+    }
+   },
+   "file": "synthetic/pca.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.pca",
+    "input": "log1p of target_sum normalisation, seurat HVGs, not scaled",
+    "min_cells_per_gene": 0,
+    "n_comps": 20,
+    "random_state": 0,
+    "svd_solver": "arpack",
+    "zero_center": true
+   }
+  },
+  "synthetic/qc": {
+   "arrays": {
+    "cells/log1p_n_genes_by_counts": {
+     "digest": "362bce2c98f590fe176da32fc8d8879488a228d4a964ea5170900a929eae1cd3",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "cells/log1p_total_counts": {
+     "digest": "1d7b75481a2c6134060ca681d891557d8e35877a88afa6b89c712796f44c237b",
+     "dtype": "<f4",
+     "shape": [
+      500
+     ]
+    },
+    "cells/log1p_total_counts_mt": {
+     "digest": "225b2c64fc9135c094e1c7f9f83794f72ce537e9e0565c3e670a3e68b173fde6",
+     "dtype": "<f4",
+     "shape": [
+      500
+     ]
+    },
+    "cells/n_genes_by_counts": {
+     "digest": "2063954c0ef70514cb92ae71bc8f91318c90e06d22e4e1b8453a6199fe651ee8",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "cells/pct_counts_in_top_100_genes": {
+     "digest": "6bccd1f20d16a5ab5d6dffe9899ae8412778c692f45a9d2adc88ff47252ab7bb",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "cells/pct_counts_in_top_200_genes": {
+     "digest": "7b4ab6d7b3bed5b0f5dd727f32b1c40da38fb7447fb6e9c1ace5e79677373fb9",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "cells/pct_counts_in_top_50_genes": {
+     "digest": "3279e84cb2562923ca4816d7012e11c16c53304a628d10d2402823cdbf63842f",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "cells/pct_counts_mt": {
+     "digest": "62bedd9db77582512d1af6d421554647187af85ab6172b004c73b6fd293cb615",
+     "dtype": "<f4",
+     "shape": [
+      500
+     ]
+    },
+    "cells/total_counts": {
+     "digest": "30b8f7d5004a948c19d4f1157303b63da8095a48ddda1174810716ca376fd8db",
+     "dtype": "<f4",
+     "shape": [
+      500
+     ]
+    },
+    "cells/total_counts_mt": {
+     "digest": "90561a58ed690bc124bacf25c253db1bbbc41e2ff020dd330b5878fa9483ea9b",
+     "dtype": "<f4",
+     "shape": [
+      500
+     ]
+    },
+    "genes/log1p_mean_counts": {
+     "digest": "5a7d5ff68d9b7e1001cf2fe2891d37eeab460b935d99dde31d3f7805cece21be",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    },
+    "genes/log1p_total_counts": {
+     "digest": "020637764f9262e24c908cc3431dc131ecc28723602c88a5072f2624f86891dd",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    },
+    "genes/mean_counts": {
+     "digest": "4751b80ab3c9e8cd627b9e3bf4c6b34f7af11fd7fcb7dab4cef20ea3f07cea74",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    },
+    "genes/n_cells_by_counts": {
+     "digest": "060b3dc69c1ef714d7f01ced92fffa1b07771e49338fbbb2fc01cb8c1c87d79d",
+     "dtype": "<i8",
+     "shape": [
+      400
+     ]
+    },
+    "genes/pct_dropout_by_counts": {
+     "digest": "d8837a08f9a7877a69573361a380a7c7a50074ab1c37e366aed534a7c465cea7",
+     "dtype": "<f8",
+     "shape": [
+      400
+     ]
+    },
+    "genes/total_counts": {
+     "digest": "98cf0958da51b70a4b6e0978acf82108172a687bcd877906e06deecca7eb0ae4",
+     "dtype": "<f4",
+     "shape": [
+      400
+     ]
+    }
+   },
+   "file": "synthetic/qc.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.calculate_qc_metrics",
+    "log1p": true,
+    "percent_top": [
+     50,
+     100,
+     200
+    ],
+    "qc_vars": "mt = symbol starts with 'MT-'"
+   }
+  },
+  "synthetic/rank_genes": {
+   "arrays": {
+    "t-test/group": {
+     "digest": "8293f7854cfe13f0fc0f89d027bea016d506e81b0b20432a5b536d42639edb7d",
+     "dtype": "<U6",
+     "shape": [
+      1600
+     ]
+    },
+    "t-test/logfoldchanges": {
+     "digest": "a39f9532ed6014ce44bb9fbca7e97c21270d03b8739727bdd5742b531d63caa0",
+     "dtype": "<f4",
+     "shape": [
+      1600
+     ]
+    },
+    "t-test/names": {
+     "digest": "122d62f8af68989c1566b3c380855a4198469b3f84265dc2d160234f45b289aa",
+     "dtype": "<U12",
+     "shape": [
+      1600
+     ]
+    },
+    "t-test/pvals": {
+     "digest": "2cf237dd5ddb5654b7d589827bd226c0221a557a1dfbd45beaaf3f9b688b9792",
+     "dtype": "<f8",
+     "shape": [
+      1600
+     ]
+    },
+    "t-test/pvals_adj": {
+     "digest": "412da8b37a522a526aa37653f6658cf0d8a6506e2558bdf1154fa66aaebd0eb6",
+     "dtype": "<f8",
+     "shape": [
+      1600
+     ]
+    },
+    "t-test/scores": {
+     "digest": "08dacbce2f04374a71980860b031b7a99faa5a6f7e718aed173f636e0b69ff95",
+     "dtype": "<f4",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/group": {
+     "digest": "914e9349a7aee831df550e7138a20486c9e287103b0855b0050e3e772d8d3129",
+     "dtype": "<U6",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/logfoldchanges": {
+     "digest": "9679f13a1cdd32b6a54d74bb79d62d19fb5aec1c66d7a137f256d6ee18022b5d",
+     "dtype": "<f4",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/names": {
+     "digest": "520f90fe4a4b2afdb3704f3f9deb9a8b36ab71d3319fe82ff61b8161507503e3",
+     "dtype": "<U12",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/pvals": {
+     "digest": "5f60c939bbf9224672cca2b013e4f457ffbdb898cc20b1e2dfcd11e44cf8e4ee",
+     "dtype": "<f8",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/pvals_adj": {
+     "digest": "fb420f8f8779db451f33f297c1761cd1cc7097d54008e534e91de25b4c862a16",
+     "dtype": "<f8",
+     "shape": [
+      1600
+     ]
+    },
+    "wilcoxon/scores": {
+     "digest": "1ceb4af9813d2217d4400dfaef55a3558fc95b6e449bcaf0cfd5ea41fa9f45a4",
+     "dtype": "<f4",
+     "shape": [
+      1600
+     ]
+    }
+   },
+   "file": "synthetic/rank_genes.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "corr_method": "benjamini-hochberg",
+    "function": "scanpy.tl.rank_genes_groups",
+    "groupby": "cell_type",
+    "input": "log1p of target_sum normalisation, all genes",
+    "n_genes": "all",
+    "reference": "rest"
+   }
+  },
+  "synthetic/scale": {
+   "arrays": {
+    "genes/gene_id": {
+     "digest": "692ac657dd03e046bfee58c90cc2475eb5714637c6fd6f82d5c76b933a6b0b10",
+     "dtype": "<U12",
+     "shape": [
+      100
+     ]
+    },
+    "genes/mean": {
+     "digest": "60bb4f28c528061db1859ee0df419ce9c4bac9de28fec7455c82545fdffb3450",
+     "dtype": "<f8",
+     "shape": [
+      100
+     ]
+    },
+    "genes/std": {
+     "digest": "f1acd917c48208b69c37c22ee7af0e88eb35f28cc6846d36ed935cd82f89fc64",
+     "dtype": "<f8",
+     "shape": [
+      100
+     ]
+    },
+    "scaled": {
+     "digest": "c40c1cbaabea6725c99d8860c8add1b6ee8ff4e37edcc2ebfa5d047f5017b515",
+     "dtype": "<f8",
+     "shape": [
+      500,
+      100
+     ]
+    }
+   },
+   "file": "synthetic/scale.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.scale",
+    "input": "log1p of target_sum normalisation, seurat HVGs",
+    "max_value": 10.0,
+    "min_cells_per_gene": 0,
+    "stored": "full dense",
+    "zero_center": true
+   }
+  }
+ },
+ "versions": {
+  "anndata": "0.13.4",
+  "numpy": "2.5.4",
+  "scanpy": "1.12.5",
+  "scikit-learn": "1.9.1",
+  "scikit-misc": "0.5.3",
+  "scipy": "1.18.1"
+ }
+}
