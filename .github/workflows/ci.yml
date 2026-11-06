@@ -23,10 +23,12 @@ env:
   UV_LOCKED: "1"
 
 jobs:
+  # Runs every command in AGENTS.md (Commands, Run by CI) on Linux, so a command listed
+  # there that fails fails CI (task 1.6). The commands live only in AGENTS.md.
   lint:
-    name: lint
+    name: lint (AGENTS.md commands)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -36,9 +38,18 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
         with:
           enable-cache: true
+      - uses: actions/cache@v6
+        with:
+          path: .cache/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/pbmc.py') }}
+      # Linux needs libpython on the loader path for `cargo test` (AGENTS.md, Commands).
+      # Read it from the project venv (`uv sync` is also the first listed command).
       - run: uv sync
-      # The same hooks a developer runs before every commit (AGENTS.md, Commands).
-      - run: uv run pre-commit run --all-files --show-diff-on-failure
+      - name: put libpython on the loader path
+        run: echo "LD_LIBRARY_PATH=$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
+      # Fails on the first failing command, or if the commands changed the tree
+      # (unformatted code, a stale lock file).
+      - run: uv run --no-project python scripts/agents_commands.py --check-clean
 
   test:
     name: test (${{ matrix.os }})

@@ -67,7 +67,7 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 - [x] **1.5 Test fixtures.** A seeded synthetic generator (cells, genes, sparsity, batches) plus a cached public PBMC dataset; reference outputs from scanpy stored for parity tests.
   - Depends: 1.2
   - Done when: `uv run pytest tests/fixtures` builds every fixture and checks its hash.
-- [ ] **1.6 AGENTS.md.** Copies R1–R12, the task protocol, the repo map and the exact commands for build, test, lint and bench. `CLAUDE.md` links to it.
+- [x] **1.6 AGENTS.md.** Copies R1–R12, the task protocol, the repo map and the exact commands for build, test, lint and bench. `CLAUDE.md` links to it.
   - Depends: 1.4
   - Done when: CI fails if a command listed in AGENTS.md fails.
 

@@ -162,9 +162,13 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `crates/kyto-py` | PyO3 bindings only. Thin: convert, call core, return. |
 | `python/kyto` | Python package and `.pyi` stubs |
 | `tests/` | pytest (API, parity, property tests) and fixtures |
-| `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell |
-| `docs/` | format spec, docs site sources |
+| `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
+| `docs/` | format spec, docs site sources (not yet: task 2.1) |
+| `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
 | `memory/` | lessons learned (indexed) |
+| `.github/workflows/` | CI (`ci.yml`) |
+| `.claude/agents/` | sub agent definitions (`bug-hunter`) |
+| `deviations.md` | every deviation from scanpy or anndata |
 
 Pipeline:
 
@@ -228,24 +232,48 @@ Tokens are a budget. Spend them on design and verification, not on re-reading or
 
 ## Commands
 
-Planned in tasks 1.1-1.4; CI fails if a command listed here fails (task 1.6).
-Update this section when a command changes.
+This is the single list of commands. CI runs the `Run by CI` block below line by line
+(`scripts/agents_commands.py`, lint job) and fails if any command fails or leaves the
+git working tree changed. Change a command here and CI follows; never copy one into
+`.github/workflows/ci.yml` by hand. Run from the repo root.
+
+### Run by CI
 
 ```bash
-uv sync                                   # dev env (first time)
-uv run maturin develop                    # build and install the extension
-cargo build --workspace                   # build all crates
-cargo test --workspace                    # Rust tests
-uv run cargo clippy --workspace --all-targets -- -D warnings   # Rust lint (uv run: PyO3 sees .venv python)
+uv sync                                   # dev env; builds and installs the extension into .venv
+uv sync --reinstall-package kyto          # force an extension rebuild (never mix in `maturin develop`)
+uv run cargo build --workspace --locked   # build all crates (uv run: PyO3 sees .venv python)
+uv run cargo test --workspace --locked    # Rust tests (Linux: libpython on LD_LIBRARY_PATH, see below)
+uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lint
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run pytest                             # Python tests (API, parity, property)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
-uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references (on purpose only)
 uv run pre-commit install                 # run the hooks on every git commit (once)
 uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before every commit
 ```
+
+### Run the whole list
+
+What CI does (`--list` only prints the commands):
+
+```bash
+uv run --no-project python scripts/agents_commands.py --list
+uv run --no-project python scripts/agents_commands.py
+```
+
+### On purpose only (not run by CI)
+
+```bash
+uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references
+```
+
+- **Bench:** no commands yet. `criterion` and `pytest-benchmark` arrive with task 10.3,
+  which adds them to `Run by CI` (or here, if too slow for every push).
+- **Linux:** the Rust test binary links libpython, so `cargo test` needs it on the
+  loader path once per shell:
+  `export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"`.
 
 ## Memory index
 
