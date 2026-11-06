@@ -1,0 +1,150 @@
+# kyto error registry (task 8.1, R10). The single source of every kyto error.
+#
+# `scripts/error_registry.py` generates the Rust enum
+# (crates/kyto-error/src/registry.rs) and the Python classes (python/kyto/errors.py
+# and errors.pyi) from this file. Edit here, then run
+#     uv run python scripts/error_registry.py
+# CI fails if the generated files drift from this file, or if any Rust or Python
+# source raises an error that is not registered here.
+#
+# Codes are stable: never reuse or renumber one. Ranges:
+#   KY-E1xx storage    KY-E2xx names, axes and expressions (plan build)
+#   KY-E3xx lineage    KY-E4xx memory    KY-E5xx devices
+#
+# Templates: `{field}` inserts a field. Field types are `str`, `int` (a non-negative
+# integer, u64 in Rust) and `list[str]` (rendered as 'a', 'b', 'c'). Write the quotes
+# around a `str` field in the template yourself ('{name}'); a `list[str]` field brings
+# its own. No other braces, no double quotes, no backslashes.
+#
+# Each error says what was wrong, where, what was accepted and how to fix it
+# (AGENTS.md, "Errors are first-class"). `example` values feed the round-trip tests.
+
+docs_base = "https://github.com/datavil/kyto/blob/main/docs/errors.md"
+
+# Python classes: one per error family. Each subclasses KytoError and the builtin
+# named in `base`.
+
+[classes.DuplicateIdError]
+base = "ValueError"
+doc = "Cell or gene IDs that must be unique are not."
+
+[classes.ResolutionError]
+base = "ValueError"
+doc = "A name or symbol does not resolve to exactly one feature."
+
+[classes.AxisError]
+base = "TypeError"
+doc = "An expression mixes the cells and genes axes (R5)."
+
+[classes.RemovedFeatureError]
+base = "ValueError"
+doc = "A feature removed earlier in the plan is read again (R9)."
+
+[classes.StaleColumnError]
+base = "ValueError"
+doc = "A derived column is read after its inputs changed upstream."
+
+[classes.MemoryLimitError]
+base = "MemoryError"
+doc = "A plan cannot run within its memory limit."
+
+[classes.DeviceError]
+base = "RuntimeError"
+doc = "The requested device cannot run part of the plan."
+
+[[errors]]
+code = "KY-E101"
+variant = "DuplicateIds"
+class = "DuplicateIdError"
+summary = "IDs written to a store are not unique."
+message = "duplicate {axis} IDs: {ids}"
+hint = "IDs on the {axis} axis must be unique; drop or rename the duplicates before writing"
+fields = [
+    { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "genes" },
+    { name = "ids", type = "list[str]", doc = "The IDs that occur more than once.", example = ["ENSG01", "ENSG02"] },
+]
+
+[[errors]]
+code = "KY-E201"
+variant = "AmbiguousName"
+class = "ResolutionError"
+summary = "A short name matches more than one feature."
+message = "ambiguous name '{name}': it matches {candidates}"
+hint = "pass the full name, one of {candidates}"
+fields = [
+    { name = "name", type = "str", doc = "The short name as written.", example = "CD3E" },
+    { name = "candidates", type = "list[str]", doc = "The full names it matches.", example = ["log1p:CD3E", "counts:CD3E"] },
+]
+
+[[errors]]
+code = "KY-E202"
+variant = "MixedAxes"
+class = "AxisError"
+summary = "A cell expression and a gene expression are combined."
+message = "'{operation}' mixes a cell expression ({cell_expression}) with a gene expression ({gene_expression})"
+hint = "combine expressions of one axis only: cell_column(...) with cell_column(...), gene_column(...) with gene_column(...)"
+fields = [
+    { name = "operation", type = "str", doc = "The operator or method that combined them.", example = "&" },
+    { name = "cell_expression", type = "str", doc = "The cell expression.", example = "cell_column('n_genes') > 200" },
+    { name = "gene_expression", type = "str", doc = "The gene expression.", example = "gene_column('highly_variable')" },
+]
+
+[[errors]]
+code = "KY-E203"
+variant = "RemovedGene"
+class = "RemovedFeatureError"
+summary = "A gene removed by a filter is read later in the plan."
+message = "gene '{gene}' was removed by '{removed_by}' earlier in the plan"
+hint = "read '{gene}' before '{removed_by}', or change the filter to keep it"
+fields = [
+    { name = "gene", type = "str", doc = "The gene that was read.", example = "MALAT1" },
+    { name = "removed_by", type = "str", doc = "The plan node that removed it.", example = "filter_genes" },
+]
+
+[[errors]]
+code = "KY-E204"
+variant = "AmbiguousSymbol"
+class = "ResolutionError"
+summary = "A gene symbol matches more than one gene ID."
+message = "symbol '{symbol}' matches more than one gene: {gene_ids}"
+hint = "select the gene by ID with by='id', one of {gene_ids}"
+fields = [
+    { name = "symbol", type = "str", doc = "The symbol as written.", example = "TBCE" },
+    { name = "gene_ids", type = "list[str]", doc = "The gene IDs that carry this symbol.", example = ["ENSG00000284770", "ENSG00000285053"] },
+]
+
+[[errors]]
+code = "KY-E301"
+variant = "StaleColumn"
+class = "StaleColumnError"
+summary = "A derived column is read after an upstream step changed its inputs."
+message = "column '{column}' was computed before '{changed_by}' changed its inputs"
+hint = "call .recompute() on '{column}' after '{changed_by}', or read it before that step"
+fields = [
+    { name = "column", type = "str", doc = "The derived column.", example = "n_genes" },
+    { name = "changed_by", type = "str", doc = "The plan node that changed its inputs.", example = "filter_genes" },
+]
+
+[[errors]]
+code = "KY-E401"
+variant = "MemoryLimit"
+class = "MemoryLimitError"
+summary = "A plan needs more memory than its limit, even with the smallest blocks."
+message = "the plan needs at least {required_bytes} bytes but memory_limit is {limit_bytes} bytes"
+hint = "raise memory_limit to at least {required_bytes} bytes, or select fewer cells or genes before this step"
+fields = [
+    { name = "required_bytes", type = "int", doc = "The smallest peak memory the plan can run in, in bytes.", example = 6000000000 },
+    { name = "limit_bytes", type = "int", doc = "The memory limit given, in bytes.", example = 4000000000 },
+]
+
+[[errors]]
+code = "KY-E501"
+variant = "MissingKernel"
+class = "DeviceError"
+summary = "The requested device has no kernel for an operation."
+message = "no {device} kernel for '{operation}'"
+hint = "pass device='auto' to fall back to the CPU for this step, or device='cpu'"
+fields = [
+    { name = "operation", type = "str", doc = "The operation without a kernel.", example = "leiden" },
+    { name = "device", type = "str", doc = "The device requested.", example = "cuda" },
+]

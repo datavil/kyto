@@ -38,6 +38,7 @@ kyto is built in 10 workstreams of numbered tasks. An agent takes one unblocked 
 
 | Path | Holds |
 | --- | --- |
+| `crates/kyto-error` | `KytoError`, generated from `errors.toml` (8.1) |
 | `crates/kyto-store` | Zarr layout, tile I/O, importers |
 | `crates/kyto-core` | Schema, expressions, name resolver, handles |
 | `crates/kyto-plan` | Logical plan, optimizer, `explain`, `estimate` |
@@ -252,7 +253,7 @@ Goal: a small, chainable surface where every method has one return type and a ty
 
 Goal: an agent can inspect data, write a pipeline, check it and fix its own mistakes without reading the matrix or the source code.
 
-- [ ] **8.1 Error registry.** `errors.toml` lists code, message template, fix hint and docs link; a build script generates the Rust enum and the Python classes (`KytoError` → `ResolutionError`, `AxisError`, `MemoryLimitError`, `StaleColumnError`, ...).
+- [x] **8.1 Error registry.** `errors.toml` lists code, message template, fix hint and docs link; a build script generates the Rust enum and the Python classes (`KytoError` → `ResolutionError`, `AxisError`, `MemoryLimitError`, `StaleColumnError`, ...).
   - Depends: 1.1
   - Done when: CI fails if any error is raised without a registered code (R10).
 - [ ] **8.2 Suggestions.** Closest matches for unknown genes, columns and layers (Jaro-Winkler, top 3) in every `KY-E1xx`/`KY-E2xx` message.

@@ -134,6 +134,10 @@ Errors are part of the API, Rust style: typed, informative and solution-oriented
 
 - Every error has a stable `KY-Exxx` code registered in `errors.toml` (R10). The Rust
   enum and the Python classes are generated from it; never raise an unregistered error.
+  To add one: add an entry to `errors.toml` (its header states the rules), run
+  `uv run python scripts/error_registry.py`, return the new `KytoError` variant from
+  Rust (`kyto_error`), and convert it in `kyto-py` with `errors::to_py_err`. CI fails
+  on drift and on any error built outside the registry (`--check`).
 - Every error says **what** was wrong, **where** (which method, argument, column,
   gene, layer or plan node), **what was accepted**, and **how to fix it** (a
   suggestion, close matches for typos: `unknown gene 'CD3'; did you mean 'CD3E',
@@ -153,6 +157,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 
 | Path | Holds |
 | --- | --- |
+| `crates/kyto-error` | `KytoError`, generated from `errors.toml`; every crate returns it |
 | `crates/kyto-store` | Zarr layout, tile I/O, importers |
 | `crates/kyto-core` | Schema, expressions, name resolver, handles |
 | `crates/kyto-plan` | Logical plan, optimizer, `explain`, `estimate` |
@@ -164,6 +169,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `tests/` | pytest (API, parity, property tests) and fixtures |
 | `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
 | `docs/` | format spec, docs site sources (not yet: task 2.1) |
+| `errors.toml` | the error registry (codes, classes, templates, hints, docs links) |
 | `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
 | `memory/` | lessons learned (indexed) |
 | `.github/workflows/` | CI (`ci.yml`) |
@@ -248,6 +254,7 @@ uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust l
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
+uv run python scripts/error_registry.py --check   # errors.toml: generated code in sync, no unregistered error (R10)
 uv run pytest                             # Python tests (API, parity, property)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
 uv run pre-commit install                 # run the hooks on every git commit (once)
