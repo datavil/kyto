@@ -60,9 +60,10 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 - [x] **1.3 Lint and format.** `rustfmt`, `clippy -D warnings`, `ruff format`, `ruff check` (import sorting on), `pyright --strict` on stubs, all in pre-commit.
   - Depends: 1.2
   - Done when: `pre-commit run --all-files` passes on a clean checkout.
-- [ ] **1.4 CI.** GitHub Actions matrix: Linux, macOS, Windows on x86\_64 and aarch64; wheels built with `maturin-action`; GPU job reserved for a self-hosted runner (9.7).
+- [x] **1.4 CI.** GitHub Actions matrix: Linux, macOS, Windows on x86\_64 and aarch64; wheels built with `maturin-action`; GPU job reserved for a self-hosted runner (9.7).
   - Depends: 1.3
   - Done when: a PR runs lint, tests and wheel builds, all green.
+  - Note: kyto commits straight to `main`, so `.github/workflows/ci.yml` runs on push to `main` as well as on `pull_request`; a green push to `main` satisfies this check.
 - [ ] **1.5 Test fixtures.** A seeded synthetic generator (cells, genes, sparsity, batches) plus a cached public PBMC dataset; reference outputs from scanpy stored for parity tests.
   - Depends: 1.2
   - Done when: `uv run pytest tests/fixtures` builds every fixture and checks its hash.

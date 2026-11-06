@@ -1,0 +1,121 @@
+# CI (task 1.4): lint once, then tests and wheel builds on every OS and architecture.
+# kyto commits straight to main, so CI runs on push to main as well as on pull requests.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to a PR cancels the run it supersedes (Actions minutes are billed).
+# Runs on main are never cancelled: each task commit there must get its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # uv sync / uv run must never change uv.lock in CI.
+  UV_LOCKED: "1"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
+        with:
+          enable-cache: true
+      - run: uv sync
+      # The same hooks a developer runs before every commit (AGENTS.md, Commands).
+      - run: uv run pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    name: test (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every runner is native for its OS and architecture.
+        os:
+          - ubuntu-24.04 # Linux x86_64
+          - ubuntu-24.04-arm # Linux aarch64
+          - macos-15-intel # macOS x86_64
+          - macos-15 # macOS arm64
+          - windows-2025 # Windows x86_64
+          - windows-11-arm # Windows aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
+        with:
+          enable-cache: true
+      # Builds the extension into .venv (memory/build_single_path.md).
+      - run: uv sync
+      # Without `extension-module` the Rust test binary links libpython; on Linux the
+      # loader only finds it if the interpreter's LIBDIR is on LD_LIBRARY_PATH.
+      - name: put libpython on the loader path (Linux)
+        if: runner.os == 'Linux'
+        run: echo "LD_LIBRARY_PATH=$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
+      # `uv run` puts .venv first on PATH so PyO3 links the project interpreter.
+      - run: uv run cargo test --workspace --locked
+      - run: uv run pytest
+
+  wheels:
+    name: wheel (${{ matrix.target }}, ${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64, manylinux: auto }
+          - { os: ubuntu-24.04-arm, target: aarch64, manylinux: auto }
+          - { os: macos-15-intel, target: x86_64 }
+          - { os: macos-15, target: aarch64 }
+          - { os: windows-2025, target: x64 }
+          - { os: windows-11-arm, target: aarch64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || '' }}
+          args: --release --locked --out dist
+      - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
+      # Install the built wheel into a clean env (not the source tree) and import it.
+      - name: smoke test the wheel
+        shell: bash
+        run: |
+          uv venv --python 3.13 "$RUNNER_TEMP/wheel-env"
+          uv pip install --python "$RUNNER_TEMP/wheel-env" --no-index --find-links dist kyto
+          cd "$RUNNER_TEMP"
+          uv run --no-project --python "$RUNNER_TEMP/wheel-env" python -c "import kyto, kyto._kyto; print(kyto.__version__)"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # Reserved for task 9.7: GPU tests on a self-hosted runner with the `gpu` label.
+  # Disabled until that runner exists, so no job ever queues waiting for it.
+  gpu:
+    name: gpu (self-hosted, task 9.7)
+    if: false
+    runs-on: [self-hosted, gpu]
+    steps:
+      - run: echo "GPU job placeholder (task 9.7)"
