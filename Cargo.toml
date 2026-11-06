@@ -1,0 +1,29 @@
+# kyto Cargo workspace (virtual manifest).
+# Shared package metadata and lint settings live here; every crate inherits them
+# with `[lints] workspace = true` and `*.workspace = true`.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# No panics on user input: unwrap/expect are allowed only in tests (clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+# Every unsafe block carries a `// SAFETY:` note (only kyto-exec and kyto-gpu may use unsafe).
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+todo = "deny"

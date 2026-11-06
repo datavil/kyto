@@ -1,0 +1,13 @@
+[package]
+name = "kyto-py"
+description = "PyO3 bindings for kyto (thin: convert, call core, return)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
