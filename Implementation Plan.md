@@ -79,10 +79,11 @@ Goal: a Zarr v3 store where reading a few genes costs about the same as reading 
 - [x] **2.1 Format spec v0.** Write `docs/format.md`: `/cells` and `/genes` as Parquet, `/layers/<name>` as tiled sparse arrays, `/embeddings`, `/graphs`, `/schema.json`, `/provenance.json`, and a `format_version` field.
   - Depends: 1.1
   - Done when: the spec is merged and 2.2–2.5 cite its section numbers.
-- [ ] **2.2 Tiled sparse matrix.** Tiles of cell block × gene block, CSR inside each tile, Zarr sharding codec with zstd. Tile sizes are parameters; defaults come from 10.4.
+- [x] **2.2 Tiled sparse matrix.** Tiles of cell block × gene block, CSR inside each tile, Zarr sharding codec with zstd. Tile sizes are parameters; defaults come from 10.4.
   - Depends: 2.1
   - Done when: a `proptest` round trip (random shape, sparsity, dtype) is exact.
   - Spec: `docs/format.md` §4.1-§4.6 (tiling, arrays, CSR inside tile, chunks and codecs, limits, zeros), §2.1 (names).
+  - Provisional writer defaults until 10.4: `C` = 4096, `G` = 1024, `K` = 65536, `S` = 1048576 entries, zstd level 3 (`kyto_store::Tiling::default`, `LayerWriteOptions::default`).
 - [ ] **2.3 Metadata tables.** Cell and gene tables via Polars Parquet; IDs unique and checked on write; strings stored as categoricals.
   - Depends: 2.1
   - Done when: writing duplicate IDs raises `KY-E101`; round trip keeps dtypes.

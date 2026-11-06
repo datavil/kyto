@@ -15,14 +15,19 @@ from typing import Final, Literal, NamedTuple, TypeAlias, cast
 
 __all__ = [
     "AxisError",
+    "CorruptStoreError",
     "DeviceError",
     "DuplicateIdError",
     "FieldValue",
     "KytoError",
+    "LayerDtypeError",
     "MemoryLimitError",
+    "MissingMemberError",
     "RemovedFeatureError",
     "ResolutionError",
     "StaleColumnError",
+    "StoreIOError",
+    "StoreInputError",
 ]
 
 FieldValue: TypeAlias = str | int | tuple[str, ...]
@@ -290,6 +295,105 @@ class DeviceError(KytoError, RuntimeError):
     """
 
 
+class StoreInputError(KytoError, ValueError):
+    """Data, names or parameters given to a store writer break the store format (docs/format.md).
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E102``: A layer, embedding or graph name breaks the naming rules of format.md section 2.1.
+    - ``KY-E103``: A member with the same name, compared case-insensitively, is already in the store.
+    - ``KY-E104``: A store writer parameter (tile or chunk size, compression level) is out of range.
+    - ``KY-E105``: A size is above a limit of the store format (format.md section 4.5).
+    - ``KY-E106``: A sparse matrix given to a store writer is not valid CSR of the stated shape.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = StoreInputError("KY-E102", kind="layer", name="log1p/counts", rule="character '/' is not allowed")
+    >>> error.code
+    'KY-E102'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
+class CorruptStoreError(KytoError, ValueError):
+    """A store on disk breaks the store format (docs/format.md).
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E107``: A stored layer breaks the tiled sparse format (format.md section 4).
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = CorruptStoreError("KY-E107", layer="counts", problem="tile (0, 2): indptr ends at 5 but tile_offsets gives 7 entries")
+    >>> error.code
+    'KY-E107'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
+class StoreIOError(KytoError, RuntimeError):
+    """The file system or the Zarr layer failed while reading or writing a store.
+
+    Subclasses `KytoError` and `RuntimeError`. Raised with these codes:
+
+    - ``KY-E110``: The file system or the Zarr layer failed while reading or writing a store.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = StoreIOError("KY-E110", operation="write array", path="pbmc.kyto/layers/counts/data", detail="No space left on device (os error 28)")
+    >>> error.code
+    'KY-E110'
+    >>> isinstance(error, RuntimeError)
+    True
+    """
+
+
+class MissingMemberError(KytoError, LookupError):
+    """A layer, embedding or graph is not in the store.
+
+    Subclasses `KytoError` and `LookupError`. Raised with these codes:
+
+    - ``KY-E109``: A layer, embedding or graph is not in the store.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = MissingMemberError("KY-E109", kind="layer", name="count", store="pbmc.kyto")
+    >>> error.code
+    'KY-E109'
+    >>> isinstance(error, LookupError)
+    True
+    """
+
+
+class LayerDtypeError(KytoError, TypeError):
+    """A layer is read with a value dtype other than the one it stores.
+
+    Subclasses `KytoError` and `TypeError`. Raised with these codes:
+
+    - ``KY-E108``: A layer is read with a value dtype other than the one it stores.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = LayerDtypeError("KY-E108", layer="counts", stored="uint32", requested="float32")
+    >>> error.code
+    'KY-E108'
+    >>> isinstance(error, TypeError)
+    True
+    """
+
+
 _REGISTRY: Final[dict[str, _Entry]] = {
     "KY-E101": _Entry(
         class_name="DuplicateIdError",
@@ -299,6 +403,104 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("axis", "str"),
             _Field("ids", "list[str]"),
+        ),
+    ),
+    "KY-E102": _Entry(
+        class_name="StoreInputError",
+        message="invalid {kind} name '{name}': {rule}",
+        hint="use 1 to 64 characters from A-Z a-z 0-9 _ . - that do not start with . or __, do not end with . and are not a Windows device name such as CON",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e102",
+        fields=(
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("rule", "str"),
+        ),
+    ),
+    "KY-E103": _Entry(
+        class_name="StoreInputError",
+        message="{kind} '{name}' already exists in the store as '{existing}'",
+        hint="choose another name; names are compared case-insensitively because macOS and Windows file systems are",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e103",
+        fields=(
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("existing", "str"),
+        ),
+    ),
+    "KY-E104": _Entry(
+        class_name="StoreInputError",
+        message="invalid {parameter} = {value}",
+        hint="{parameter} must be {accepted}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e104",
+        fields=(
+            _Field("parameter", "str"),
+            _Field("value", "str"),
+            _Field("accepted", "str"),
+        ),
+    ),
+    "KY-E105": _Entry(
+        class_name="StoreInputError",
+        message="{quantity} is {value}, above the format limit of {limit}",
+        hint="{advice} to stay within the limits of format.md section 4.5",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e105",
+        fields=(
+            _Field("quantity", "str"),
+            _Field("value", "int"),
+            _Field("limit", "int"),
+            _Field("advice", "str"),
+        ),
+    ),
+    "KY-E106": _Entry(
+        class_name="StoreInputError",
+        message="invalid sparse matrix for layer '{layer}': {problem}",
+        hint="pass CSR with indptr of length n_cells + 1 starting at 0 and non-decreasing, and sorted, unique gene indices below n_genes in each row (format.md section 4.3)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e106",
+        fields=(
+            _Field("layer", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E107": _Entry(
+        class_name="CorruptStoreError",
+        message="layer '{layer}' is corrupt: {problem}",
+        hint="the store breaks docs/format.md section 4; rewrite the layer with kyto, or report a bug if kyto wrote it",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e107",
+        fields=(
+            _Field("layer", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E108": _Entry(
+        class_name="LayerDtypeError",
+        message="layer '{layer}' stores {stored} values, not {requested}",
+        hint="read layer '{layer}' as {stored}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e108",
+        fields=(
+            _Field("layer", "str"),
+            _Field("stored", "str"),
+            _Field("requested", "str"),
+        ),
+    ),
+    "KY-E109": _Entry(
+        class_name="MissingMemberError",
+        message="no {kind} named '{name}' in the store at '{store}'",
+        hint="check the name against the store's schema; names are case-sensitive when read",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e109",
+        fields=(
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("store", "str"),
+        ),
+    ),
+    "KY-E110": _Entry(
+        class_name="StoreIOError",
+        message="could not {operation} '{path}': {detail}",
+        hint="check that the path exists, that you may read and write it, and that the disk is not full",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e110",
+        fields=(
+            _Field("operation", "str"),
+            _Field("path", "str"),
+            _Field("detail", "str"),
         ),
     ),
     "KY-E201": _Entry(

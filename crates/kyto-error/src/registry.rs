@@ -15,6 +15,94 @@ pub enum KytoError {
         /// The IDs that occur more than once.
         ids: Vec<String>,
     },
+    /// KY-E102: A layer, embedding or graph name breaks the naming rules of format.md section 2.1.
+    #[error("KY-E102: invalid {kind} name '{name}': {rule}")]
+    InvalidMemberName {
+        /// The member kind: `layer`, `embedding` or `graph`.
+        kind: String,
+        /// The name as given.
+        name: String,
+        /// The rule it breaks.
+        rule: String,
+    },
+    /// KY-E103: A member with the same name, compared case-insensitively, is already in the store.
+    #[error("KY-E103: {kind} '{name}' already exists in the store as '{existing}'")]
+    MemberExists {
+        /// The member kind: `layer`, `embedding` or `graph`.
+        kind: String,
+        /// The name as given.
+        name: String,
+        /// The name already in the store.
+        existing: String,
+    },
+    /// KY-E104: A store writer parameter (tile or chunk size, compression level) is out of range.
+    #[error("KY-E104: invalid {parameter} = {value}")]
+    InvalidParameter {
+        /// The parameter name.
+        parameter: String,
+        /// The value given.
+        value: String,
+        /// What the parameter accepts.
+        accepted: String,
+    },
+    /// KY-E105: A size is above a limit of the store format (format.md section 4.5).
+    #[error("KY-E105: {quantity} is {value}, above the format limit of {limit}")]
+    LimitExceeded {
+        /// What is too large.
+        quantity: String,
+        /// Its value.
+        value: u64,
+        /// The largest value allowed.
+        limit: u64,
+        /// How to get under the limit.
+        advice: String,
+    },
+    /// KY-E106: A sparse matrix given to a store writer is not valid CSR of the stated shape.
+    #[error("KY-E106: invalid sparse matrix for layer '{layer}': {problem}")]
+    InvalidSparseMatrix {
+        /// The layer being written.
+        layer: String,
+        /// What is wrong and where.
+        problem: String,
+    },
+    /// KY-E107: A stored layer breaks the tiled sparse format (format.md section 4).
+    #[error("KY-E107: layer '{layer}' is corrupt: {problem}")]
+    CorruptLayer {
+        /// The layer being read.
+        layer: String,
+        /// The invariant that fails and where.
+        problem: String,
+    },
+    /// KY-E108: A layer is read with a value dtype other than the one it stores.
+    #[error("KY-E108: layer '{layer}' stores {stored} values, not {requested}")]
+    LayerDtype {
+        /// The layer being read.
+        layer: String,
+        /// The Zarr dtype of its data array.
+        stored: String,
+        /// The dtype asked for.
+        requested: String,
+    },
+    /// KY-E109: A layer, embedding or graph is not in the store.
+    #[error("KY-E109: no {kind} named '{name}' in the store at '{store}'")]
+    MissingMember {
+        /// The member kind: `layer`, `embedding` or `graph`.
+        kind: String,
+        /// The name asked for.
+        name: String,
+        /// The store path.
+        store: String,
+    },
+    /// KY-E110: The file system or the Zarr layer failed while reading or writing a store.
+    #[error("KY-E110: could not {operation} '{path}': {detail}")]
+    StoreIo {
+        /// What was being done.
+        operation: String,
+        /// The store path or node.
+        path: String,
+        /// The underlying error.
+        detail: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -77,8 +165,17 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 8] = [
+    pub const CODES: [&'static str; 17] = [
         "KY-E101",
+        "KY-E102",
+        "KY-E103",
+        "KY-E104",
+        "KY-E105",
+        "KY-E106",
+        "KY-E107",
+        "KY-E108",
+        "KY-E109",
+        "KY-E110",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -92,6 +189,15 @@ impl KytoError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::DuplicateIds { .. } => "KY-E101",
+            Self::InvalidMemberName { .. } => "KY-E102",
+            Self::MemberExists { .. } => "KY-E103",
+            Self::InvalidParameter { .. } => "KY-E104",
+            Self::LimitExceeded { .. } => "KY-E105",
+            Self::InvalidSparseMatrix { .. } => "KY-E106",
+            Self::CorruptLayer { .. } => "KY-E107",
+            Self::LayerDtype { .. } => "KY-E108",
+            Self::MissingMember { .. } => "KY-E109",
+            Self::StoreIo { .. } => "KY-E110",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -106,6 +212,15 @@ impl KytoError {
     pub fn python_class(&self) -> &'static str {
         match self {
             Self::DuplicateIds { .. } => "DuplicateIdError",
+            Self::InvalidMemberName { .. } => "StoreInputError",
+            Self::MemberExists { .. } => "StoreInputError",
+            Self::InvalidParameter { .. } => "StoreInputError",
+            Self::LimitExceeded { .. } => "StoreInputError",
+            Self::InvalidSparseMatrix { .. } => "StoreInputError",
+            Self::CorruptLayer { .. } => "CorruptStoreError",
+            Self::LayerDtype { .. } => "LayerDtypeError",
+            Self::MissingMember { .. } => "MissingMemberError",
+            Self::StoreIo { .. } => "StoreIOError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -121,6 +236,33 @@ impl KytoError {
         match self {
             Self::DuplicateIds { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e101"
+            }
+            Self::InvalidMemberName { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e102"
+            }
+            Self::MemberExists { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e103"
+            }
+            Self::InvalidParameter { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e104"
+            }
+            Self::LimitExceeded { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e105"
+            }
+            Self::InvalidSparseMatrix { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e106"
+            }
+            Self::CorruptLayer { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e107"
+            }
+            Self::LayerDtype { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e108"
+            }
+            Self::MissingMember { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e109"
+            }
+            Self::StoreIo { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e110"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -152,6 +294,33 @@ impl KytoError {
             Self::DuplicateIds { axis, .. } => {
                 format!("IDs on the {axis} axis must be unique; drop or rename the duplicates before writing")
             }
+            Self::InvalidMemberName { .. } => {
+                String::from("use 1 to 64 characters from A-Z a-z 0-9 _ . - that do not start with . or __, do not end with . and are not a Windows device name such as CON")
+            }
+            Self::MemberExists { .. } => {
+                String::from("choose another name; names are compared case-insensitively because macOS and Windows file systems are")
+            }
+            Self::InvalidParameter { parameter, accepted, .. } => {
+                format!("{parameter} must be {accepted}")
+            }
+            Self::LimitExceeded { advice, .. } => {
+                format!("{advice} to stay within the limits of format.md section 4.5")
+            }
+            Self::InvalidSparseMatrix { .. } => {
+                String::from("pass CSR with indptr of length n_cells + 1 starting at 0 and non-decreasing, and sorted, unique gene indices below n_genes in each row (format.md section 4.3)")
+            }
+            Self::CorruptLayer { .. } => {
+                String::from("the store breaks docs/format.md section 4; rewrite the layer with kyto, or report a bug if kyto wrote it")
+            }
+            Self::LayerDtype { layer, stored, .. } => {
+                format!("read layer '{layer}' as {stored}")
+            }
+            Self::MissingMember { .. } => {
+                String::from("check the name against the store's schema; names are case-sensitive when read")
+            }
+            Self::StoreIo { .. } => {
+                String::from("check that the path exists, that you may read and write it, and that the disk is not full")
+            }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
             }
@@ -182,6 +351,50 @@ impl KytoError {
             Self::DuplicateIds { axis, ids } => vec![
                 ("axis", FieldValue::Str(axis.clone())),
                 ("ids", FieldValue::StrList(ids.clone())),
+            ],
+            Self::InvalidMemberName { kind, name, rule } => vec![
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("rule", FieldValue::Str(rule.clone())),
+            ],
+            Self::MemberExists { kind, name, existing } => vec![
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("existing", FieldValue::Str(existing.clone())),
+            ],
+            Self::InvalidParameter { parameter, value, accepted } => vec![
+                ("parameter", FieldValue::Str(parameter.clone())),
+                ("value", FieldValue::Str(value.clone())),
+                ("accepted", FieldValue::Str(accepted.clone())),
+            ],
+            Self::LimitExceeded { quantity, value, limit, advice } => vec![
+                ("quantity", FieldValue::Str(quantity.clone())),
+                ("value", FieldValue::Int(*value)),
+                ("limit", FieldValue::Int(*limit)),
+                ("advice", FieldValue::Str(advice.clone())),
+            ],
+            Self::InvalidSparseMatrix { layer, problem } => vec![
+                ("layer", FieldValue::Str(layer.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::CorruptLayer { layer, problem } => vec![
+                ("layer", FieldValue::Str(layer.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::LayerDtype { layer, stored, requested } => vec![
+                ("layer", FieldValue::Str(layer.clone())),
+                ("stored", FieldValue::Str(stored.clone())),
+                ("requested", FieldValue::Str(requested.clone())),
+            ],
+            Self::MissingMember { kind, name, store } => vec![
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("store", FieldValue::Str(store.clone())),
+            ],
+            Self::StoreIo { operation, path, detail } => vec![
+                ("operation", FieldValue::Str(operation.clone())),
+                ("path", FieldValue::Str(path.clone())),
+                ("detail", FieldValue::Str(detail.clone())),
             ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
@@ -222,6 +435,50 @@ impl KytoError {
             Self::DuplicateIds {
                 axis: "genes".to_owned(),
                 ids: vec!["ENSG01".to_owned(), "ENSG02".to_owned()],
+            },
+            Self::InvalidMemberName {
+                kind: "layer".to_owned(),
+                name: "log1p/counts".to_owned(),
+                rule: "character '/' is not allowed".to_owned(),
+            },
+            Self::MemberExists {
+                kind: "layer".to_owned(),
+                name: "Counts".to_owned(),
+                existing: "counts".to_owned(),
+            },
+            Self::InvalidParameter {
+                parameter: "nnz_shard_size".to_owned(),
+                value: "1000".to_owned(),
+                accepted: "a positive multiple of nnz_chunk_size (256)".to_owned(),
+            },
+            Self::LimitExceeded {
+                quantity: "cell_block_size * gene_block_size".to_owned(),
+                value: 8589934592,
+                limit: 4294967295,
+                advice: "use smaller cell_block_size or gene_block_size".to_owned(),
+            },
+            Self::InvalidSparseMatrix {
+                layer: "counts".to_owned(),
+                problem: "row 4: gene index 7 follows 9; indices must be strictly increasing".to_owned(),
+            },
+            Self::CorruptLayer {
+                layer: "counts".to_owned(),
+                problem: "tile (0, 2): indptr ends at 5 but tile_offsets gives 7 entries".to_owned(),
+            },
+            Self::LayerDtype {
+                layer: "counts".to_owned(),
+                stored: "uint32".to_owned(),
+                requested: "float32".to_owned(),
+            },
+            Self::MissingMember {
+                kind: "layer".to_owned(),
+                name: "count".to_owned(),
+                store: "pbmc.kyto".to_owned(),
+            },
+            Self::StoreIo {
+                operation: "write array".to_owned(),
+                path: "pbmc.kyto/layers/counts/data".to_owned(),
+                detail: "No space left on device (os error 28)".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),

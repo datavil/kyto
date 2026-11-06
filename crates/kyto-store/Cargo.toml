@@ -11,3 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+kyto-error = { path = "../kyto-error" }
+serde_json = "1.0.154"
+zarrs = { version = "0.22.10", default-features = false, features = ["filesystem", "sharding", "zstd", "crc32c"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
+tempfile = "3.27.0"

@@ -52,6 +52,26 @@ doc = "A plan cannot run within its memory limit."
 base = "RuntimeError"
 doc = "The requested device cannot run part of the plan."
 
+[classes.StoreInputError]
+base = "ValueError"
+doc = "Data, names or parameters given to a store writer break the store format (docs/format.md)."
+
+[classes.CorruptStoreError]
+base = "ValueError"
+doc = "A store on disk breaks the store format (docs/format.md)."
+
+[classes.StoreIOError]
+base = "RuntimeError"
+doc = "The file system or the Zarr layer failed while reading or writing a store."
+
+[classes.MissingMemberError]
+base = "LookupError"
+doc = "A layer, embedding or graph is not in the store."
+
+[classes.LayerDtypeError]
+base = "TypeError"
+doc = "A layer is read with a value dtype other than the one it stores."
+
 [[errors]]
 code = "KY-E101"
 variant = "DuplicateIds"
@@ -62,6 +82,122 @@ hint = "IDs on the {axis} axis must be unique; drop or rename the duplicates bef
 fields = [
     { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "genes" },
     { name = "ids", type = "list[str]", doc = "The IDs that occur more than once.", example = ["ENSG01", "ENSG02"] },
+]
+
+[[errors]]
+code = "KY-E102"
+variant = "InvalidMemberName"
+class = "StoreInputError"
+summary = "A layer, embedding or graph name breaks the naming rules of format.md section 2.1."
+message = "invalid {kind} name '{name}': {rule}"
+hint = "use 1 to 64 characters from A-Z a-z 0-9 _ . - that do not start with . or __, do not end with . and are not a Windows device name such as CON"
+fields = [
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "name", type = "str", doc = "The name as given.", example = "log1p/counts" },
+    { name = "rule", type = "str", doc = "The rule it breaks.", example = "character '/' is not allowed" },
+]
+
+[[errors]]
+code = "KY-E103"
+variant = "MemberExists"
+class = "StoreInputError"
+summary = "A member with the same name, compared case-insensitively, is already in the store."
+message = "{kind} '{name}' already exists in the store as '{existing}'"
+hint = "choose another name; names are compared case-insensitively because macOS and Windows file systems are"
+fields = [
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "name", type = "str", doc = "The name as given.", example = "Counts" },
+    { name = "existing", type = "str", doc = "The name already in the store.", example = "counts" },
+]
+
+[[errors]]
+code = "KY-E104"
+variant = "InvalidParameter"
+class = "StoreInputError"
+summary = "A store writer parameter (tile or chunk size, compression level) is out of range."
+message = "invalid {parameter} = {value}"
+hint = "{parameter} must be {accepted}"
+fields = [
+    { name = "parameter", type = "str", doc = "The parameter name.", example = "nnz_shard_size" },
+    { name = "value", type = "str", doc = "The value given.", example = "1000" },
+    { name = "accepted", type = "str", doc = "What the parameter accepts.", example = "a positive multiple of nnz_chunk_size (256)" },
+]
+
+[[errors]]
+code = "KY-E105"
+variant = "LimitExceeded"
+class = "StoreInputError"
+summary = "A size is above a limit of the store format (format.md section 4.5)."
+message = "{quantity} is {value}, above the format limit of {limit}"
+hint = "{advice} to stay within the limits of format.md section 4.5"
+fields = [
+    { name = "quantity", type = "str", doc = "What is too large.", example = "cell_block_size * gene_block_size" },
+    { name = "value", type = "int", doc = "Its value.", example = 8589934592 },
+    { name = "limit", type = "int", doc = "The largest value allowed.", example = 4294967295 },
+    { name = "advice", type = "str", doc = "How to get under the limit.", example = "use smaller cell_block_size or gene_block_size" },
+]
+
+[[errors]]
+code = "KY-E106"
+variant = "InvalidSparseMatrix"
+class = "StoreInputError"
+summary = "A sparse matrix given to a store writer is not valid CSR of the stated shape."
+message = "invalid sparse matrix for layer '{layer}': {problem}"
+hint = "pass CSR with indptr of length n_cells + 1 starting at 0 and non-decreasing, and sorted, unique gene indices below n_genes in each row (format.md section 4.3)"
+fields = [
+    { name = "layer", type = "str", doc = "The layer being written.", example = "counts" },
+    { name = "problem", type = "str", doc = "What is wrong and where.", example = "row 4: gene index 7 follows 9; indices must be strictly increasing" },
+]
+
+[[errors]]
+code = "KY-E107"
+variant = "CorruptLayer"
+class = "CorruptStoreError"
+summary = "A stored layer breaks the tiled sparse format (format.md section 4)."
+message = "layer '{layer}' is corrupt: {problem}"
+hint = "the store breaks docs/format.md section 4; rewrite the layer with kyto, or report a bug if kyto wrote it"
+fields = [
+    { name = "layer", type = "str", doc = "The layer being read.", example = "counts" },
+    { name = "problem", type = "str", doc = "The invariant that fails and where.", example = "tile (0, 2): indptr ends at 5 but tile_offsets gives 7 entries" },
+]
+
+[[errors]]
+code = "KY-E108"
+variant = "LayerDtype"
+class = "LayerDtypeError"
+summary = "A layer is read with a value dtype other than the one it stores."
+message = "layer '{layer}' stores {stored} values, not {requested}"
+hint = "read layer '{layer}' as {stored}"
+fields = [
+    { name = "layer", type = "str", doc = "The layer being read.", example = "counts" },
+    { name = "stored", type = "str", doc = "The Zarr dtype of its data array.", example = "uint32" },
+    { name = "requested", type = "str", doc = "The dtype asked for.", example = "float32" },
+]
+
+[[errors]]
+code = "KY-E109"
+variant = "MissingMember"
+class = "MissingMemberError"
+summary = "A layer, embedding or graph is not in the store."
+message = "no {kind} named '{name}' in the store at '{store}'"
+hint = "check the name against the store's schema; names are case-sensitive when read"
+fields = [
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "name", type = "str", doc = "The name asked for.", example = "count" },
+    { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+]
+
+[[errors]]
+code = "KY-E110"
+variant = "StoreIo"
+class = "StoreIOError"
+summary = "The file system or the Zarr layer failed while reading or writing a store."
+message = "could not {operation} '{path}': {detail}"
+hint = "check that the path exists, that you may read and write it, and that the disk is not full"
+fields = [
+    { name = "operation", type = "str", doc = "What was being done.", example = "write array" },
+    { name = "path", type = "str", doc = "The store path or node.", example = "pbmc.kyto/layers/counts/data" },
+    { name = "detail", type = "str", doc = "The underlying error.", example = "No space left on device (os error 28)" },
 ]
 
 [[errors]]
