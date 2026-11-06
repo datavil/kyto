@@ -48,8 +48,8 @@ decision recorded in the plan.
 - Start a task only when every task under its **Depends** is ticked.
 - Task IDs such as `3.4` never change. New tasks take the next free number; dropped
   tasks stay, struck through.
-- **One task = one branch = one PR.** Commit messages start with the ID:
-  `[3.4] feature resolver`.
+- **One task = one commit on `main`.** No task branches or PRs. Commit messages
+  start with the ID: `[3.4] feature resolver`.
 - A task is done when its check passes in CI, not before.
 - If a task is unclear, add an open question under it in the plan instead of guessing.
 
@@ -61,8 +61,8 @@ reference can be wrong or surprising (silent densification, order-dependent resu
 in-place mutation, unseeded randomness). Do not copy those blindly. When the
 reference output or behaviour looks wrong:
 
-1. **Note it first.** Write down what looks wrong and how to reproduce it (in the PR
-   description, and as a `memory/` entry if it is a lasting decision).
+1. **Note it first.** Write down what looks wrong and how to reproduce it (in the commit
+   message, and as a `memory/` entry if it is a lasting decision).
 2. **Check a second implementation** (Seurat, rapids-singlecell, the original paper
    or reference package of the method) to see whether the behaviour is intended.
 3. **Still unsure? Ask the user.** Do not decide a deviation on your own when it is
@@ -70,7 +70,7 @@ reference output or behaviour looks wrong:
 
 **Record every deviation, no exceptions.** Any place where kyto gives different
 results or semantics than scanpy or anndata gets a row in
-[deviations.md](deviations.md), in the same PR that introduces it: big or small,
+[deviations.md](deviations.md), in the same commit that introduces it: big or small,
 on purpose or a known gap left for later. Each row says what the reference does,
 what kyto does, why, and when and by whom it was decided. Tolerances live in the
 parity table, not in individual tests.
@@ -196,8 +196,8 @@ requires editing many unrelated files, the foundation is wrong: stop and tell th
 
 Tokens are a budget. Spend them on design and verification, not on re-reading or noise.
 
-- **End the session at the end of a task.** After the task's PR is up and the plan
-  is ticked, stop. Tell the user the task is done and the next one should start in a
+- **End the session at the end of a task.** After the task is committed to `main` and the
+  plan is ticked, stop. Tell the user the task is done and the next one should start in a
   fresh session.
 - **Read narrowly.** Search before reading. Read the line range you need, not whole
   files. Do not re-read a file you just edited.
@@ -217,14 +217,14 @@ Tokens are a budget. Spend them on design and verification, not on re-reading or
 1. Read the plan, pick an unblocked unticked task. Read relevant `memory/` entries.
 2. Look at how the reference does it (scanpy, anndata, and for storage and planning,
    Polars and Zarr). Note the parameters and edge cases you must match.
-3. Create the task branch. Implement minimally. Write unit tests (Rust) and
+3. Implement minimally. Write unit tests (Rust) and
    integration and parity tests (Python).
 4. Run the task's **Done when** check. Compare with scanpy on the fixtures. If the
    reference looks wrong, follow "Parity with scanpy" above (note, check, ask).
 5. Spin bug-hunting sub agents. Fix confirmed bugs surgically.
 6. Benchmark if the task touches a hot path (time and peak memory).
-7. Format, run all checks, commit with the task ID, push, open the PR, tick the task
-   in the plan.
+7. Format, run all checks, tick the task in the plan, and commit to `main` with the
+   task ID.
 
 ## Commands
 

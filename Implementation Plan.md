@@ -10,7 +10,7 @@ kyto is built in 10 workstreams of numbered tasks. An agent takes one unblocked 
 
 - IDs such as `3.4` never change. New tasks take the next free number; dropped tasks stay, struck through.
 - Start a task only when every task under its **Depends** is ticked.
-- One task = one branch = one PR. Commit messages start with the ID: `[3.4] feature resolver`.
+- One task = one commit on `main` (no task branches or PRs; decided by the user, Nov 6, 2026). Commit messages start with the ID: `[3.4] feature resolver`.
 - A task is done when its check passes in CI, not before.
 - Reviews cite a rule by its number (`R5`). If a task is unclear, add an open question under it instead of guessing.
 
