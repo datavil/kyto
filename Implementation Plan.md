@@ -76,21 +76,25 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 
 Goal: a Zarr v3 store where reading a few genes costs about the same as reading a few cells.
 
-- [ ] **2.1 Format spec v0.** Write `docs/format.md`: `/cells` and `/genes` as Parquet, `/layers/<name>` as tiled sparse arrays, `/embeddings`, `/graphs`, `/schema.json`, `/provenance.json`, and a `format_version` field.
+- [x] **2.1 Format spec v0.** Write `docs/format.md`: `/cells` and `/genes` as Parquet, `/layers/<name>` as tiled sparse arrays, `/embeddings`, `/graphs`, `/schema.json`, `/provenance.json`, and a `format_version` field.
   - Depends: 1.1
   - Done when: the spec is merged and 2.2–2.5 cite its section numbers.
 - [ ] **2.2 Tiled sparse matrix.** Tiles of cell block × gene block, CSR inside each tile, Zarr sharding codec with zstd. Tile sizes are parameters; defaults come from 10.4.
   - Depends: 2.1
   - Done when: a `proptest` round trip (random shape, sparsity, dtype) is exact.
+  - Spec: `docs/format.md` §4.1-§4.6 (tiling, arrays, CSR inside tile, chunks and codecs, limits, zeros), §2.1 (names).
 - [ ] **2.3 Metadata tables.** Cell and gene tables via Polars Parquet; IDs unique and checked on write; strings stored as categoricals.
   - Depends: 2.1
   - Done when: writing duplicate IDs raises `KY-E101`; round trip keeps dtypes.
+  - Spec: `docs/format.md` §5 (tables, IDs, dtypes, Enum, nulls, names, Parquet settings), §8 (`schema.json` columns).
 - [ ] **2.4 Tile reader.** Parallel reads that skip tiles outside the selected genes (projection) and cells (predicate); yields a stream of `CellBlock`s (5.1).
   - Depends: 2.2
   - Done when: a test counter shows that selecting 3 genes reads one gene block per cell block, nothing more.
+  - Spec: `docs/format.md` §4.7 (reading a tile), §4.8 (tiles to CellBlock), §3 and §11 (version check on open).
 - [ ] **2.5 Streaming writer.** Writes `CellBlock`s as they arrive; writes to a temporary path and renames on success, so a failed run leaves no half store.
   - Depends: 2.2, 2.3
   - Done when: killing a write midway leaves the target path absent.
+  - Spec: `docs/format.md` §10 (atomic write, write order, determinism), §8, §9, §3 (root `zarr.json` last).
 - [ ] **2.6 Importers.** `ky.convert()` from `.h5ad` (dense, CSR, CSC; streamed through the `hdf5` crate), 10x `.h5`, and `.mtx` + TSV. `on_duplicate_ids="error"` by default, `"suffix"` opt-in.
   - Depends: 2.5
   - Done when: every fixture converts and matches anndata's values exactly.

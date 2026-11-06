@@ -168,7 +168,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `python/kyto` | Python package and `.pyi` stubs |
 | `tests/` | pytest (API, parity, property tests) and fixtures |
 | `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
-| `docs/` | format spec, docs site sources (not yet: task 2.1) |
+| `docs/` | `format.md` store format spec (2.1); docs site sources (not yet: task 10.5) |
 | `errors.toml` | the error registry (codes, classes, templates, hints, docs links) |
 | `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
 | `memory/` | lessons learned (indexed) |
