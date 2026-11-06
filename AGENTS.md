@@ -236,12 +236,13 @@ uv sync                                   # dev env (first time)
 uv run maturin develop                    # build and install the extension
 cargo build --workspace                   # build all crates
 cargo test --workspace                    # Rust tests
-cargo clippy --workspace -- -D warnings   # Rust lint
+uv run cargo clippy --workspace --all-targets -- -D warnings   # Rust lint (uv run: PyO3 sees .venv python)
 cargo fmt --all                           # Rust format
-uv run ruff format && uv run ruff check --fix   # Python format and lint
-uv run pyright --strict                   # Python type check
+uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
+uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run pytest                             # Python tests (API, parity, property)
-pre-commit run --all-files                # everything above, before every commit
+uv run pre-commit install                 # run the hooks on every git commit (once)
+uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before every commit
 ```
 
 ## Memory index

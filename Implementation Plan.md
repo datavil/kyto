@@ -57,7 +57,7 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 - [x] **1.2 Python package.** `kyto-py` as a PyO3 extension (`abi3-py310`), maturin as build backend, mixed Rust/Python layout, dev environment managed with uv.
   - Depends: 1.1
   - Done when: `uv run maturin develop` then `uv run python -c "import kyto; print(kyto.__version__)"` succeeds.
-- [ ] **1.3 Lint and format.** `rustfmt`, `clippy -D warnings`, `ruff format`, `ruff check` (import sorting on), `pyright --strict` on stubs, all in pre-commit.
+- [x] **1.3 Lint and format.** `rustfmt`, `clippy -D warnings`, `ruff format`, `ruff check` (import sorting on), `pyright --strict` on stubs, all in pre-commit.
   - Depends: 1.2
   - Done when: `pre-commit run --all-files` passes on a clean checkout.
 - [ ] **1.4 CI.** GitHub Actions matrix: Linux, macOS, Windows on x86\_64 and aarch64; wheels built with `maturin-action`; GPU job reserved for a self-hosted runner (9.7).

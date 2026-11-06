@@ -12,7 +12,9 @@ def test_version_matches_workspace_cargo_toml() -> None:
     # A regex, not tomllib: tomllib needs Python 3.11 and kyto supports 3.10.
     text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     match = re.search(
-        r'^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"', text, re.M | re.S
+        r'^\[workspace\.package\][^\[]*?^version\s*=\s*"([^"]+)"',
+        text,
+        re.MULTILINE | re.DOTALL,
     )
     assert match is not None
     assert kyto.__version__ == match.group(1)
