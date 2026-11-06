@@ -10,3 +10,7 @@ the commit anyway.
 `pre-commit run --all-files > <scratch>/check.log 2>&1 && git add -A && git commit ...`
 (then inspect the log), or `set -o pipefail`. If a bad commit slipped out, fix forward
 in a new commit and say so.
+
+**Also (kyto, 1.5):** `pre-commit run --all-files` only checks files git tracks. New
+untracked files are skipped, so a local pass can still fail in CI. `git add` new files
+before running the hooks.

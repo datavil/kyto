@@ -87,6 +87,7 @@ def test_pbmc3k_replaces_a_corrupt_cached_archive(
     source = pbmc.fetch_pbmc3k()
     corrupt = tmp_path / pbmc.PBMC3K_ARCHIVE
     corrupt.write_bytes(b"trunc")
+
     # Stand in for the network with the verified archive.
     def copy_verified(path: Path) -> None:
         shutil.copyfile(source, path)
