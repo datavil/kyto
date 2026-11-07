@@ -20,6 +20,7 @@ __all__ = [
     "DuplicateIdError",
     "FieldValue",
     "FormatVersionError",
+    "InputFileError",
     "KytoError",
     "LayerDtypeError",
     "MemoryLimitError",
@@ -422,6 +423,26 @@ class LayerDtypeError(KytoError, TypeError):
     """
 
 
+class InputFileError(KytoError, ValueError):
+    """An input file given to convert has a format, encoding or value kyto cannot import.
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E120``: An input file given to convert has a format or an encoding kyto does not import.
+    - ``KY-E121``: An input file given to convert holds a value or a structure that breaks its own format or cannot be stored.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = InputFileError("KY-E120", path="pbmc.h5ad:/X", problem="encoding-type 'awkward-array' is not supported", accepted="store X as an array, csr_matrix or csc_matrix (anndata >= 0.8 writes these)")
+    >>> error.code
+    'KY-E120'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
 _REGISTRY: Final[dict[str, _Entry]] = {
     "KY-E101": _Entry(
         class_name="DuplicateIdError",
@@ -627,6 +648,29 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("axis", "str"),
             _Field("n_rows", "int"),
             _Field("n_axis", "int"),
+        ),
+    ),
+    "KY-E120": _Entry(
+        class_name="InputFileError",
+        message="cannot import '{path}': {problem}",
+        hint="{accepted} (see the kyto.convert docstring for the inputs it reads)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e120",
+        fields=(
+            _Field("path", "str"),
+            _Field("problem", "str"),
+            _Field("accepted", "str"),
+        ),
+    ),
+    "KY-E121": _Entry(
+        class_name="InputFileError",
+        message="invalid input '{path}' at {location}: {problem}",
+        hint="{advice}, then convert again",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e121",
+        fields=(
+            _Field("path", "str"),
+            _Field("location", "str"),
+            _Field("problem", "str"),
+            _Field("advice", "str"),
         ),
     ),
     "KY-E201": _Entry(

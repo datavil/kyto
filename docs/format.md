@@ -568,7 +568,7 @@ integers and booleans carry a mask. kyto maps them as follows.
 
 | anndata | kyto v0 | Note |
 | --- | --- | --- |
-| `X` | a named layer | No unnamed matrix (R4). The importer (2.6) picks the name. |
+| `X` | a named layer | No unnamed matrix (R4). `convert` (2.6) names it by its `layer` argument, default `counts`. |
 | `layers/*` | `layers/<name>` | Tiled canonical CSR only (§4); dense, CSC, unsorted and duplicate-index inputs are converted on import (duplicates summed, as scipy does). |
 | `obs`, `var` (dataframe groups, `_index`) | `cells.parquet`, `genes.parquet` with `cell_id`, `gene_id` | IDs must be unique (§5.2); anndata only warns. |
 | categoricals (`codes` + `categories`, `ordered`) | Polars `Enum` + `ordered` in `schema.json` | Category order and unused categories kept; code `-1` becomes null (§5.4). Plain string columns also become `Enum`. |

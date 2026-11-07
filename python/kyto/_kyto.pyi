@@ -7,3 +7,14 @@ def raise_error_example(code: str, /) -> bool:
 
 def error_example_text(code: str, /) -> tuple[str, str] | None:
     """Return the Rust message and hint of the example error for `code`."""
+
+def convert(
+    source: str,
+    target: str,
+    /,
+    *,
+    layer: str,
+    on_duplicate_ids: str,
+    overwrite: bool,
+) -> None:
+    """Import `source` into a new store at `target` (see `kyto.convert`)."""

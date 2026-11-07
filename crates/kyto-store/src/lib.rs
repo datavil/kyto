@@ -9,12 +9,22 @@
 //! by [`write_table`] and read by [`read_table`] (task 2.3, §5), and selected tiles of a
 //! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8), and a
 //! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
-//! 2.5, §10).
+//! 2.5, §10), and inputs imported into a new store by [`convert`] (`.h5ad`, 10x `.h5`,
+//! Matrix Market; task 2.6).
 #![forbid(unsafe_code)]
 
 mod atomic_dir;
 mod cell_block;
 mod csr;
+mod import_10x;
+mod import_convert;
+mod import_h5;
+mod import_h5_matrix;
+mod import_h5ad;
+mod import_ids;
+mod import_mtx;
+mod import_rows;
+mod import_transpose;
 mod layer_io;
 mod layer_open;
 mod layer_stream;
@@ -37,6 +47,8 @@ mod zarr_arrays;
 
 pub use cell_block::{CellBlock, CellValues};
 pub use csr::CsrMatrix;
+pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};
+pub use import_ids::OnDuplicateIds;
 pub use layer_io::{read_layer, write_layer};
 pub use layer_open::ValueDtype;
 pub use names::validate_member_name;

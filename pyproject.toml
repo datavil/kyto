@@ -1,5 +1,6 @@
 [build-system]
-requires = ["maturin>=1.9.4,<2"]
+# cmake builds the static HDF5 bundled by hdf5-metno (task 2.6) in the isolated build env.
+requires = ["maturin>=1.9.4,<2", "cmake>=3.31"]
 build-backend = "maturin"
 
 [project]
@@ -16,6 +17,8 @@ dynamic = ["version"]
 
 [dependency-groups]
 dev = [
+    # Builds the bundled static HDF5 (hdf5-metno `static`, task 2.6) for `uv run cargo`.
+    "cmake>=3.31",
     "maturin>=1.9.4,<2",
     "numpy>=2.2",
     # Reads kyto tables in tests (Parquet written by the Rust polars crate, task 2.3).

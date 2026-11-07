@@ -76,6 +76,10 @@ doc = "A layer, embedding or graph is not in the store."
 base = "TypeError"
 doc = "A layer is read with a value dtype other than the one it stores."
 
+[classes.InputFileError]
+base = "ValueError"
+doc = "An input file given to convert has a format, encoding or value kyto cannot import."
+
 [[errors]]
 code = "KY-E101"
 variant = "DuplicateIds"
@@ -318,6 +322,33 @@ fields = [
     { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "cells" },
     { name = "n_rows", type = "int", doc = "Rows in the table.", example = 2699 },
     { name = "n_axis", type = "int", doc = "Length of the matrix axis.", example = 2700 },
+]
+
+[[errors]]
+code = "KY-E120"
+variant = "UnsupportedInput"
+class = "InputFileError"
+summary = "An input file given to convert has a format or an encoding kyto does not import."
+message = "cannot import '{path}': {problem}"
+hint = "{accepted} (see the kyto.convert docstring for the inputs it reads)"
+fields = [
+    { name = "path", type = "str", doc = "The input path, or the member inside it.", example = "pbmc.h5ad:/X" },
+    { name = "problem", type = "str", doc = "What is not supported.", example = "encoding-type 'awkward-array' is not supported" },
+    { name = "accepted", type = "str", doc = "What would be imported, and how to get there.", example = "store X as an array, csr_matrix or csc_matrix (anndata >= 0.8 writes these)" },
+]
+
+[[errors]]
+code = "KY-E121"
+variant = "InvalidInput"
+class = "InputFileError"
+summary = "An input file given to convert holds a value or a structure that breaks its own format or cannot be stored."
+message = "invalid input '{path}' at {location}: {problem}"
+hint = "{advice}, then convert again"
+fields = [
+    { name = "path", type = "str", doc = "The input path, or the member inside it.", example = "pbmc.h5ad:/X" },
+    { name = "location", type = "str", doc = "Where in the input: row, column, line or entry.", example = "cell 4, gene 17" },
+    { name = "problem", type = "str", doc = "What is wrong.", example = "integer value -3 is negative" },
+    { name = "advice", type = "str", doc = "How to fix it.", example = "integer matrices become uint32 layers; cast X to float32 in anndata before converting to keep negative values" },
 ]
 
 [[errors]]

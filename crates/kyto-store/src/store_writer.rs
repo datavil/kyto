@@ -34,6 +34,7 @@ use crate::store_json::{ImportSource, LayerSummary, Schema, provenance_json};
 use crate::store_version::FORMAT_VERSION;
 use crate::table_axis::TableAxis;
 use crate::table_check::{PlainStrings, check_table};
+use crate::table_columns::{ColumnDtype, TableColumn};
 use crate::table_io::write_table_columns;
 use crate::tiling::{TileGrid, Tiling};
 use crate::write_options::LayerWriteOptions;
@@ -72,6 +73,8 @@ pub struct StoreWriter {
     layers: Vec<LayerState>,
     n_cells: u64,
     started_at: SystemTime,
+    /// Enum columns to record as ordered in `schema.json` (format.md §8).
+    ordered: Vec<(TableAxis, String)>,
     /// Set when a write failed: the arrays are then incomplete, so later calls fail.
     failed: bool,
 }
@@ -155,8 +158,17 @@ impl StoreWriter {
             layers: streams,
             n_cells: 0,
             started_at,
+            ordered: Vec::new(),
             failed: false,
         })
+    }
+
+    /// Record the `Enum` column `column` of the `axis` table as ordered in
+    /// `schema.json` (format.md §5.4, §8), as anndata's `ordered=True` categoricals.
+    /// Polars `Enum` has no such flag, so the writer keeps it; without this call every
+    /// Enum is unordered. Checked by [`StoreWriter::finish`].
+    pub fn mark_ordered(&mut self, axis: TableAxis, column: &str) {
+        self.ordered.push((axis, column.to_owned()));
     }
 
     /// Matrix rows pushed so far.
@@ -276,8 +288,16 @@ impl StoreWriter {
         }
         // ... the tables, provenance.json, schema.json, ...
         let store = self.dir.path().to_path_buf();
-        let gene_columns = write_table_columns(&store, TableAxis::Genes, &self.genes, self.tiling)?;
-        let cell_columns = write_table_columns(&store, TableAxis::Cells, cells, self.tiling)?;
+        let mut gene_columns =
+            write_table_columns(&store, TableAxis::Genes, &self.genes, self.tiling)?;
+        let mut cell_columns = write_table_columns(&store, TableAxis::Cells, cells, self.tiling)?;
+        for (axis, name) in &self.ordered {
+            let columns = match axis {
+                TableAxis::Cells => &mut cell_columns,
+                TableAxis::Genes => &mut gene_columns,
+            };
+            set_ordered(*axis, columns, name)?;
+        }
         let provenance = provenance_json(source, self.started_at, SystemTime::now());
         write_json(&store.join("provenance.json"), &provenance)?;
         let schema = Schema {
@@ -361,6 +381,30 @@ impl StoreWriter {
         }
         Ok(n_rows as u64)
     }
+}
+
+/// Mark the Enum column `name` ordered.
+///
+/// # Errors
+/// `KY-E112` if the table has no such column or it is not an `Enum`.
+fn set_ordered(axis: TableAxis, columns: &mut [TableColumn], name: &str) -> Result<(), KytoError> {
+    let problem = match columns.iter_mut().find(|column| column.name == name) {
+        Some(TableColumn {
+            dtype: ColumnDtype::Enum { ordered, .. },
+            ..
+        }) => {
+            *ordered = true;
+            return Ok(());
+        }
+        Some(column) => format!("has dtype {}, so it cannot be ordered", column.dtype.name()),
+        None => "does not exist, so it cannot be ordered".to_owned(),
+    };
+    Err(KytoError::InvalidTableColumn {
+        axis: axis.as_str().to_owned(),
+        column: name.to_owned(),
+        problem,
+        accepted: "mark only Enum columns of the table as ordered".to_owned(),
+    })
 }
 
 /// Write a JSON file with keys in insertion order (format.md §10.3) and a final newline.

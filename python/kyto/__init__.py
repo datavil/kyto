@@ -1,5 +1,6 @@
 """kyto: lazy, streaming single-cell analysis, written in Rust, used from Python."""
 
+from kyto._convert import convert
 from kyto._kyto import __version__
 from kyto.errors import (
     AxisError,
@@ -7,6 +8,7 @@ from kyto.errors import (
     DeviceError,
     DuplicateIdError,
     FormatVersionError,
+    InputFileError,
     KytoError,
     LayerDtypeError,
     MemoryLimitError,
@@ -24,6 +26,7 @@ __all__ = [
     "DeviceError",
     "DuplicateIdError",
     "FormatVersionError",
+    "InputFileError",
     "KytoError",
     "LayerDtypeError",
     "MemoryLimitError",
@@ -34,4 +37,5 @@ __all__ = [
     "StoreIOError",
     "StoreInputError",
     "__version__",
+    "convert",
 ]

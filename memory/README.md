@@ -15,3 +15,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Polars debug info vs. link memory on arm](polars_debug_link_memory.md): arm test job died linking polars debug binaries; dependency debug = line-tables-only, verify at next CI run.
 - [Counting tile reads](counting_tile_reads.md): wrap the storage, map byte ranges via the shard index; missing keys and unstored inner chunks read nothing.
 - [Streaming writer and atomic temporaries](streaming_writer_atomic.md): write chunks through max-shape arrays; tell stale `.kyto-tmp-` dirs by an OS file lock, never by name alone.
+- [Static HDF5 through hdf5-metno](hdf5_static_build.md): user chose hdf5-metno `static` (bundled HDF5 via CMake from PyPI, dev group and build-system requires); 6-target build unverified until next CI run.

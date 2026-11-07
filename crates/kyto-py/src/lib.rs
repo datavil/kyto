@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 
+pub mod convert;
 pub mod errors;
 
 /// The package version, taken from the workspace `Cargo.toml` (the single source).
@@ -15,6 +16,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[pymodule]
 fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", VERSION)?;
+    module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;
     module.add_function(wrap_pyfunction!(errors::error_example_text, module)?)?;
     Ok(())

@@ -191,6 +191,28 @@ pub enum KytoError {
         /// Length of the matrix axis.
         n_axis: u64,
     },
+    /// KY-E120: An input file given to convert has a format or an encoding kyto does not import.
+    #[error("KY-E120: cannot import '{path}': {problem}")]
+    UnsupportedInput {
+        /// The input path, or the member inside it.
+        path: String,
+        /// What is not supported.
+        problem: String,
+        /// What would be imported, and how to get there.
+        accepted: String,
+    },
+    /// KY-E121: An input file given to convert holds a value or a structure that breaks its own format or cannot be stored.
+    #[error("KY-E121: invalid input '{path}' at {location}: {problem}")]
+    InvalidInput {
+        /// The input path, or the member inside it.
+        path: String,
+        /// Where in the input: row, column, line or entry.
+        location: String,
+        /// What is wrong.
+        problem: String,
+        /// How to fix it.
+        advice: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -253,7 +275,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 26] = [
+    pub const CODES: [&'static str; 28] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -273,6 +295,8 @@ impl KytoError {
         "KY-E117",
         "KY-E118",
         "KY-E119",
+        "KY-E120",
+        "KY-E121",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -304,6 +328,8 @@ impl KytoError {
             Self::InvalidCellBlock { .. } => "KY-E117",
             Self::StoreExists { .. } => "KY-E118",
             Self::TableLength { .. } => "KY-E119",
+            Self::UnsupportedInput { .. } => "KY-E120",
+            Self::InvalidInput { .. } => "KY-E121",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -336,6 +362,8 @@ impl KytoError {
             Self::InvalidCellBlock { .. } => "StoreInputError",
             Self::StoreExists { .. } => "StoreInputError",
             Self::TableLength { .. } => "StoreInputError",
+            Self::UnsupportedInput { .. } => "InputFileError",
+            Self::InvalidInput { .. } => "InputFileError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -405,6 +433,12 @@ impl KytoError {
             }
             Self::TableLength { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e119"
+            }
+            Self::UnsupportedInput { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e120"
+            }
+            Self::InvalidInput { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e121"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -489,6 +523,12 @@ impl KytoError {
             }
             Self::TableLength { axis, .. } => {
                 format!("pass one {axis} table row per matrix {axis} entry, in matrix order")
+            }
+            Self::UnsupportedInput { accepted, .. } => {
+                format!("{accepted} (see the kyto.convert docstring for the inputs it reads)")
+            }
+            Self::InvalidInput { advice, .. } => {
+                format!("{advice}, then convert again")
             }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
@@ -608,6 +648,17 @@ impl KytoError {
                 ("axis", FieldValue::Str(axis.clone())),
                 ("n_rows", FieldValue::Int(*n_rows)),
                 ("n_axis", FieldValue::Int(*n_axis)),
+            ],
+            Self::UnsupportedInput { path, problem, accepted } => vec![
+                ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("accepted", FieldValue::Str(accepted.clone())),
+            ],
+            Self::InvalidInput { path, location, problem, advice } => vec![
+                ("path", FieldValue::Str(path.clone())),
+                ("location", FieldValue::Str(location.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("advice", FieldValue::Str(advice.clone())),
             ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
@@ -736,6 +787,17 @@ impl KytoError {
                 axis: "cells".to_owned(),
                 n_rows: 2699,
                 n_axis: 2700,
+            },
+            Self::UnsupportedInput {
+                path: "pbmc.h5ad:/X".to_owned(),
+                problem: "encoding-type 'awkward-array' is not supported".to_owned(),
+                accepted: "store X as an array, csr_matrix or csc_matrix (anndata >= 0.8 writes these)".to_owned(),
+            },
+            Self::InvalidInput {
+                path: "pbmc.h5ad:/X".to_owned(),
+                location: "cell 4, gene 17".to_owned(),
+                problem: "integer value -3 is negative".to_owned(),
+                advice: "integer matrices become uint32 layers; cast X to float32 in anndata before converting to keep negative values".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),
