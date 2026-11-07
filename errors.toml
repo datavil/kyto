@@ -77,11 +77,12 @@ code = "KY-E101"
 variant = "DuplicateIds"
 class = "DuplicateIdError"
 summary = "IDs written to a store are not unique."
-message = "duplicate {axis} IDs: {ids}"
-hint = "IDs on the {axis} axis must be unique; drop or rename the duplicates before writing"
+message = "the {axis} table has {n_duplicated} IDs that occur more than once, first: {ids}"
+hint = "IDs on the {axis} axis must be unique (exact byte comparison); drop or rename the duplicates before writing, or import with on_duplicate_ids='suffix' to make them unique"
 fields = [
     { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "genes" },
-    { name = "ids", type = "list[str]", doc = "The IDs that occur more than once.", example = ["ENSG01", "ENSG02"] },
+    { name = "n_duplicated", type = "int", doc = "How many distinct IDs occur more than once.", example = 12 },
+    { name = "ids", type = "list[str]", doc = "The first duplicated IDs, in the order they repeat (at most 5).", example = ["ENSG01", "ENSG02"] },
 ]
 
 [[errors]]
@@ -198,6 +199,46 @@ fields = [
     { name = "operation", type = "str", doc = "What was being done.", example = "write array" },
     { name = "path", type = "str", doc = "The store path or node.", example = "pbmc.kyto/layers/counts/data" },
     { name = "detail", type = "str", doc = "The underlying error.", example = "No space left on device (os error 28)" },
+]
+
+[[errors]]
+code = "KY-E111"
+variant = "InvalidIds"
+class = "StoreInputError"
+summary = "The ID column of a cell or gene table holds null or empty IDs."
+message = "the {axis} table has {n_invalid} {problem} IDs, first at rows {rows}"
+hint = "every {axis} ID must be a non-null, non-empty string; fill or drop those rows before writing"
+fields = [
+    { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "cells" },
+    { name = "n_invalid", type = "int", doc = "How many IDs are invalid.", example = 2 },
+    { name = "problem", type = "str", doc = "What is wrong with them: `null` or `empty`.", example = "null" },
+    { name = "rows", type = "list[str]", doc = "The first rows (0-based) with such an ID (at most 5).", example = ["3", "17"] },
+]
+
+[[errors]]
+code = "KY-E112"
+variant = "InvalidTableColumn"
+class = "StoreInputError"
+summary = "A column of a cell or gene table breaks format.md section 5 (name, dtype or position)."
+message = "column '{column}' of the {axis} table {problem}"
+hint = "{accepted} (format.md section 5)"
+fields = [
+    { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "cells" },
+    { name = "column", type = "str", doc = "The column name.", example = "sample" },
+    { name = "problem", type = "str", doc = "What is wrong.", example = "has dtype Categorical, which v0 stores do not allow" },
+    { name = "accepted", type = "str", doc = "What would be accepted.", example = "cast it to String or to an Enum with fixed categories" },
+]
+
+[[errors]]
+code = "KY-E113"
+variant = "CorruptTable"
+class = "CorruptStoreError"
+summary = "A stored cell or gene table breaks format.md section 5."
+message = "table '{path}' is corrupt: {problem}"
+hint = "the store breaks docs/format.md section 5; rewrite the table with kyto, or report a bug if kyto wrote it"
+fields = [
+    { name = "path", type = "str", doc = "The table file.", example = "pbmc.kyto/cells.parquet" },
+    { name = "problem", type = "str", doc = "The invariant that fails.", example = "the first column is 'barcode', not 'cell_id'" },
 ]
 
 [[errors]]

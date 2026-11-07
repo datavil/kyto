@@ -84,7 +84,7 @@ Goal: a Zarr v3 store where reading a few genes costs about the same as reading 
   - Done when: a `proptest` round trip (random shape, sparsity, dtype) is exact.
   - Spec: `docs/format.md` §4.1-§4.6 (tiling, arrays, CSR inside tile, chunks and codecs, limits, zeros), §2.1 (names).
   - Provisional writer defaults until 10.4: `C` = 4096, `G` = 1024, `K` = 65536, `S` = 1048576 entries, zstd level 3 (`kyto_store::Tiling::default`, `LayerWriteOptions::default`).
-- [ ] **2.3 Metadata tables.** Cell and gene tables via Polars Parquet; IDs unique and checked on write; strings stored as categoricals.
+- [x] **2.3 Metadata tables.** Cell and gene tables via Polars Parquet; IDs unique and checked on write; strings stored as categoricals.
   - Depends: 2.1
   - Done when: writing duplicate IDs raises `KY-E101`; round trip keeps dtypes.
   - Spec: `docs/format.md` §5 (tables, IDs, dtypes, Enum, nulls, names, Parquet settings), §8 (`schema.json` columns).

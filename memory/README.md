@@ -11,3 +11,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Tests need their own seeded generator](test_seed_isolation.md): (from ggrust) a shared RNG drawn at call time makes results depend on test order.
 - [Fixtures and scanpy references](fixture_references.md): canonical digests, no libm samplers, pbmc3k needs gene filter before cell_ranger HVG, scanpy only on some platforms.
 - [zarrs sharding is not deterministic in parallel](zarrs_shard_determinism.md): encode shards with concurrent_target(1) or shard bytes vary between runs; zarrs pinned to 0.22 by MSRV.
+- [Polars Parquet for the metadata tables](polars_parquet_tables.md): row_group_size merges the last group, use the batched writer; small int dtypes need features; no MSRV.

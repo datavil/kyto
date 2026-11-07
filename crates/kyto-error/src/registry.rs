@@ -8,11 +8,13 @@ use crate::{FieldValue, quoted_list};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KytoError {
     /// KY-E101: IDs written to a store are not unique.
-    #[error("KY-E101: duplicate {axis} IDs: {}", quoted_list(.ids))]
+    #[error("KY-E101: the {axis} table has {n_duplicated} IDs that occur more than once, first: {}", quoted_list(.ids))]
     DuplicateIds {
         /// The axis, `cells` or `genes`.
         axis: String,
-        /// The IDs that occur more than once.
+        /// How many distinct IDs occur more than once.
+        n_duplicated: u64,
+        /// The first duplicated IDs, in the order they repeat (at most 5).
         ids: Vec<String>,
     },
     /// KY-E102: A layer, embedding or graph name breaks the naming rules of format.md section 2.1.
@@ -103,6 +105,38 @@ pub enum KytoError {
         /// The underlying error.
         detail: String,
     },
+    /// KY-E111: The ID column of a cell or gene table holds null or empty IDs.
+    #[error("KY-E111: the {axis} table has {n_invalid} {problem} IDs, first at rows {}", quoted_list(.rows))]
+    InvalidIds {
+        /// The axis, `cells` or `genes`.
+        axis: String,
+        /// How many IDs are invalid.
+        n_invalid: u64,
+        /// What is wrong with them: `null` or `empty`.
+        problem: String,
+        /// The first rows (0-based) with such an ID (at most 5).
+        rows: Vec<String>,
+    },
+    /// KY-E112: A column of a cell or gene table breaks format.md section 5 (name, dtype or position).
+    #[error("KY-E112: column '{column}' of the {axis} table {problem}")]
+    InvalidTableColumn {
+        /// The axis, `cells` or `genes`.
+        axis: String,
+        /// The column name.
+        column: String,
+        /// What is wrong.
+        problem: String,
+        /// What would be accepted.
+        accepted: String,
+    },
+    /// KY-E113: A stored cell or gene table breaks format.md section 5.
+    #[error("KY-E113: table '{path}' is corrupt: {problem}")]
+    CorruptTable {
+        /// The table file.
+        path: String,
+        /// The invariant that fails.
+        problem: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -165,7 +199,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 17] = [
+    pub const CODES: [&'static str; 20] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -176,6 +210,9 @@ impl KytoError {
         "KY-E108",
         "KY-E109",
         "KY-E110",
+        "KY-E111",
+        "KY-E112",
+        "KY-E113",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -198,6 +235,9 @@ impl KytoError {
             Self::LayerDtype { .. } => "KY-E108",
             Self::MissingMember { .. } => "KY-E109",
             Self::StoreIo { .. } => "KY-E110",
+            Self::InvalidIds { .. } => "KY-E111",
+            Self::InvalidTableColumn { .. } => "KY-E112",
+            Self::CorruptTable { .. } => "KY-E113",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -221,6 +261,9 @@ impl KytoError {
             Self::LayerDtype { .. } => "LayerDtypeError",
             Self::MissingMember { .. } => "MissingMemberError",
             Self::StoreIo { .. } => "StoreIOError",
+            Self::InvalidIds { .. } => "StoreInputError",
+            Self::InvalidTableColumn { .. } => "StoreInputError",
+            Self::CorruptTable { .. } => "CorruptStoreError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -264,6 +307,15 @@ impl KytoError {
             Self::StoreIo { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e110"
             }
+            Self::InvalidIds { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e111"
+            }
+            Self::InvalidTableColumn { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e112"
+            }
+            Self::CorruptTable { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e113"
+            }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
             }
@@ -292,7 +344,7 @@ impl KytoError {
     pub fn hint(&self) -> String {
         match self {
             Self::DuplicateIds { axis, .. } => {
-                format!("IDs on the {axis} axis must be unique; drop or rename the duplicates before writing")
+                format!("IDs on the {axis} axis must be unique (exact byte comparison); drop or rename the duplicates before writing, or import with on_duplicate_ids='suffix' to make them unique")
             }
             Self::InvalidMemberName { .. } => {
                 String::from("use 1 to 64 characters from A-Z a-z 0-9 _ . - that do not start with . or __, do not end with . and are not a Windows device name such as CON")
@@ -321,6 +373,15 @@ impl KytoError {
             Self::StoreIo { .. } => {
                 String::from("check that the path exists, that you may read and write it, and that the disk is not full")
             }
+            Self::InvalidIds { axis, .. } => {
+                format!("every {axis} ID must be a non-null, non-empty string; fill or drop those rows before writing")
+            }
+            Self::InvalidTableColumn { accepted, .. } => {
+                format!("{accepted} (format.md section 5)")
+            }
+            Self::CorruptTable { .. } => {
+                String::from("the store breaks docs/format.md section 5; rewrite the table with kyto, or report a bug if kyto wrote it")
+            }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
             }
@@ -348,8 +409,9 @@ impl KytoError {
     /// The structured fields as `(name, value)` pairs, in `errors.toml` order.
     pub fn fields(&self) -> Vec<(&'static str, FieldValue)> {
         match self {
-            Self::DuplicateIds { axis, ids } => vec![
+            Self::DuplicateIds { axis, n_duplicated, ids } => vec![
                 ("axis", FieldValue::Str(axis.clone())),
+                ("n_duplicated", FieldValue::Int(*n_duplicated)),
                 ("ids", FieldValue::StrList(ids.clone())),
             ],
             Self::InvalidMemberName { kind, name, rule } => vec![
@@ -396,6 +458,22 @@ impl KytoError {
                 ("path", FieldValue::Str(path.clone())),
                 ("detail", FieldValue::Str(detail.clone())),
             ],
+            Self::InvalidIds { axis, n_invalid, problem, rows } => vec![
+                ("axis", FieldValue::Str(axis.clone())),
+                ("n_invalid", FieldValue::Int(*n_invalid)),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("rows", FieldValue::StrList(rows.clone())),
+            ],
+            Self::InvalidTableColumn { axis, column, problem, accepted } => vec![
+                ("axis", FieldValue::Str(axis.clone())),
+                ("column", FieldValue::Str(column.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("accepted", FieldValue::Str(accepted.clone())),
+            ],
+            Self::CorruptTable { path, problem } => vec![
+                ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
                 ("candidates", FieldValue::StrList(candidates.clone())),
@@ -434,6 +512,7 @@ impl KytoError {
         vec![
             Self::DuplicateIds {
                 axis: "genes".to_owned(),
+                n_duplicated: 12,
                 ids: vec!["ENSG01".to_owned(), "ENSG02".to_owned()],
             },
             Self::InvalidMemberName {
@@ -479,6 +558,22 @@ impl KytoError {
                 operation: "write array".to_owned(),
                 path: "pbmc.kyto/layers/counts/data".to_owned(),
                 detail: "No space left on device (os error 28)".to_owned(),
+            },
+            Self::InvalidIds {
+                axis: "cells".to_owned(),
+                n_invalid: 2,
+                problem: "null".to_owned(),
+                rows: vec!["3".to_owned(), "17".to_owned()],
+            },
+            Self::InvalidTableColumn {
+                axis: "cells".to_owned(),
+                column: "sample".to_owned(),
+                problem: "has dtype Categorical, which v0 stores do not allow".to_owned(),
+                accepted: "cast it to String or to an Enum with fixed categories".to_owned(),
+            },
+            Self::CorruptTable {
+                path: "pbmc.kyto/cells.parquet".to_owned(),
+                problem: "the first column is 'barcode', not 'cell_id'".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),

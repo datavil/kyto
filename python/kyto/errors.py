@@ -172,7 +172,7 @@ class DuplicateIdError(KytoError, ValueError):
 
     Examples
     --------
-    >>> error = DuplicateIdError("KY-E101", axis="genes", ids=["ENSG01", "ENSG02"])
+    >>> error = DuplicateIdError("KY-E101", axis="genes", n_duplicated=12, ids=["ENSG01", "ENSG02"])
     >>> error.code
     'KY-E101'
     >>> isinstance(error, ValueError)
@@ -305,6 +305,8 @@ class StoreInputError(KytoError, ValueError):
     - ``KY-E104``: A store writer parameter (tile or chunk size, compression level) is out of range.
     - ``KY-E105``: A size is above a limit of the store format (format.md section 4.5).
     - ``KY-E106``: A sparse matrix given to a store writer is not valid CSR of the stated shape.
+    - ``KY-E111``: The ID column of a cell or gene table holds null or empty IDs.
+    - ``KY-E112``: A column of a cell or gene table breaks format.md section 5 (name, dtype or position).
 
     See `KytoError` for the parameters and attributes.
 
@@ -324,6 +326,7 @@ class CorruptStoreError(KytoError, ValueError):
     Subclasses `KytoError` and `ValueError`. Raised with these codes:
 
     - ``KY-E107``: A stored layer breaks the tiled sparse format (format.md section 4).
+    - ``KY-E113``: A stored cell or gene table breaks format.md section 5.
 
     See `KytoError` for the parameters and attributes.
 
@@ -397,11 +400,12 @@ class LayerDtypeError(KytoError, TypeError):
 _REGISTRY: Final[dict[str, _Entry]] = {
     "KY-E101": _Entry(
         class_name="DuplicateIdError",
-        message="duplicate {axis} IDs: {ids}",
-        hint="IDs on the {axis} axis must be unique; drop or rename the duplicates before writing",
+        message="the {axis} table has {n_duplicated} IDs that occur more than once, first: {ids}",
+        hint="IDs on the {axis} axis must be unique (exact byte comparison); drop or rename the duplicates before writing, or import with on_duplicate_ids='suffix' to make them unique",
         docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e101",
         fields=(
             _Field("axis", "str"),
+            _Field("n_duplicated", "int"),
             _Field("ids", "list[str]"),
         ),
     ),
@@ -501,6 +505,40 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("operation", "str"),
             _Field("path", "str"),
             _Field("detail", "str"),
+        ),
+    ),
+    "KY-E111": _Entry(
+        class_name="StoreInputError",
+        message="the {axis} table has {n_invalid} {problem} IDs, first at rows {rows}",
+        hint="every {axis} ID must be a non-null, non-empty string; fill or drop those rows before writing",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e111",
+        fields=(
+            _Field("axis", "str"),
+            _Field("n_invalid", "int"),
+            _Field("problem", "str"),
+            _Field("rows", "list[str]"),
+        ),
+    ),
+    "KY-E112": _Entry(
+        class_name="StoreInputError",
+        message="column '{column}' of the {axis} table {problem}",
+        hint="{accepted} (format.md section 5)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e112",
+        fields=(
+            _Field("axis", "str"),
+            _Field("column", "str"),
+            _Field("problem", "str"),
+            _Field("accepted", "str"),
+        ),
+    ),
+    "KY-E113": _Entry(
+        class_name="CorruptStoreError",
+        message="table '{path}' is corrupt: {problem}",
+        hint="the store breaks docs/format.md section 5; rewrite the table with kyto, or report a bug if kyto wrote it",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e113",
+        fields=(
+            _Field("path", "str"),
+            _Field("problem", "str"),
         ),
     ),
     "KY-E201": _Entry(

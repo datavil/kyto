@@ -334,6 +334,9 @@ Polars `Enum`.**
   affects comparisons in expressions is decided by 3.3.
 - An Enum with zero categories (an all-null column) is valid. The empty string is a
   valid category.
+- A writer given a plain `String` column stores it as an `Enum` whose categories are
+  the column's distinct non-null values in byte order, as anndata sorts the categories
+  of string columns. An `Enum` given to a writer keeps its category list as is.
 
 ### 5.5 Nulls
 
