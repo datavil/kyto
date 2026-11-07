@@ -251,12 +251,12 @@ pub enum KytoError {
         /// How to fix it.
         advice: String,
     },
-    /// KY-E201: A short name matches more than one feature.
+    /// KY-E201: A feature name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
-        /// The short name as written.
+        /// The name as written to feature(...).
         name: String,
-        /// The full names it matches.
+        /// The full names it matches (docs/feature_names.md), each followed by its kind when two are written alike.
         candidates: Vec<String>,
     },
     /// KY-E202: A cell expression and a gene expression are combined.
@@ -333,6 +333,26 @@ pub enum KytoError {
         /// The component, written as code.
         component: String,
     },
+    /// KY-E210: A name does not match any column, gene, cell, embedding component or feature of the plan.
+    #[error("KY-E210: unknown {kind} '{name}' in {expression}: {problem}")]
+    UnknownName {
+        /// What the name should name: `cell column`, `gene column`, `gene`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.
+        kind: String,
+        /// The name as written.
+        name: String,
+        /// The expression it was written in, as code.
+        expression: String,
+        /// Why nothing matches.
+        problem: String,
+    },
+    /// KY-E211: A gene or cell is read from the default layer, but the plan has none.
+    #[error("KY-E211: {expression} reads the default layer, but the plan has none")]
+    NoDefaultLayer {
+        /// The expression that reads it, as code.
+        expression: String,
+        /// The store's layers.
+        layers: Vec<String>,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -361,7 +381,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 37] = [
+    pub const CODES: [&'static str; 39] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -396,6 +416,8 @@ impl KytoError {
         "KY-E207",
         "KY-E208",
         "KY-E209",
+        "KY-E210",
+        "KY-E211",
         "KY-E301",
         "KY-E401",
         "KY-E501",
@@ -438,6 +460,8 @@ impl KytoError {
             Self::ExpressionDepth { .. } => "KY-E207",
             Self::FeatureNameSyntax { .. } => "KY-E208",
             Self::EmbeddingComponent { .. } => "KY-E209",
+            Self::UnknownName { .. } => "KY-E210",
+            Self::NoDefaultLayer { .. } => "KY-E211",
             Self::StaleColumn { .. } => "KY-E301",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
@@ -481,6 +505,8 @@ impl KytoError {
             Self::ExpressionDepth { .. } => "ExpressionError",
             Self::FeatureNameSyntax { .. } => "ResolutionError",
             Self::EmbeddingComponent { .. } => "ExpressionError",
+            Self::UnknownName { .. } => "ResolutionError",
+            Self::NoDefaultLayer { .. } => "ResolutionError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
@@ -592,6 +618,12 @@ impl KytoError {
             Self::EmbeddingComponent { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e209"
             }
+            Self::UnknownName { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e210"
+            }
+            Self::NoDefaultLayer { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e211"
+            }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
             }
@@ -683,7 +715,7 @@ impl KytoError {
                 format!("{advice}, then open the store again")
             }
             Self::AmbiguousName { candidates, .. } => {
-                format!("pass the full name, one of {}", quoted_list(candidates))
+                format!("pass one full name instead, one of {}; where two share a full name, use cell_column(...), gene_expression(..., layer=...) or cell_embedding(...)", quoted_list(candidates))
             }
             Self::MixedAxes { .. } => {
                 String::from("combine expressions of one axis only: cell_column(...) with cell_column(...), gene_column(...) with gene_column(...)")
@@ -708,6 +740,12 @@ impl KytoError {
             }
             Self::EmbeddingComponent { constructor, name, .. } => {
                 format!("pass the component as an int from 0, such as {constructor}('{name}', 0) for the first one")
+            }
+            Self::UnknownName { name, .. } => {
+                format!("names are matched exactly, case included; check '{name}' against the store's schema")
+            }
+            Self::NoDefaultLayer { layers, .. } => {
+                format!("set one with .with_default_layer(...) before resolving, or name the layer; the store has {}", quoted_list(layers))
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -887,6 +925,16 @@ impl KytoError {
                 ("got", FieldValue::Str(got.clone())),
                 ("component", FieldValue::Str(component.clone())),
             ],
+            Self::UnknownName { kind, name, expression, problem } => vec![
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("expression", FieldValue::Str(expression.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::NoDefaultLayer { expression, layers } => vec![
+                ("expression", FieldValue::Str(expression.clone())),
+                ("layers", FieldValue::StrList(layers.clone())),
+            ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
                 ("changed_by", FieldValue::Str(changed_by.clone())),
@@ -1030,7 +1078,7 @@ impl KytoError {
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),
-                candidates: vec!["log1p:CD3E".to_owned(), "counts:CD3E".to_owned()],
+                candidates: vec!["meta:CD3E".to_owned(), "log1p:CD3E".to_owned()],
             },
             Self::MixedAxes {
                 operation: "&".to_owned(),
@@ -1068,6 +1116,16 @@ impl KytoError {
                 name: "pca".to_owned(),
                 got: "a negative int".to_owned(),
                 component: "-1".to_owned(),
+            },
+            Self::UnknownName {
+                kind: "feature".to_owned(),
+                name: "CD3".to_owned(),
+                expression: "feature('CD3')".to_owned(),
+                problem: "it is not a cell column or a gene ID".to_owned(),
+            },
+            Self::NoDefaultLayer {
+                expression: "feature('CD3E')".to_owned(),
+                layers: vec!["counts".to_owned(), "log1p".to_owned()],
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

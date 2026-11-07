@@ -7,7 +7,8 @@
 //! `float`, `str`) and raise `KY-E202` when the other operand is an expression of the
 //! other axis (R5), `KY-E205` for any other operand kyto does not accept, and `KY-E206`
 //! when Python asks for the truth value of an expression.
-//! Does not: check dtypes (kyto-core does), resolve names (task 3.5), or evaluate.
+//! Does not: check dtypes (kyto-core does), resolve names (`Atlas.resolve`, task 3.5),
+//! or evaluate.
 //! `feature` only parses its name (`KY-E208`), the embedding constructors check their
 //! component (`KY-E209`); no constructor checks a name against a schema, since they
 //! have none (R7).
@@ -123,6 +124,16 @@ macro_rules! expr_class {
         }
 
         impl $class {
+            /// The wrapped expression.
+            pub(crate) fn core(&self) -> &$core {
+                &self.expr
+            }
+
+            /// Wrap `expr`.
+            pub(crate) fn from_core(expr: $core) -> Self {
+                Self { expr }
+            }
+
             fn operand(&self, operation: &str, other: &Bound<'_, PyAny>) -> Result<Operand<$axis>, KytoError> {
                 if let Ok(other) = other.cast::<$class>() {
                     return Ok(Operand::Expr(other.get().expr.clone()));

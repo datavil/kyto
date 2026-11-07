@@ -72,7 +72,9 @@ mod tests {
         );
         assert_eq!(
             error.hint(),
-            "pass the full name, one of 'log1p:CD3', 'meta:CD3'"
+            "pass one full name instead, one of 'log1p:CD3', 'meta:CD3'; where two share a \
+             full name, use cell_column(...), gene_expression(..., layer=...) or \
+             cell_embedding(...)"
         );
         assert_eq!(
             error.fields(),

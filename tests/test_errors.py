@@ -117,7 +117,7 @@ def test_ambiguous_name_message() -> None:
     )
     assert isinstance(error, ValueError)
     assert error.message == "ambiguous name 'CD3': it matches 'log1p:CD3', 'meta:CD3'"
-    assert "pass the full name" in error.hint
+    assert "pass one full name instead" in error.hint
     assert error.fields["candidates"] == ("log1p:CD3", "meta:CD3")
 
 

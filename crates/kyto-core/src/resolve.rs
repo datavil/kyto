@@ -1,0 +1,501 @@
+//! The feature resolver (task 3.5): turns the names in an expression into full,
+//! checked names against one plan's schema, once, when the plan is built (R6).
+//!
+//! Does: resolve `feature(...)` names to a table column, a gene of a layer or an
+//! embedding component, by kind against the schema, with no priority order: a name
+//! that matches two features is `KY-E201` (docs/feature_names.md has the grammar);
+//! write the default layer into every gene and cell read that left it out (so the
+//! stored expression names its layer in full); check every column, gene, layer and
+//! embedding name, and the cell ID of `cell_profile` for being non-empty; set each
+//! column's dtype kind from the schema and check the operations on it again
+//! (`KY-E205`), including ordering, which an unordered categorical column does not
+//! have (pandas raises the same).
+//! Does not: suggest close matches for unknown names (task 8.2), look genes up by
+//! symbol (task 3.9), or check that a cell ID exists (the plan holds no cell IDs).
+
+use kyto_error::KytoError;
+
+use crate::expr::{Expr, ExprAxis, ExprNode, Operand, source_code};
+use crate::expr_dtype::ExprDtype;
+use crate::expr_source::Source;
+use crate::feature_name::FeatureName;
+use crate::gene_ids::GeneIds;
+use crate::schema::{AtlasSchema, Axis, EmbeddingSchema, TableSchema};
+use crate::schema_column::{ColumnDtype, ColumnSchema};
+use crate::{BinaryOp, CellAxis};
+
+/// The prefix of a cell table column in a full feature name: `meta:cluster`.
+pub const META_PREFIX: &str = "meta";
+
+/// Resolves expressions against one plan: its schema, its store's gene IDs and its
+/// default layer. Holds borrowed state only and changes nothing.
+#[derive(Debug, Clone, Copy)]
+pub struct Resolver<'a> {
+    schema: &'a AtlasSchema,
+    gene_ids: &'a GeneIds,
+    default_layer: Option<&'a str>,
+    store: &'a str,
+}
+
+/// One feature a `feature(...)` name can mean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Candidate {
+    /// A column of the cell table.
+    Column { name: String, dtype: ExprDtype },
+    /// A gene of a layer.
+    Gene { layer: String, gene_id: String },
+    /// A component of a cell embedding.
+    Embedding { name: String, component: u64 },
+}
+
+impl Candidate {
+    /// The full name, as docs/feature_names.md writes it.
+    fn full_name(&self) -> String {
+        match self {
+            Self::Column { name, .. } => format!("{META_PREFIX}:{name}"),
+            Self::Gene { layer, gene_id } => format!("{layer}:{gene_id}"),
+            Self::Embedding { name, component } => format!("{name}:{component}"),
+        }
+    }
+
+    /// The kind, added to the full name where two candidates are written alike.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Column { .. } => "cell column",
+            Self::Gene { .. } => "gene",
+            Self::Embedding { .. } => "embedding component",
+        }
+    }
+
+    /// The source this candidate reads, and its dtype kind.
+    fn into_source(self) -> (Source, ExprDtype) {
+        match self {
+            Self::Column { name, dtype } => (Source::Column { name }, dtype),
+            Self::Gene { layer, gene_id } => (
+                Source::Expression {
+                    layer: Some(layer),
+                    gene_id,
+                },
+                ExprDtype::Numeric,
+            ),
+            Self::Embedding { name, component } => {
+                (Source::Embedding { name, component }, ExprDtype::Numeric)
+            }
+        }
+    }
+}
+
+/// `cell` or `gene`.
+fn axis_word(axis: Axis) -> &'static str {
+    match axis {
+        Axis::Cells => "cell",
+        Axis::Genes => "gene",
+    }
+}
+
+/// `component` as an embedding component in a full name: decimal digits without a
+/// sign or leading zeros (`0`, `12`), or `None`.
+fn parse_component(component: &str) -> Option<u64> {
+    let canonical = !component.is_empty()
+        && component.bytes().all(|byte| byte.is_ascii_digit())
+        && (component == "0" || !component.starts_with('0'));
+    if canonical {
+        component.parse().ok()
+    } else {
+        None
+    }
+}
+
+/// `has 50 components, 0 to 49`.
+fn component_range(embedding: &EmbeddingSchema) -> String {
+    match embedding.width {
+        0 => "has no components".to_owned(),
+        1 => "has 1 component, 0".to_owned(),
+        width => format!("has {width} components, 0 to {}", width - 1),
+    }
+}
+
+impl<'a> Resolver<'a> {
+    /// A resolver for a plan over the store at `store` with schema `schema`, whose
+    /// genes are `gene_ids`, and whose default layer is `default_layer`. The caller
+    /// guarantees the default layer is a layer of `schema`.
+    pub fn new(
+        schema: &'a AtlasSchema,
+        gene_ids: &'a GeneIds,
+        default_layer: Option<&'a str>,
+        store: &'a str,
+    ) -> Self {
+        Self {
+            schema,
+            gene_ids,
+            default_layer,
+            store,
+        }
+    }
+
+    /// `expr` with every name resolved and checked: `feature(...)` replaced by the
+    /// column, gene or embedding component it names, every gene and cell read given
+    /// its layer, every column given its dtype kind. A new expression; `expr` is
+    /// unchanged. Resolving a resolved expression gives it back unchanged.
+    ///
+    /// # Errors
+    /// - `KY-E201` if a `feature(...)` name matches more than one feature.
+    /// - `KY-E210` if a column, gene, `feature(...)` name or embedding component
+    ///   matches nothing, or a cell ID is empty.
+    /// - `KY-E211` if a gene or cell is read from the default layer and there is none.
+    /// - `KY-E109` if a layer or embedding named in full is not in the store.
+    /// - `KY-E205` if a resolved column's kind does not fit an operation on it.
+    pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
+        self.node(expr.node())
+    }
+
+    /// The resolved expression of `node`, rebuilt bottom-up so each operation checks
+    /// its operands' resolved kinds.
+    #[recursive::recursive]
+    fn node<A: ExprAxis>(&self, node: &ExprNode) -> Result<Expr<A>, KytoError> {
+        match node {
+            ExprNode::Source(source) => self.source(source),
+            ExprNode::Literal(literal) => Ok(Expr::from_node(
+                ExprNode::Literal(literal.clone()),
+                literal.dtype(),
+            )),
+            ExprNode::Binary { op, left, right } => {
+                let left = self.operand(left)?;
+                let right = self.operand(right)?;
+                let ordering = matches!(
+                    op,
+                    BinaryOp::Lt | BinaryOp::LtEq | BinaryOp::Gt | BinaryOp::GtEq
+                );
+                let unordered = [&left, &right]
+                    .into_iter()
+                    .find_map(|operand| match operand {
+                        Operand::Expr(expr) if ordering && self.is_unordered_enum(expr) => {
+                            Some(expr.to_string())
+                        }
+                        _ => None,
+                    });
+                let expr = Expr::binary(left, *op, right)?;
+                match unordered {
+                    Some(operand) => Err(KytoError::ExpressionOperand {
+                        operation: op.symbol().to_owned(),
+                        accepted: "numeric operands, string operands or an ordered \
+                                   categorical column"
+                            .to_owned(),
+                        got: "an unordered categorical column".to_owned(),
+                        operand,
+                    }),
+                    None => Ok(expr),
+                }
+            }
+            ExprNode::Not(input) => self.node::<A>(input)?.not(),
+            ExprNode::Str { function, input } => self.node::<A>(input)?.str(function.clone()),
+        }
+    }
+
+    /// A child of a binary operation as an operand: literals stay literals.
+    fn operand<A: ExprAxis>(&self, node: &ExprNode) -> Result<Operand<A>, KytoError> {
+        match node {
+            ExprNode::Literal(literal) => Ok(Operand::Literal(literal.clone())),
+            _ => self.node(node).map(Operand::Expr),
+        }
+    }
+
+    /// Whether `expr` is a resolved column stored as an unordered `Enum`.
+    fn is_unordered_enum<A: ExprAxis>(&self, expr: &Expr<A>) -> bool {
+        let ExprNode::Source(Source::Column { name }) = expr.node().as_ref() else {
+            return false;
+        };
+        self.column(A::AXIS, name)
+            .is_some_and(|column| matches!(column.dtype, ColumnDtype::Enum { ordered: false, .. }))
+    }
+
+    fn table(&self, axis: Axis) -> &'a TableSchema {
+        match axis {
+            Axis::Cells => &self.schema.cells,
+            Axis::Genes => &self.schema.genes,
+        }
+    }
+
+    fn column(&self, axis: Axis, name: &str) -> Option<&'a ColumnSchema> {
+        self.table(axis)
+            .columns
+            .iter()
+            .find(|column| column.name == name)
+    }
+
+    fn has_layer(&self, name: &str) -> bool {
+        self.schema.layers.iter().any(|layer| layer.name == name)
+    }
+
+    fn layer_names(&self) -> Vec<String> {
+        self.schema
+            .layers
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect()
+    }
+
+    fn embedding(&self, name: &str) -> Option<&'a EmbeddingSchema> {
+        self.schema
+            .embeddings
+            .iter()
+            .find(|embedding| embedding.name == name)
+    }
+
+    /// The layer to read: `layer` if given (checked), else the default layer.
+    fn layer(&self, layer: Option<&str>, expression: &str) -> Result<String, KytoError> {
+        match layer {
+            Some(layer) if self.has_layer(layer) => Ok(layer.to_owned()),
+            Some(layer) => Err(KytoError::MissingMember {
+                kind: "layer".to_owned(),
+                name: layer.to_owned(),
+                store: self.store.to_owned(),
+            }),
+            None => {
+                self.default_layer
+                    .map(str::to_owned)
+                    .ok_or_else(|| KytoError::NoDefaultLayer {
+                        expression: expression.to_owned(),
+                        layers: self.layer_names(),
+                    })
+            }
+        }
+    }
+
+    /// The resolved leaf reading `source` on axis `A`.
+    fn source<A: ExprAxis>(&self, source: &Source) -> Result<Expr<A>, KytoError> {
+        let code = || source_code::<A>(source);
+        let unknown = |kind: String, name: &str, problem: String| KytoError::UnknownName {
+            kind,
+            name: name.to_owned(),
+            expression: code(),
+            problem,
+        };
+        let (resolved, dtype) = match source {
+            Source::Column { name } => {
+                let word = axis_word(A::AXIS);
+                let column = self.column(A::AXIS, name).ok_or_else(|| {
+                    unknown(
+                        format!("{word} column"),
+                        name,
+                        format!("the {word} table has no column with this name"),
+                    )
+                })?;
+                (source.clone(), ExprDtype::of_column(column.dtype))
+            }
+            Source::Expression { layer, gene_id } => {
+                if !self.gene_ids.contains(gene_id) {
+                    return Err(unknown(
+                        "gene".to_owned(),
+                        gene_id,
+                        "no gene of the store has this gene_id".to_owned(),
+                    ));
+                }
+                let layer = self.layer(layer.as_deref(), &code())?;
+                (
+                    Source::Expression {
+                        layer: Some(layer),
+                        gene_id: gene_id.clone(),
+                    },
+                    ExprDtype::Numeric,
+                )
+            }
+            Source::Profile { layer, cell_id } => {
+                if cell_id.is_empty() {
+                    return Err(unknown(
+                        "cell".to_owned(),
+                        cell_id,
+                        "cell IDs are never empty".to_owned(),
+                    ));
+                }
+                let layer = self.layer(layer.as_deref(), &code())?;
+                (
+                    Source::Profile {
+                        layer: Some(layer),
+                        cell_id: cell_id.clone(),
+                    },
+                    ExprDtype::Numeric,
+                )
+            }
+            Source::Embedding { name, component } => {
+                let embedding = self
+                    .embedding(name)
+                    .ok_or_else(|| KytoError::MissingMember {
+                        kind: "embedding".to_owned(),
+                        name: name.clone(),
+                        store: self.store.to_owned(),
+                    })?;
+                if embedding.axis != A::AXIS {
+                    let other = match embedding.axis {
+                        Axis::Cells => "cell_embedding",
+                        Axis::Genes => "gene_embedding",
+                    };
+                    return Err(unknown(
+                        format!("{} embedding", axis_word(A::AXIS)),
+                        name,
+                        format!(
+                            "'{name}' is a {} embedding; read it with {other}('{name}', {component})",
+                            axis_word(embedding.axis)
+                        ),
+                    ));
+                }
+                if *component >= embedding.width {
+                    return Err(unknown(
+                        "embedding component".to_owned(),
+                        &component.to_string(),
+                        format!("'{name}' {}", component_range(embedding)),
+                    ));
+                }
+                (source.clone(), ExprDtype::Numeric)
+            }
+            Source::Feature { name } => self.feature::<A>(name, &code())?,
+        };
+        Ok(Expr::from_node(ExprNode::Source(resolved), dtype))
+    }
+
+    /// The source a `feature(...)` name resolves to, and its dtype kind.
+    fn feature<A: ExprAxis>(
+        &self,
+        name: &FeatureName,
+        expression: &str,
+    ) -> Result<(Source, ExprDtype), KytoError> {
+        let unknown = |problem: String| KytoError::UnknownName {
+            kind: "feature".to_owned(),
+            name: name.to_string(),
+            expression: expression.to_owned(),
+            problem,
+        };
+        if A::AXIS != CellAxis::AXIS {
+            return Err(unknown("feature(...) names cell features only".to_owned()));
+        }
+        let mut candidates = Vec::new();
+        // A short gene name without a default layer could be read from every layer.
+        let mut needs_default_layer = false;
+        match name {
+            FeatureName::Short { name } => {
+                self.push_column(&mut candidates, name);
+                if self.gene_ids.contains(name) {
+                    match self.default_layer {
+                        Some(layer) => candidates.push(Candidate::Gene {
+                            layer: layer.to_owned(),
+                            gene_id: name.clone(),
+                        }),
+                        None => {
+                            needs_default_layer = true;
+                            candidates.extend(self.schema.layers.iter().map(|layer| {
+                                Candidate::Gene {
+                                    layer: layer.name.clone(),
+                                    gene_id: name.clone(),
+                                }
+                            }));
+                        }
+                    }
+                }
+            }
+            FeatureName::Full { prefix, name } => {
+                if prefix == META_PREFIX {
+                    self.push_column(&mut candidates, name);
+                }
+                if self.has_layer(prefix) && self.gene_ids.contains(name) {
+                    candidates.push(Candidate::Gene {
+                        layer: prefix.clone(),
+                        gene_id: name.clone(),
+                    });
+                }
+                if let Some(embedding) = self.cell_embedding(prefix)
+                    && let Some(component) = parse_component(name)
+                    && component < embedding.width
+                {
+                    candidates.push(Candidate::Embedding {
+                        name: prefix.clone(),
+                        component,
+                    });
+                }
+            }
+        }
+        let has_column = candidates
+            .iter()
+            .any(|candidate| matches!(candidate, Candidate::Column { .. }));
+        if needs_default_layer && !has_column {
+            return Err(KytoError::NoDefaultLayer {
+                expression: expression.to_owned(),
+                layers: self.layer_names(),
+            });
+        }
+        match candidates.len() {
+            0 => Err(unknown(self.no_feature_problem(name))),
+            1 => Ok(candidates.remove(0).into_source()),
+            _ => Err(KytoError::AmbiguousName {
+                name: name.to_string(),
+                candidates: Self::candidate_names(&candidates),
+            }),
+        }
+    }
+
+    fn push_column(&self, candidates: &mut Vec<Candidate>, name: &str) {
+        if let Some(column) = self.column(Axis::Cells, name) {
+            candidates.push(Candidate::Column {
+                name: name.to_owned(),
+                dtype: ExprDtype::of_column(column.dtype),
+            });
+        }
+    }
+
+    fn cell_embedding(&self, name: &str) -> Option<&'a EmbeddingSchema> {
+        self.embedding(name)
+            .filter(|embedding| embedding.axis == Axis::Cells)
+    }
+
+    /// The full names of `candidates`; a name two candidates share gets its kind.
+    fn candidate_names(candidates: &[Candidate]) -> Vec<String> {
+        let names: Vec<String> = candidates.iter().map(Candidate::full_name).collect();
+        names
+            .iter()
+            .zip(candidates)
+            .map(|(name, candidate)| {
+                if names.iter().filter(|other| *other == name).count() > 1 {
+                    format!("{name} ({})", candidate.kind())
+                } else {
+                    name.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Why a `feature(...)` name matches nothing.
+    fn no_feature_problem(&self, name: &FeatureName) -> String {
+        match name {
+            FeatureName::Short { name } => {
+                if self.cell_embedding(name).is_some() {
+                    format!("'{name}' is an embedding; name one component, such as '{name}:0'")
+                } else {
+                    "it is not a column of the cell table or a gene ID".to_owned()
+                }
+            }
+            FeatureName::Full { prefix, name } => {
+                let mut reasons = Vec::new();
+                if prefix == META_PREFIX {
+                    reasons.push(format!("the cell table has no column '{name}'"));
+                }
+                if self.has_layer(prefix) {
+                    reasons.push(format!("layer '{prefix}' has no gene '{name}'"));
+                }
+                if let Some(embedding) = self.cell_embedding(prefix) {
+                    reasons.push(match parse_component(name) {
+                        Some(_) => format!("embedding '{prefix}' {}", component_range(embedding)),
+                        None => format!(
+                            "'{name}' is not a component of embedding '{prefix}' \
+                             (components are written 0, 1, 2, ...)"
+                        ),
+                    });
+                }
+                if reasons.is_empty() {
+                    reasons.push(format!(
+                        "'{prefix}' is not '{META_PREFIX}', a layer or a cell embedding"
+                    ));
+                }
+                reasons.join("; ")
+            }
+        }
+    }
+}

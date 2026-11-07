@@ -410,12 +410,12 @@ fields = [
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"
-summary = "A short name matches more than one feature."
+summary = "A feature name matches more than one feature."
 message = "ambiguous name '{name}': it matches {candidates}"
-hint = "pass the full name, one of {candidates}"
+hint = "pass one full name instead, one of {candidates}; where two share a full name, use cell_column(...), gene_expression(..., layer=...) or cell_embedding(...)"
 fields = [
-    { name = "name", type = "str", doc = "The short name as written.", example = "CD3E" },
-    { name = "candidates", type = "list[str]", doc = "The full names it matches.", example = ["log1p:CD3E", "counts:CD3E"] },
+    { name = "name", type = "str", doc = "The name as written to feature(...).", example = "CD3E" },
+    { name = "candidates", type = "list[str]", doc = "The full names it matches (docs/feature_names.md), each followed by its kind when two are written alike.", example = ["meta:CD3E", "log1p:CD3E"] },
 ]
 
 [[errors]]
@@ -517,6 +517,32 @@ fields = [
     { name = "name", type = "str", doc = "The embedding name passed.", example = "pca" },
     { name = "got", type = "str", doc = "What the component was.", example = "a negative int" },
     { name = "component", type = "str", doc = "The component, written as code.", example = "-1" },
+]
+
+[[errors]]
+code = "KY-E210"
+variant = "UnknownName"
+class = "ResolutionError"
+summary = "A name does not match any column, gene, cell, embedding component or feature of the plan."
+message = "unknown {kind} '{name}' in {expression}: {problem}"
+hint = "names are matched exactly, case included; check '{name}' against the store's schema"
+fields = [
+    { name = "kind", type = "str", doc = "What the name should name: `cell column`, `gene column`, `gene`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.", example = "feature" },
+    { name = "name", type = "str", doc = "The name as written.", example = "CD3" },
+    { name = "expression", type = "str", doc = "The expression it was written in, as code.", example = "feature('CD3')" },
+    { name = "problem", type = "str", doc = "Why nothing matches.", example = "it is not a cell column or a gene ID" },
+]
+
+[[errors]]
+code = "KY-E211"
+variant = "NoDefaultLayer"
+class = "ResolutionError"
+summary = "A gene or cell is read from the default layer, but the plan has none."
+message = "{expression} reads the default layer, but the plan has none"
+hint = "set one with .with_default_layer(...) before resolving, or name the layer; the store has {layers}"
+fields = [
+    { name = "expression", type = "str", doc = "The expression that reads it, as code.", example = "feature('CD3E')" },
+    { name = "layers", type = "list[str]", doc = "The store's layers.", example = ["counts", "log1p"] },
 ]
 
 [[errors]]

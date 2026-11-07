@@ -50,8 +50,56 @@ class Atlas:
         WITH_DEFAULT_LAYER "counts"
         SCAN "..." (2 cells x 3 genes)
         """
+    @overload
+    def resolve(self, expression: CellExpr[_D], /) -> CellExpr[_D]:
+        """Resolve the names in an expression against this plan (R6).
+
+        Every ``feature(...)`` name becomes the one column, gene or embedding component
+        it names; every gene or cell read without a ``layer`` gets the plan's default
+        layer; every column, gene, layer and embedding name is checked against the
+        store's schema and gene IDs as read when the plan was built; every column gets
+        its dtype from the schema, and the operations on it are checked again. The
+        result names everything in full, so it keeps its meaning whatever is added to
+        the store or the plan later. Full names are ``meta:<column>``,
+        ``<layer>:<gene_id>`` and ``<embedding>:<component>``; a name that matches more
+        than one feature is an error, never a guess.
+
+        Parameters
+        ----------
+        expression : CellExpr or GeneExpr
+            The expression to resolve.
+
+        Returns
+        -------
+        CellExpr or GeneExpr
+            A new expression of the same axis; ``expression`` is unchanged. Nothing is
+            read or copied.
+
+        Raises
+        ------
+        ResolutionError
+            ``KY-E201``: a ``feature(...)`` name matches more than one feature.
+            ``KY-E210``: a name matches nothing, or a cell ID is empty.
+            ``KY-E211``: a gene or cell is read from the default layer, and the plan has
+            none.
+        MissingMemberError
+            ``KY-E109``: a layer or embedding is not in the store.
+        ExpressionError
+            ``KY-E205``: a column's stored dtype does not fit an operation on it.
+
+        Examples
+        --------
+        >>> atlas = scan(store).with_default_layer("counts")
+        >>> atlas.resolve(feature("ENSG01") > 1)
+        gene_expression('ENSG01', layer='counts') > 1
+        >>> atlas.resolve(feature("meta:cell_id").str.starts_with("AAA"))
+        cell_column('cell_id').str.starts_with('AAA')
+        """
+    @overload
+    def resolve(self, expression: GeneExpr[_D], /) -> GeneExpr[_D]: ...
 
 _D_co = TypeVar("_D_co", bound=ExprDtype, covariant=True)
+_D = TypeVar("_D", bound=ExprDtype)
 
 @final
 class CellExpr(Generic[_D_co]):

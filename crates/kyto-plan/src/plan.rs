@@ -13,7 +13,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kyto_core::AtlasSchema;
+use kyto_core::{AtlasSchema, Expr, ExprAxis, GeneIds, Resolver};
 use kyto_error::KytoError;
 
 use crate::scan::Scan;
@@ -32,9 +32,30 @@ pub enum Plan {
 }
 
 impl Plan {
-    /// A plan that scans the store at `source`, whose schema is `schema`.
-    pub fn scan(source: impl Into<String>, schema: AtlasSchema) -> Arc<Self> {
-        Arc::new(Self::Scan(Scan::new(source, schema)))
+    /// A plan that scans the store at `source`, whose schema is `schema` and whose
+    /// genes are `gene_ids`.
+    pub fn scan(source: impl Into<String>, schema: AtlasSchema, gene_ids: GeneIds) -> Arc<Self> {
+        Arc::new(Self::Scan(Scan::new(source, schema, gene_ids)))
+    }
+
+    /// `expr` with every name resolved against this plan (R6): its schema, its store's
+    /// gene IDs as read when the plan was built, and its default layer. The result
+    /// names everything in full (`feature('CD3E')` becomes
+    /// `gene_expression('CD3E', layer='log1p')`), so it means the same thing whatever is
+    /// added to the store or the plan later. See [`Resolver::resolve`].
+    ///
+    /// # Errors
+    /// `KY-E201`, `KY-E205`, `KY-E210`, `KY-E211` or `KY-E109`, as
+    /// [`Resolver::resolve`] lists them.
+    pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
+        let root = self.root();
+        Resolver::new(
+            self.schema(),
+            root.gene_ids(),
+            self.default_layer(),
+            root.source(),
+        )
+        .resolve(expr)
     }
 
     /// This plan with its default layer set to `layer` (a new plan; `self` is unchanged).

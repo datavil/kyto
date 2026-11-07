@@ -134,6 +134,53 @@ pub fn read_table(store: &Path, axis: TableAxis) -> Result<DataFrame, KytoError>
     Ok(frame)
 }
 
+/// Read the ID column of the `axis` table of the store at `store`, and only that column
+/// (task 3.5: plans resolve gene names against it). `n_rows` is the axis length from
+/// `schema.json`.
+///
+/// Returns the IDs in table order, a new vector the caller owns.
+///
+/// # Errors
+/// - `KY-E110` if the file cannot be opened, is not Parquet or has no ID column.
+/// - `KY-E113` if the ID column is not `String`, holds a null, or does not have
+///   `n_rows` rows (format.md §5.1, §5.2).
+pub fn read_ids(store: &Path, axis: TableAxis, n_rows: u64) -> Result<Vec<String>, KytoError> {
+    let path = store.join(axis.file_name());
+    let path_text = path.display().to_string();
+    let corrupt = |problem: String| KytoError::CorruptTable {
+        path: path_text.clone(),
+        problem,
+    };
+    let file = File::open(&path).map_err(|error| store_io("open table", &path_text, error))?;
+    let frame = ParquetReader::new(file)
+        .with_columns(Some(vec![axis.id_column().to_owned()]))
+        .finish()
+        .map_err(|error| store_io("read table", &path_text, error))?;
+    let column = frame
+        .column(axis.id_column())
+        .map_err(|error| store_io("read table", &path_text, error))?;
+    let ids = column.str().map_err(|_| {
+        corrupt(format!(
+            "the ID column '{}' is {}, not String",
+            axis.id_column(),
+            column.dtype()
+        ))
+    })?;
+    if u64::try_from(ids.len()).ok() != Some(n_rows) {
+        return Err(corrupt(format!(
+            "it has {} rows, but schema.json says {n_rows}",
+            ids.len()
+        )));
+    }
+    ids.iter()
+        .map(|id| {
+            id.map(str::to_owned).ok_or_else(|| {
+                corrupt(format!("the ID column '{}' holds a null", axis.id_column()))
+            })
+        })
+        .collect()
+}
+
 /// `frame` with every non-ID `String` column cast to an `Enum` of its sorted distinct
 /// values.
 fn encode_strings(axis: TableAxis, frame: &DataFrame) -> Result<DataFrame, KytoError> {

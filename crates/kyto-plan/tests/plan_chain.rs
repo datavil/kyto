@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use kyto_core::AtlasSchema;
+use kyto_core::{AtlasSchema, GeneIds};
 use kyto_plan::Plan;
 
 const SCHEMA: &str = r#"{
@@ -27,9 +27,9 @@ fn schema() -> AtlasSchema {
 
 #[test]
 fn original_plan_unchanged_after_ten_chained_calls() {
-    let original = Plan::scan("pbmc.kyto", schema());
+    let original = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
     let snapshot = original.to_string();
-    let reference = Plan::scan("pbmc.kyto", schema());
+    let reference = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
 
     let mut plans = vec![Arc::clone(&original)];
     for step in 0..10 {
@@ -61,7 +61,7 @@ fn original_plan_unchanged_after_ten_chained_calls() {
 
 #[test]
 fn branches_share_the_input_and_do_not_affect_each_other() {
-    let base = Plan::scan("pbmc.kyto", schema());
+    let base = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
     let left = base.with_default_layer("counts").unwrap();
     let right = base.with_default_layer("log1p").unwrap();
     assert_eq!(left.default_layer(), Some("counts"));
@@ -74,7 +74,7 @@ fn branches_share_the_input_and_do_not_affect_each_other() {
 
 #[test]
 fn display_lists_nodes_from_top_to_scan() {
-    let plan = Plan::scan("pbmc.kyto", schema())
+    let plan = Plan::scan("pbmc.kyto", schema(), GeneIds::default())
         .with_default_layer("log1p")
         .unwrap();
     assert_eq!(
@@ -86,7 +86,7 @@ fn display_lists_nodes_from_top_to_scan() {
 
 #[test]
 fn unknown_layer_is_ky_e109_and_names_the_store() {
-    let plan = Plan::scan("pbmc.kyto", schema());
+    let plan = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
     let error = plan.with_default_layer("Counts").unwrap_err();
     assert_eq!(error.code(), "KY-E109");
     let text = error.to_string();
@@ -101,8 +101,8 @@ fn long_chains_drop_compare_and_print_without_recursion() {
     std::thread::Builder::new()
         .stack_size(256 * 1024)
         .spawn(|| {
-            let mut left = Plan::scan("pbmc.kyto", schema());
-            let mut right = Plan::scan("pbmc.kyto", schema());
+            let mut left = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
+            let mut right = Plan::scan("pbmc.kyto", schema(), GeneIds::default());
             for _ in 0..100_000 {
                 left = left.with_default_layer("counts").unwrap();
                 right = right.with_default_layer("counts").unwrap();

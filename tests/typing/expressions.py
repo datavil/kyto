@@ -11,7 +11,7 @@ off here, so each ignore names only the error under test.
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
 from kyto import cell_column, gene_column
-from kyto._kyto import CellExpr, GeneExpr
+from kyto._kyto import Atlas, CellExpr, GeneExpr
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
 
 
@@ -53,3 +53,12 @@ def rejected(
     # An expression has no truth value (KY-E206 at run time).
     if numeric > 1:  # pyright: ignore[reportGeneralTypeIssues]
         pass
+
+
+def resolved(atlas: Atlas, numeric: CellExpr[Numeric], text: GeneExpr[String]) -> None:
+    """``Atlas.resolve`` keeps the axis and the kind (task 3.5)."""
+    cell: CellExpr[Numeric] = atlas.resolve(numeric)
+    gene: GeneExpr[String] = atlas.resolve(text)
+    _ = (cell, gene)
+    _ = atlas.resolve(numeric).str  # pyright: ignore[reportAttributeAccessIssue]
+    _ = atlas.resolve("CD3E")  # pyright: ignore[reportCallIssue, reportArgumentType]

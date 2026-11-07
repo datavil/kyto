@@ -75,7 +75,7 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
     for name in ("__getitem__", "__setitem__", "X", "obs", "var", "__dict__"):
         assert not hasattr(atlas, name), name
     public = {name for name in dir(_kyto.Atlas) if not name.startswith("_")}
-    assert public == {"with_default_layer"}
+    assert public == {"resolve", "with_default_layer"}
 
 
 def test_unknown_layer_is_ky_e109(store: Path) -> None:
@@ -102,9 +102,10 @@ def test_docstring_examples_run(store: Path) -> None:
     for name, docstring in (
         ("Atlas", _kyto.Atlas.__doc__),
         ("Atlas.with_default_layer", _kyto.Atlas.with_default_layer.__doc__),
+        ("Atlas.resolve", _kyto.Atlas.resolve.__doc__),
     ):
         assert docstring is not None
-        globs = {"scan": _kyto.scan, "store": store}
+        globs = {"scan": _kyto.scan, "store": store, "feature": kyto.feature}
         runner.run(parser.get_doctest(docstring, globs, name, None, 0))
     assert runner.failures == 0
-    assert runner.tries == 5
+    assert runner.tries == 8

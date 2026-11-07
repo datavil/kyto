@@ -188,15 +188,17 @@ class ResolutionError(KytoError, ValueError):
 
     Subclasses `KytoError` and `ValueError`. Raised with these codes:
 
-    - ``KY-E201``: A short name matches more than one feature.
+    - ``KY-E201``: A feature name matches more than one feature.
     - ``KY-E204``: A gene symbol matches more than one gene ID.
     - ``KY-E208``: A feature name cannot name any feature.
+    - ``KY-E210``: A name does not match any column, gene, cell, embedding component or feature of the plan.
+    - ``KY-E211``: A gene or cell is read from the default layer, but the plan has none.
 
     See `KytoError` for the parameters and attributes.
 
     Examples
     --------
-    >>> error = ResolutionError("KY-E201", name="CD3E", candidates=["log1p:CD3E", "counts:CD3E"])
+    >>> error = ResolutionError("KY-E201", name="CD3E", candidates=["meta:CD3E", "log1p:CD3E"])
     >>> error.code
     'KY-E201'
     >>> isinstance(error, ValueError)
@@ -747,7 +749,7 @@ _REGISTRY: Final[dict[str, _Entry]] = {
     "KY-E201": _Entry(
         class_name="ResolutionError",
         message="ambiguous name '{name}': it matches {candidates}",
-        hint="pass the full name, one of {candidates}",
+        hint="pass one full name instead, one of {candidates}; where two share a full name, use cell_column(...), gene_expression(..., layer=...) or cell_embedding(...)",
         docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201",
         fields=(
             _Field("name", "str"),
@@ -835,6 +837,28 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("name", "str"),
             _Field("got", "str"),
             _Field("component", "str"),
+        ),
+    ),
+    "KY-E210": _Entry(
+        class_name="ResolutionError",
+        message="unknown {kind} '{name}' in {expression}: {problem}",
+        hint="names are matched exactly, case included; check '{name}' against the store's schema",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e210",
+        fields=(
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("expression", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E211": _Entry(
+        class_name="ResolutionError",
+        message="{expression} reads the default layer, but the plan has none",
+        hint="set one with .with_default_layer(...) before resolving, or name the layer; the store has {layers}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e211",
+        fields=(
+            _Field("expression", "str"),
+            _Field("layers", "list[str]"),
         ),
     ),
     "KY-E301": _Entry(

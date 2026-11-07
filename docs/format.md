@@ -98,7 +98,8 @@ resolved feature names (`log1p:CD3E`, R6). They MUST:
 
 Names MUST be unique within their group, compared case-insensitively (macOS and
 Windows file systems are case-insensitive). A layer, an embedding and a graph MAY share a
-name; the feature resolver (3.5) tells them apart by kind. Column names follow §5.6.
+name; the feature resolver (3.5) tells them apart by kind
+([feature_names.md](feature_names.md)). Column names follow §5.6.
 
 ## 3. Root group and `format_version`
 
@@ -330,8 +331,10 @@ Polars `Enum`.**
 - The categories live in the Parquet file only: the column is dictionary encoded and
   carries Polars' Enum type metadata. `schema.json` records the category count and an
   `ordered` flag (§8), so a column with millions of categories (barcodes, free text)
-  does not bloat it. `ordered` is kept for a lossless round trip to anndata; how it
-  affects comparisons in expressions is decided by 3.3.
+  does not bloat it. `ordered` is kept for a lossless round trip to anndata, and it
+  decides comparisons in expressions: ordering (`<`, `<=`, `>`, `>=`) an unordered
+  Enum is `KY-E205`, an ordered one compares in category order
+  ([feature_names.md](feature_names.md) §5, task 3.5).
 - An Enum with zero categories (an all-null column) is valid. The empty string is a
   valid category.
 - A writer given a plain `String` column stores it as an `Enum` whose categories are
@@ -346,7 +349,7 @@ Polars `Enum`.**
 ### 5.6 Column names
 
 Column names are unique within a table, non-empty, valid UTF-8, and MUST NOT contain
-`:` (the feature resolver uses `kind:name`, 3.5).
+`:` (the feature resolver uses `<prefix>:<name>`, [feature_names.md](feature_names.md)).
 
 ### 5.7 Parquet settings
 
@@ -600,5 +603,3 @@ Semantic differences are rows in [deviations.md](../deviations.md).
 - **`n_cells <= 2^32 - 1`.** Set by `u32` graph indices and Polars' default index. Raise
   it in a later version if an atlas needs more.
 - **Dense layers, `varp`, `uns`, modalities.** Not in v0; each needs a minor version.
-- **`ordered` categoricals.** Whether comparisons on an unordered Enum are allowed is
-  for 3.3.

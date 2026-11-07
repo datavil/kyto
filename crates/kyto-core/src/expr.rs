@@ -23,6 +23,7 @@ use kyto_error::KytoError;
 use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
 use crate::feature_name::FeatureName;
+use crate::schema::Axis;
 
 mod sealed {
     pub trait Sealed {}
@@ -36,6 +37,8 @@ pub trait ExprAxis: sealed::Sealed + Copy + fmt::Debug + PartialEq + 'static {
     const COLUMN: &'static str;
     /// The Python constructor of an embedding component on this axis.
     const EMBEDDING: &'static str;
+    /// The axis, as the schema names it (its table and its embeddings).
+    const AXIS: Axis;
 }
 
 /// One value per cell.
@@ -49,11 +52,13 @@ pub struct GeneAxis;
 impl ExprAxis for CellAxis {
     const COLUMN: &'static str = "cell_column";
     const EMBEDDING: &'static str = "cell_embedding";
+    const AXIS: Axis = Axis::Cells;
 }
 
 impl ExprAxis for GeneAxis {
     const COLUMN: &'static str = "gene_column";
     const EMBEDDING: &'static str = "gene_embedding";
+    const AXIS: Axis = Axis::Genes;
 }
 
 /// An expression with one value per cell.
@@ -312,6 +317,12 @@ impl<A: ExprAxis> Operand<A> {
     }
 }
 
+/// The Python code that builds a leaf reading `source` on axis `A`, such as
+/// `cell_column('n_genes')`.
+pub(crate) fn source_code<A: ExprAxis>(source: &Source) -> String {
+    Code::<A>::new(&ExprNode::Source(source.clone())).to_string()
+}
+
 /// `a boolean expression`, `an unknown value`, ...
 fn describe_kind(dtype: ExprDtype, what: &str) -> String {
     let article = if dtype == ExprDtype::Unknown {
@@ -323,7 +334,7 @@ fn describe_kind(dtype: ExprDtype, what: &str) -> String {
 }
 
 impl<A: ExprAxis> Expr<A> {
-    fn from_node(node: ExprNode, dtype: ExprDtype) -> Self {
+    pub(crate) fn from_node(node: ExprNode, dtype: ExprDtype) -> Self {
         Self::with_depth(node, dtype, 1)
     }
 
