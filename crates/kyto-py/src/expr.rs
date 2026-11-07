@@ -279,9 +279,9 @@ macro_rules! expr_class {
 
             /// Whether each value is missing (null): a boolean expression.
             ///
-            /// Missing metadata is null (R9): a categorical code ``-1`` or a masked
-            /// nullable entry of an imported ``.h5ad``. ``NaN`` in a float column is a
-            /// value, not null. Matrix values and embeddings are never null (an absent
+            /// Missing metadata is null (R9): a categorical code ``-1``, a masked
+            /// nullable entry or a float ``NaN`` of an imported ``.h5ad``. A ``NaN``
+            /// that kyto itself writes stays a value, not null. Matrix values and embeddings are never null (an absent
             /// sparse value is 0), so on them the result is always ``False``. Comparing
             /// with ``None`` (``x == None``) raises ``KY-E212``; use this instead.
             ///

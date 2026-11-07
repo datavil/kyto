@@ -893,8 +893,8 @@ class CellExpr(Generic[_D_co]):
     def is_null(self) -> CellExpr[Boolean]:
         """Whether each value is missing (null); never null itself (R9).
 
-        Missing metadata is null; ``NaN`` is a value, and matrix values and embeddings
-        are never null (an absent sparse value is 0). Use this, not ``x == None``
+        Missing metadata is null (an imported ``.h5ad``'s float ``NaN`` too); matrix
+        values and embeddings are never null (an absent sparse value is 0). Use this, not ``x == None``
         (``KY-E212``). Nothing is read.
         """
 
@@ -1126,8 +1126,8 @@ class GeneExpr(Generic[_D_co]):
     def is_null(self) -> GeneExpr[Boolean]:
         """Whether each value is missing (null); never null itself (R9).
 
-        Missing metadata is null; ``NaN`` is a value, and matrix values and embeddings
-        are never null (an absent sparse value is 0). Use this, not ``x == None``
+        Missing metadata is null (an imported ``.h5ad``'s float ``NaN`` too); matrix
+        values and embeddings are never null (an absent sparse value is 0). Use this, not ``x == None``
         (``KY-E212``). Nothing is read.
         """
 

@@ -8,14 +8,18 @@
 //! deviations.md), or files written by anndata < 0.8 (no `encoding-type`).
 //!
 //! Values match `anndata.read_h5ad`: categorical code `-1` and masked nullable entries
-//! become null; string categories keep their order and `ordered` flag; numeric
-//! categoricals become plain numeric columns (Enum holds strings only).
+//! become null; `NaN` in a float column becomes null too, since anndata has no
+//! nullable float encoding and pandas reads `NaN` as missing (format.md §5.5, decided
+//! by the user, Nov 7, 2026, task 3.7); string categories keep their order and
+//! `ordered` flag; numeric categoricals become plain numeric columns (Enum holds
+//! strings only). Matrix values are not touched: a stored `NaN` there stays a value.
 
 use hdf5_metno::types::TypeDescriptor;
 use hdf5_metno::{Dataset, Location};
 use kyto_error::KytoError;
 use polars::prelude::{
-    Column, DataFrame, DataType, FrozenCategories, IdxCa, IntoColumn, NamedFrom, Series,
+    ChunkApply, Column, DataFrame, DataType, FrozenCategories, IdxCa, IntoColumn, IntoSeries,
+    NamedFrom, Series,
 };
 
 use crate::import_convert::{Import, ImportLayer};
@@ -305,6 +309,20 @@ fn check_mask_length(
     })
 }
 
+/// `series` with every `NaN` of a float column made null (anndata's missing float);
+/// other dtypes unchanged.
+fn nan_to_null(series: Series) -> Series {
+    match (series.f32(), series.f64()) {
+        (Ok(values), _) => values
+            .apply(|value| value.filter(|value| !value.is_nan()))
+            .into_series(),
+        (_, Ok(values)) => values
+            .apply(|value| value.filter(|value| !value.is_nan()))
+            .into_series(),
+        _ => series,
+    }
+}
+
 /// One dataframe column as a series named `name`, and whether it is an ordered
 /// categorical.
 fn column(file: &H5File, member: &str, name: &str) -> Result<(Series, bool), KytoError> {
@@ -316,7 +334,7 @@ fn column(file: &H5File, member: &str, name: &str) -> Result<(Series, bool), Kyt
         let series = if kind == "string-array" {
             Series::new(name.into(), read_strings(file, member, &dataset)?)
         } else {
-            numeric_series(file, member, name, &dataset, None)?
+            nan_to_null(numeric_series(file, member, name, &dataset, None)?)
         };
         return Ok((series, false));
     }
@@ -383,7 +401,13 @@ fn categorical(
             | TypeDescriptor::FixedUnicode(_)
     );
     if !is_string {
-        let values = numeric_series(file, &categories_member, name, &categories, None)?;
+        let values = nan_to_null(numeric_series(
+            file,
+            &categories_member,
+            name,
+            &categories,
+            None,
+        )?);
         let series = values
             .take(&IdxCa::new("".into(), positions))
             .map_err(|error| file.read_error(member, error))?;

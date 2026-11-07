@@ -1,7 +1,7 @@
 //! The `.h5ad` export (task 2.7): a store written with every v0 column dtype, nulls and
 //! two layers over many cell blocks goes out through `sink_h5ad` and back in through
-//! the 2.6 importer unchanged (layers bit for bit, tables cell for cell, `ordered`
-//! flags); the anndata encodings and index dtypes are those anndata's h5py writer uses;
+//! the 2.6 importer unchanged (layers bit for bit, tables cell for cell with float `NaN`
+//! back as null, `ordered` flags); the anndata encodings and index dtypes are those anndata's h5py writer uses;
 //! the target appears only on success; bad targets, layers, names and strings get coded
 //! errors (R10). The parity test against anndata itself is `tests/test_sink_h5ad.py`.
 
@@ -235,8 +235,12 @@ fn options(x_layer: Option<&str>) -> SinkH5adOptions {
     }
 }
 
-/// Frames equal value for value; NaN equals NaN (it is a value, format.md §5.5).
-fn assert_frames_equal(left: &DataFrame, right: &DataFrame) {
+/// `back` (a store re-imported from `.h5ad`) equals `store` value for value, except that
+/// a float `NaN` or null of `store` is null in `back`: the export writes float nulls as
+/// `NaN` (anndata has no nullable float) and the importer reads `NaN` as null
+/// (format.md §5.5, decided by the user, Nov 7, 2026, task 3.7).
+fn assert_frames_equal(store: &DataFrame, back: &DataFrame) {
+    let (left, right) = (store, back);
     assert_eq!(left.get_column_names(), right.get_column_names());
     for (a, b) in left.columns().iter().zip(right.columns()) {
         assert_eq!(a.dtype(), b.dtype(), "column {}", a.name());
@@ -253,8 +257,9 @@ fn assert_frames_equal(left: &DataFrame, right: &DataFrame) {
                 .collect();
             assert_eq!(a.len(), b.len(), "column {name}");
             for (x, y) in pairs {
-                let both_nan = x.is_some_and(f64::is_nan) && y.is_some_and(f64::is_nan);
-                assert!(x == y || both_nan, "column {name}: {x:?} != {y:?}");
+                let missing = x.is_none_or(f64::is_nan);
+                let same = if missing { y.is_none() } else { x == y };
+                assert!(same, "column {name}: {x:?} became {y:?}");
             }
         } else {
             assert!(a.equals_missing(b), "column {name}");

@@ -344,7 +344,14 @@ Polars `Enum`.**
 ### 5.5 Nulls
 
 - Any non-ID column may hold nulls. Null means missing (R9).
-- `NaN` in a float column is a value, not null. Writers never turn one into the other.
+- `NaN` in a float column is a value, not null. kyto's own writers (the store writer,
+  plan sinks) never turn one into the other.
+- Importers map their source's missing values to null (§12). The `.h5ad` importer also
+  makes `NaN` in an `obs` or `var` float column null: anndata has no nullable float
+  encoding, so there `NaN` means missing (decided by the user, Nov 7, 2026, task 3.7).
+  Layer values are never changed: a `NaN` in a matrix stays a value. The 10x and mtx
+  importers read string metadata only. The `.h5ad` export writes float nulls as `NaN`,
+  so after a round trip through `.h5ad` a float `NaN` of a store comes back as null.
 
 ### 5.6 Column names
 
@@ -576,6 +583,7 @@ integers and booleans carry a mask. kyto maps them as follows.
 | `obs`, `var` (dataframe groups, `_index`) | `cells.parquet`, `genes.parquet` with `cell_id`, `gene_id` | IDs must be unique (§5.2); anndata only warns. |
 | categoricals (`codes` + `categories`, `ordered`) | Polars `Enum` + `ordered` in `schema.json` | Category order and unused categories kept; code `-1` becomes null (§5.4). Plain string columns also become `Enum`. |
 | nullable masks in `obs`, `var` | Polars nulls | Masked entries become null (§5.5). |
+| `NaN` in `obs`, `var` float columns | Polars nulls | anndata's missing float (no nullable float encoding); `NaN` in `X` and `layers` stays a value (§5.5). |
 | `obsm`, `varm` | `embeddings/<name>` with `axis` | Dense `float32`/`float64` arrays only; sparse or dataframe entries are not stored. |
 | `obsp` | `graphs/<name>` | Cell graphs only, stored as CSR even when the source is dense; stored zeros kept (§7). |
 | `varp`, `uns`, `raw` | not stored | v0 gap. |

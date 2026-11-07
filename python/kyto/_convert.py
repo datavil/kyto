@@ -28,7 +28,10 @@ def convert(
     ``scanpy.read_10x_mtx(var_names="gene_ids", gex_only=False)`` read, with the
     differences listed in ``deviations.md``: every feature is kept, genes are keyed by
     their ID (symbols go to the ``symbol`` column), string columns become categoricals,
-    integer matrices become ``uint32`` layers and float matrices ``float32``.
+    integer matrices become ``uint32`` layers and float matrices ``float32``. Missing
+    ``obs``/``var`` values become null: categorical code ``-1``, masked nullable
+    entries, and ``NaN`` in a float column (anndata has no nullable float). A ``NaN``
+    in a matrix stays a value.
 
     Parameters
     ----------

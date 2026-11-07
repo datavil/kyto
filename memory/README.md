@@ -19,3 +19,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Release extension misaligned LINKEDIT on macOS 27](macos_ld_linkedit_alignment.md): ld with the 27 SDK leaves the string pool 4 bytes off and `import kyto` fails for release builds; `export SDKROOT=.../MacOSX26.5.sdk` on this machine fixes it.
 - [MinIO for the remote store tests](minio_native_tests.md): native Homebrew `minio` here (formula disabled 2027-02-17), docker/podman in CI; SigV4 bucket creation; `Path::parse` for zarr keys.
 - [serde validation and R10](serde_errors_r10.md): no `try_from` with String errors; hand-written `Deserialize` with `missing_field`/`unknown_variant`; reject `null` optional keys for exact round trips.
+- [`.h5ad` float NaN becomes null](h5ad_float_nan_null.md): importer turns obs/var float NaN into null (user, 3.7); kyto writers keep NaN; a stored NaN round-trips through `.h5ad` as null.

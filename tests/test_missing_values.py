@@ -7,7 +7,8 @@ Done when: tests cover all three cases.
   ``crates/kyto-store/tests/missing_values.rs``, through the tile reader. Here, the
   stored layer of a converted ``.h5ad`` holds no null or ``NaN`` for its zeros.
 - Missing metadata is null: an ``.h5ad`` categorical code ``-1`` and masked nullable
-  entries become Polars nulls in the store, ``NaN`` stays a value (format.md §5.5),
+  entries become Polars nulls in the store, and so does ``NaN`` in a float column
+  (anndata has no nullable float; decided by the user, Nov 7, 2026; format.md §5.5),
   and expressions test for nulls with ``is_null()`` / ``is_not_null()``; ``x == None``
   is ``KY-E212``, naming the null test to write. How nulls flow through operations is tested in
   ``crates/kyto-core/tests/missing_values.rs``.
@@ -35,8 +36,8 @@ from kyto.dtypes import Unknown
 
 
 def _store(path: Path) -> Path:
-    """A 4-cell store whose cell columns have a missing value in row 1 (and a ``NaN``
-    score in row 2), converted from an ``.h5ad`` written by anndata."""
+    """A 4-cell store whose cell columns have a missing value in row 1 (``NaN`` for
+    the float columns), converted from an ``.h5ad`` written by anndata."""
     anndata = pytest.importorskip("anndata")
     import pandas as pd
     from scipy.sparse import csr_matrix
@@ -49,7 +50,8 @@ def _store(path: Path) -> Path:
             "cell_type": pd.Categorical(["B", None, "T", "T"]),
             "n_genes": pd.array([2, None, 1, 1], dtype="Int32"),
             "is_doublet": pd.array([False, None, True, False], dtype="boolean"),
-            "score": np.array([0.5, 1.0, np.nan, 3.0]),
+            "score": np.array([0.5, np.nan, -0.0, np.inf]),
+            "score32": np.array([np.nan, np.nan, 1.0, 2.0], dtype=np.float32),
         },
         index=["AAAC-1", "AAAG-1", "AACT-1", "AAGT-1"],
     )
@@ -62,15 +64,22 @@ def _store(path: Path) -> Path:
     return path
 
 
-def test_missing_metadata_is_null_and_nan_is_a_value(tmp_path: Path) -> None:
+def test_missing_metadata_is_null(tmp_path: Path) -> None:
     store = _store(tmp_path / "pbmc.kyto")
     frame = pl.read_parquet(store / "cells.parquet")
-    for name in ["cell_type", "n_genes", "is_doublet"]:
-        # Categorical code -1 and masked nullable entries: null, as anndata's pd.NA.
+    for name in ["cell_type", "n_genes", "is_doublet", "score"]:
+        # Categorical code -1, masked nullable entries and float NaN: null, where
+        # pandas says isna.
         assert frame[name].is_null().to_list() == [False, True, False, False], name
+    assert frame["score32"].is_null().to_list() == [True, True, False, False]
+    assert frame["score"].dtype == pl.Float64
+    assert frame["score32"].dtype == pl.Float32
+    # Other float values are kept exactly, -0.0 and inf included.
     score = frame["score"].to_list()
-    assert frame["score"].null_count() == 0
-    assert math.isnan(score[2])
+    assert score[0] == 0.5
+    assert score[2] == 0.0 and math.copysign(1.0, score[2]) == -1.0
+    assert score[3] == math.inf
+    assert not frame["score"].is_nan().any()
     assert frame["cell_type"].dtype == pl.Enum(["B", "T"])
 
 

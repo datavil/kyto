@@ -113,6 +113,10 @@ def _column_entry(name: str, series: Any) -> tuple[pl.Series, dict[str, Any]]:
         values = pl.Series(name, _objects(series), dtype=polars_dtype)
     else:
         values = pl.Series(name, series.to_numpy())
+        if values.dtype.is_float():
+            # anndata has no nullable float: NaN is pandas' missing value, and the
+            # importer makes it null (format.md §5.5, task 3.7).
+            values = values.fill_nan(None)
     return values, {"name": name, "dtype": str(values.dtype)}
 
 

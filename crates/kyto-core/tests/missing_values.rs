@@ -1,7 +1,8 @@
 //! Task 3.7, the missing-value rules of R9 at the level of expressions and the resolver:
 //! missing metadata is null, tested with `is_null` / `is_not_null` and propagated by
-//! Polars' rules when an expression is lowered (`NaN` is a value, not null, format.md
-//! §5.5); a gene removed upstream is refused with `KY-E203` when the plan is built.
+//! Polars' rules when an expression is lowered (a `NaN` that kyto writes is a value, not
+//! null, format.md §5.5; the `.h5ad` importer makes anndata's `NaN` null); a gene
+//! removed upstream is refused with `KY-E203` when the plan is built.
 //! The densify-to-0 rule is tested in kyto-store (`tests/missing_values.rs`), where
 //! `CellBlock` lives.
 #![allow(clippy::unwrap_used)]
@@ -254,7 +255,8 @@ fn nulls_propagate_through_operations_and_filters_drop_them() {
 #[test]
 fn nan_follows_polars_ordering() {
     // Polars orders NaN above every number, so `NaN > 1` is true (NumPy and pandas
-    // say false; deviations.md, an open question of task 3.7).
+    // say false; deviations.md). Imported `.h5ad` NaN is null, so this concerns NaN
+    // that kyto itself writes.
     let high = compare("score", BinaryOp::Gt, Literal::Int(1));
     assert_eq!(evaluate(&high), [Some(false), None, Some(true), Some(true)]);
 }
