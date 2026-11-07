@@ -437,8 +437,13 @@ matrix (8.3). It is the input of `AtlasSchema` (3.1). Keys, in this order:
   the Polars dtype names of §5.3 (array dtypes below use Zarr names). `n_categories` and
   `ordered` appear exactly when `dtype` is `"Enum"`.
 - `lineage` is optional and lives only here. It marks a stored derived column with the
-  layer and plan node it came from (3.8 defines its use). Node IDs are the stable,
-  deterministic IDs of the plan JSON (4.3), so lineage does not break 8.7.
+  layer and plan node it came from. Node IDs are the stable, deterministic IDs of the
+  plan JSON (4.3), so lineage does not break 8.7. Its use (3.8): a cell column with
+  `lineage` was computed over every gene of the store, so a plan that changes the gene
+  axis (`filter_genes`) refuses to read it as stored (`KY-E301`) and reads it
+  recomputed on request (`cell_column(name).recompute()`, which needs `lineage`:
+  `KY-E302`). Readers do not interpret `layer` and `node` yet; the executor (5.x) uses
+  them to recompute. Importers write no `lineage`.
 - JSON integers (`nnz`, counts) can exceed `2^53`; readers MUST parse them as `u64`,
   not as floating point.
 - `layers`, `embeddings` and `graphs` list every member of the matching group, sorted by

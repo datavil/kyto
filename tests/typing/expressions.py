@@ -72,3 +72,14 @@ def null_tests(numeric: CellExpr[Numeric], text: GeneExpr[String]) -> None:
     _ = (present, keep)
     _ = numeric.is_null().str  # pyright: ignore[reportAttributeAccessIssue]
     _ = numeric.is_null() & text.is_null()  # pyright: ignore[reportOperatorIssue]
+
+
+def lineage(atlas: Atlas, numeric: CellExpr[Numeric], flag: GeneExpr[Boolean]) -> None:
+    """``recompute`` keeps axis and kind; ``filter_genes`` takes a boolean gene
+    expression only (task 3.8)."""
+    again: CellExpr[Numeric] = numeric.recompute()
+    filtered: Atlas = atlas.filter_genes(flag)
+    _ = (again, filtered)
+    _ = atlas.filter_genes(numeric > 1)  # pyright: ignore[reportArgumentType]
+    _ = atlas.filter_genes(gene_column("highly_variable"))  # Unknown until resolved
+    _ = atlas.filter_genes(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]

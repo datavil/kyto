@@ -79,6 +79,7 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
     assert public == {
         "resolve",
         "with_default_layer",
+        "filter_genes",
         "cells",
         "genes",
         "layer",
@@ -113,9 +114,15 @@ def test_docstring_examples_run(store: Path) -> None:
         ("Atlas", _kyto.Atlas.__doc__),
         ("Atlas.with_default_layer", _kyto.Atlas.with_default_layer.__doc__),
         ("Atlas.resolve", _kyto.Atlas.resolve.__doc__),
+        ("Atlas.filter_genes", _kyto.Atlas.filter_genes.__doc__),
     ):
         assert docstring is not None
-        globs = {"scan": _kyto.scan, "store": store, "feature": kyto.feature}
+        globs = {
+            "scan": _kyto.scan,
+            "store": store,
+            "feature": kyto.feature,
+            "gene_column": kyto.gene_column,
+        }
         runner.run(parser.get_doctest(docstring, globs, name, None, 0))
     assert runner.failures == 0
-    assert runner.tries == 8
+    assert runner.tries == 10

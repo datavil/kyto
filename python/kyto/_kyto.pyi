@@ -102,6 +102,14 @@ class Atlas:
             ``KY-E109``: a layer or embedding is not in the store.
         ExpressionError
             ``KY-E205``: a column's stored dtype does not fit an operation on it.
+        RemovedFeatureError
+            ``KY-E203``: a gene read names a gene removed earlier in the plan.
+        StaleColumnError
+            ``KY-E301``: a stored derived cell column (its ``schema.json`` entry records
+            ``lineage``) is read after ``filter_genes``; read
+            ``cell_column(name).recompute()`` instead.
+        LineageError
+            ``KY-E302``: a ``.recompute()`` names a column that records no lineage.
 
         Examples
         --------
@@ -113,6 +121,43 @@ class Atlas:
         """
     @overload
     def resolve(self, expression: GeneExpr[_D], /) -> GeneExpr[_D]: ...
+    def filter_genes(self, predicate: _GeneExprBoolean, /) -> Atlas:
+        """Keep the genes where a boolean gene expression is true.
+
+        The predicate is resolved against this plan now (R6): its names are checked and
+        stored in full. Which genes it keeps is known only when the plan runs. From
+        here on, a derived cell column that the store computed over all genes (one whose
+        ``schema.json`` entry records ``lineage``, such as a stored ``n_genes``) is stale:
+        reading it raises ``KY-E301``; read ``cell_column(name).recompute()`` instead.
+
+        Parameters
+        ----------
+        predicate : GeneExpr[Boolean] or GeneExpr[Unknown]
+            One value per gene; genes where it is ``True`` are kept, genes where it is
+            ``False`` or null are dropped. A column read (``Unknown`` until resolved)
+            must be stored as ``Boolean``.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E205``: ``predicate`` is not a ``GeneExpr``, or not boolean once
+            resolved.
+        ResolutionError
+            ``KY-E210``: a name in ``predicate`` matches nothing, and the other
+            errors of ``resolve``.
+
+        Examples
+        --------
+        >>> atlas = scan(store)
+        >>> print(atlas.filter_genes(gene_column("feature_type") == "Gene Expression"))
+        FILTER_GENES gene_column('feature_type') == 'Gene Expression'
+        SCAN "..." (2 cells x 3 genes)
+        """
     @property
     def cells(self) -> Table:
         """The cell table: a read-only, lazy handle (nothing is read).
@@ -901,6 +946,31 @@ class CellExpr(Generic[_D_co]):
     def is_not_null(self) -> CellExpr[Boolean]:
         """Whether each value is present (not null); the negation of ``is_null()``."""
 
+    def recompute(self) -> CellExpr[_D_co]:
+        """This column, computed again from its lineage instead of read as stored.
+
+        A derived column the store computed (one whose ``schema.json`` entry records
+        ``lineage``, such as ``n_genes``) goes stale once a step such as
+        ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``. A
+        recomputed read is valid there. Nothing is computed now: the executor (task
+        5.x) computes it when the plan runs.
+
+        Returns
+        -------
+        CellExpr
+            A new expression of the same dtype. Nothing is read.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E213``: the expression is not a plain column read.
+
+        Examples
+        --------
+        >>> cell_column("n_genes").recompute()
+        cell_column('n_genes').recompute()
+        """
+
     def __bool__(self) -> NoReturn:
         """Always raises ``ExpressionError`` (``KY-E206``): use ``&``, ``|``, ``~``."""
 
@@ -1133,6 +1203,31 @@ class GeneExpr(Generic[_D_co]):
 
     def is_not_null(self) -> GeneExpr[Boolean]:
         """Whether each value is present (not null); the negation of ``is_null()``."""
+
+    def recompute(self) -> GeneExpr[_D_co]:
+        """This column, computed again from its lineage instead of read as stored.
+
+        A derived column the store computed (one whose ``schema.json`` entry records
+        ``lineage``, such as ``n_genes``) goes stale once a step such as
+        ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``. A
+        recomputed read is valid there. Nothing is computed now: the executor (task
+        5.x) computes it when the plan runs.
+
+        Returns
+        -------
+        GeneExpr
+            A new expression of the same dtype. Nothing is read.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E213``: the expression is not a plain column read.
+
+        Examples
+        --------
+        >>> gene_column("n_cells").recompute()
+        gene_column('n_cells').recompute()
+        """
 
     def __bool__(self) -> NoReturn:
         """Always raises ``ExpressionError`` (``KY-E206``): use ``&``, ``|``, ``~``."""

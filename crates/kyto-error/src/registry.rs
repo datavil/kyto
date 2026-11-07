@@ -363,6 +363,14 @@ pub enum KytoError {
         /// The null test to write instead, as code.
         suggestion: String,
     },
+    /// KY-E213: `.recompute()` is called on an expression that is not a plain column read.
+    #[error("KY-E213: '.recompute()' needs a plain column read such as {example}, got {expression}")]
+    RecomputeOperand {
+        /// The expression it was called on, as code.
+        expression: String,
+        /// A plain column read of the same axis, as code.
+        example: String,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -370,6 +378,16 @@ pub enum KytoError {
         column: String,
         /// The plan node that changed its inputs.
         changed_by: String,
+    },
+    /// KY-E302: A column without lineage is asked to be recomputed.
+    #[error("KY-E302: {expression} asks to recompute {kind} '{column}', but the store records no lineage for it")]
+    NoLineage {
+        /// The expression, as code.
+        expression: String,
+        /// `cell column` or `gene column`.
+        kind: String,
+        /// The column.
+        column: String,
     },
     /// KY-E401: A plan needs more memory than its limit, even with the smallest blocks.
     #[error("KY-E401: the plan needs at least {required_bytes} bytes but memory_limit is {limit_bytes} bytes")]
@@ -399,7 +417,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 41] = [
+    pub const CODES: [&'static str; 43] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -437,7 +455,9 @@ impl KytoError {
         "KY-E210",
         "KY-E211",
         "KY-E212",
+        "KY-E213",
         "KY-E301",
+        "KY-E302",
         "KY-E401",
         "KY-E501",
         "KY-E601",
@@ -483,7 +503,9 @@ impl KytoError {
             Self::UnknownName { .. } => "KY-E210",
             Self::NoDefaultLayer { .. } => "KY-E211",
             Self::NullComparison { .. } => "KY-E212",
+            Self::RecomputeOperand { .. } => "KY-E213",
             Self::StaleColumn { .. } => "KY-E301",
+            Self::NoLineage { .. } => "KY-E302",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
             Self::NotImplementedYet { .. } => "KY-E601",
@@ -530,7 +552,9 @@ impl KytoError {
             Self::UnknownName { .. } => "ResolutionError",
             Self::NoDefaultLayer { .. } => "ResolutionError",
             Self::NullComparison { .. } => "ExpressionError",
+            Self::RecomputeOperand { .. } => "ExpressionError",
             Self::StaleColumn { .. } => "StaleColumnError",
+            Self::NoLineage { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
             Self::NotImplementedYet { .. } => "NotImplementedYetError",
@@ -651,8 +675,14 @@ impl KytoError {
             Self::NullComparison { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e212"
             }
+            Self::RecomputeOperand { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e213"
+            }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
+            }
+            Self::NoLineage { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e302"
             }
             Self::MemoryLimit { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e401"
@@ -780,8 +810,14 @@ impl KytoError {
             Self::NullComparison { suggestion, .. } => {
                 format!("write {suggestion} instead; missing values are null (R9)")
             }
+            Self::RecomputeOperand { example, .. } => {
+                format!("call .recompute() on the column read itself, then build on the result: write {example} first")
+            }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
+            }
+            Self::NoLineage { column, .. } => {
+                format!("only derived columns written by kyto record their lineage (schema.json); read '{column}' as stored, or compute it again from the matrix")
             }
             Self::MemoryLimit { required_bytes, .. } => {
                 format!("raise memory_limit to at least {required_bytes} bytes, or select fewer cells or genes before this step")
@@ -976,9 +1012,18 @@ impl KytoError {
                 ("expression", FieldValue::Str(expression.clone())),
                 ("suggestion", FieldValue::Str(suggestion.clone())),
             ],
+            Self::RecomputeOperand { expression, example } => vec![
+                ("expression", FieldValue::Str(expression.clone())),
+                ("example", FieldValue::Str(example.clone())),
+            ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
                 ("changed_by", FieldValue::Str(changed_by.clone())),
+            ],
+            Self::NoLineage { expression, kind, column } => vec![
+                ("expression", FieldValue::Str(expression.clone())),
+                ("kind", FieldValue::Str(kind.clone())),
+                ("column", FieldValue::Str(column.clone())),
             ],
             Self::MemoryLimit { required_bytes, limit_bytes } => vec![
                 ("required_bytes", FieldValue::Int(*required_bytes)),
@@ -1177,9 +1222,18 @@ impl KytoError {
                 expression: "cell_column('cell_type') == None".to_owned(),
                 suggestion: "cell_column('cell_type').is_null()".to_owned(),
             },
+            Self::RecomputeOperand {
+                expression: "cell_column('n_genes') + 1".to_owned(),
+                example: "cell_column('n_genes').recompute()".to_owned(),
+            },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),
                 changed_by: "filter_genes".to_owned(),
+            },
+            Self::NoLineage {
+                expression: "cell_column('n_genes').recompute()".to_owned(),
+                kind: "cell column".to_owned(),
+                column: "n_genes".to_owned(),
             },
             Self::MemoryLimit {
                 required_bytes: 6000000000,

@@ -1,7 +1,8 @@
 //! Where the values of an expression come from: the leaves of an expression tree.
 //!
 //! Does: name the four source tags (`Column`, `Expression`, `Profile`, `Embedding`),
-//! plus `Feature`, a name not yet resolved to one of them (task 3.4), and say whether a
+//! plus `Feature`, a name not yet resolved to one of them (task 3.4), and `Recompute`,
+//! a derived column computed again from its lineage (task 3.8); and say whether a
 //! source is metadata (a table column) or reads the matrix or an embedding.
 //!
 //! Does not: check that the named column, layer, gene, cell or embedding exists (task
@@ -46,6 +47,15 @@ pub enum Source {
     Feature {
         /// The parsed name.
         name: FeatureName,
+    },
+    /// A derived column of this axis's table computed again from the lineage the store
+    /// records for it (task 3.8, format.md §8), not read as stored: what
+    /// `cell_column('n_genes').recompute()` builds. Valid after a step that changed
+    /// the column's inputs (`KY-E301` otherwise). The executor computes it (5.x); it
+    /// reads the matrix, so it is not metadata.
+    Recompute {
+        /// The column name, as written.
+        name: String,
     },
 }
 

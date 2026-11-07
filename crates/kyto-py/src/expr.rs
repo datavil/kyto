@@ -315,6 +315,31 @@ macro_rules! expr_class {
                 self.null_test(py, NullTest::IsNotNull)
             }
 
+            /// This column, computed again from its lineage instead of read as stored.
+            ///
+            /// A derived column the store computed (one whose ``schema.json`` entry
+            /// records ``lineage``, such as ``n_genes``) goes stale once a step such as
+            /// ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``.
+            /// A recomputed read is valid there. Nothing is computed now: the executor
+            /// (task 5.x) computes it when the plan runs.
+            ///
+            /// Returns
+            /// -------
+            /// The same expression class and dtype. Nothing is read.
+            ///
+            /// Raises
+            /// ------
+            /// ExpressionError
+            ///     ``KY-E213``: the expression is not a plain column read.
+            ///
+            /// Examples
+            /// --------
+            /// >>> cell_column("n_genes").recompute()
+            /// cell_column('n_genes').recompute()
+            fn recompute(&self, py: Python<'_>) -> PyResult<Self> {
+                self.expr.recompute().map(|expr| Self { expr }).map_err(|error| to_py_err(py, &error))
+            }
+
             /// Always raises ``KY-E206``: an expression has no truth value.
             fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
                 Err(truth_value(py, &self.expr))

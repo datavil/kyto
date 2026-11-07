@@ -4,7 +4,8 @@
 //! Does: wrap an `Arc<kyto_plan::Plan>` in a frozen pyclass whose every method returns a
 //! new `Atlas` (R2); resolve an expression's names against the plan (task 3.5); build
 //! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
-//! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early).
+//! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early);
+//! filter genes (`filter_genes`, 4.1/7.2's gene filter taken early for task 3.8).
 //! Does not: read other columns or the matrix; hold any state besides the plan (R7); expose
 //! `__getitem__`, `.X`, `obs` or `var` (R4). The public `kyto.scan` and the chain
 //! methods arrive with 7.1/7.2; `scan` is private until then.
@@ -106,6 +107,14 @@ impl Atlas {
     ///     ``KY-E109``: a layer or embedding is not in the store.
     /// ExpressionError
     ///     ``KY-E205``: a column's stored dtype does not fit an operation on it.
+    /// RemovedFeatureError
+    ///     ``KY-E203``: a gene read names a gene removed earlier in the plan.
+    /// StaleColumnError
+    ///     ``KY-E301``: a stored derived cell column (its ``schema.json`` entry records
+    ///     ``lineage``) is read after ``filter_genes``; read
+    ///     ``cell_column(name).recompute()`` instead.
+    /// LineageError
+    ///     ``KY-E302``: a ``.recompute()`` names a column that records no lineage.
     ///
     /// Examples
     /// --------
@@ -130,26 +139,59 @@ impl Atlas {
                 .map_err(|error| to_py_err(py, &error))?;
             return PyGeneExpr::from_core(resolved).into_py_any(py);
         }
-        let type_name = expression
-            .get_type()
-            .name()
-            .map_or_else(|_| "object".to_owned(), |name| name.to_string());
-        let error = KytoError::ExpressionOperand {
-            operation: "resolve".to_owned(),
-            accepted: "a CellExpr or a GeneExpr".to_owned(),
-            got: format!(
-                "{} {type_name}",
-                if type_name.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) {
-                    "an"
-                } else {
-                    "a"
-                }
-            ),
-            operand: expression
-                .repr()
-                .map_or_else(|_| format!("<{type_name}>"), |text| text.to_string()),
+        Err(to_py_err(
+            py,
+            &wrong_type("resolve", "a CellExpr or a GeneExpr", expression),
+        ))
+    }
+
+    /// Keep the genes where a boolean gene expression is true.
+    ///
+    /// The predicate is resolved against this plan now (R6): its names are checked and
+    /// stored in full. Which genes it keeps is known only when the plan runs. From
+    /// here on, a derived cell column that the store computed over all genes (one whose
+    /// ``schema.json`` entry records ``lineage``, such as a stored ``n_genes``) is stale:
+    /// reading it raises ``KY-E301``; read ``cell_column(name).recompute()`` instead.
+    ///
+    /// Parameters
+    /// ----------
+    /// predicate : GeneExpr[Boolean] or GeneExpr[Unknown]
+    ///     One value per gene; genes where it is ``True`` are kept, genes where it is
+    ///     ``False`` or null are dropped. A column read (``Unknown`` until resolved)
+    ///     must be stored as ``Boolean``.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ExpressionError
+    ///     ``KY-E205``: ``predicate`` is not a ``GeneExpr``, or not boolean once
+    ///     resolved.
+    /// ResolutionError
+    ///     ``KY-E210``: a name in ``predicate`` matches nothing, and the other
+    ///     errors of ``resolve``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store)
+    /// >>> print(atlas.filter_genes(gene_column("feature_type") == "Gene Expression"))
+    /// FILTER_GENES gene_column('feature_type') == 'Gene Expression'
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (predicate, /))]
+    fn filter_genes(&self, py: Python<'_>, predicate: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let Ok(predicate) = predicate.cast::<PyGeneExpr>() else {
+            return Err(to_py_err(
+                py,
+                &wrong_type("filter_genes", "a boolean GeneExpr", predicate),
+            ));
         };
-        Err(to_py_err(py, &error))
+        self.plan
+            .filter_genes(predicate.get().core())
+            .map(|plan| Self { plan })
+            .map_err(|error| to_py_err(py, &error))
     }
 
     /// The cell table: a read-only, lazy handle (nothing is read).
@@ -312,6 +354,28 @@ impl Atlas {
     /// The plan, one node per line, inside ``<Atlas ...>``.
     fn __repr__(&self) -> String {
         format!("<Atlas\n{}\n>", self.plan)
+    }
+}
+
+/// `KY-E205`: `operation` needs `accepted` and got `value`, a Python object of another
+/// type.
+fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAny>) -> KytoError {
+    let type_name = value
+        .get_type()
+        .name()
+        .map_or_else(|_| "object".to_owned(), |name| name.to_string());
+    let article = if type_name.starts_with(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']) {
+        "an"
+    } else {
+        "a"
+    };
+    KytoError::ExpressionOperand {
+        operation: operation.to_owned(),
+        accepted: accepted.to_owned(),
+        got: format!("{article} {type_name}"),
+        operand: value
+            .repr()
+            .map_or_else(|_| format!("<{type_name}>"), |text| text.to_string()),
     }
 }
 

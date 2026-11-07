@@ -45,6 +45,10 @@ doc = "A feature removed earlier in the plan is read again (R9)."
 base = "ValueError"
 doc = "A derived column is read after its inputs changed upstream."
 
+[classes.LineageError]
+base = "ValueError"
+doc = "A column is asked to be recomputed but records no lineage to recompute it from."
+
 [classes.MemoryLimitError]
 base = "MemoryError"
 doc = "A plan cannot run within its memory limit."
@@ -564,6 +568,18 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E213"
+variant = "RecomputeOperand"
+class = "ExpressionError"
+summary = "`.recompute()` is called on an expression that is not a plain column read."
+message = "'.recompute()' needs a plain column read such as {example}, got {expression}"
+hint = "call .recompute() on the column read itself, then build on the result: write {example} first"
+fields = [
+    { name = "expression", type = "str", doc = "The expression it was called on, as code.", example = "cell_column('n_genes') + 1" },
+    { name = "example", type = "str", doc = "A plain column read of the same axis, as code.", example = "cell_column('n_genes').recompute()" },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"
@@ -573,6 +589,19 @@ hint = "call .recompute() on '{column}' after '{changed_by}', or read it before 
 fields = [
     { name = "column", type = "str", doc = "The derived column.", example = "n_genes" },
     { name = "changed_by", type = "str", doc = "The plan node that changed its inputs.", example = "filter_genes" },
+]
+
+[[errors]]
+code = "KY-E302"
+variant = "NoLineage"
+class = "LineageError"
+summary = "A column without lineage is asked to be recomputed."
+message = "{expression} asks to recompute {kind} '{column}', but the store records no lineage for it"
+hint = "only derived columns written by kyto record their lineage (schema.json); read '{column}' as stored, or compute it again from the matrix"
+fields = [
+    { name = "expression", type = "str", doc = "The expression, as code.", example = "cell_column('n_genes').recompute()" },
+    { name = "kind", type = "str", doc = "`cell column` or `gene column`.", example = "cell column" },
+    { name = "column", type = "str", doc = "The column.", example = "n_genes" },
 ]
 
 [[errors]]

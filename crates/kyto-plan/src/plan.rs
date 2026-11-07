@@ -13,9 +13,12 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kyto_core::{AtlasSchema, Expr, ExprAxis, GeneIds, RemovedGenes, Resolver};
+use kyto_core::{
+    AtlasSchema, Expr, ExprAxis, ExprDtype, GeneExpr, GeneIds, RemovedGenes, Resolver,
+};
 use kyto_error::KytoError;
 
+use crate::filter_genes::FilterGenes;
 use crate::scan::Scan;
 use crate::with_default_layer::WithDefaultLayer;
 
@@ -29,6 +32,8 @@ pub enum Plan {
     Scan(Scan),
     /// Set the default layer of everything downstream.
     WithDefaultLayer(WithDefaultLayer),
+    /// Keep the genes where a gene predicate is true (4.1's `Filter`, gene axis only).
+    FilterGenes(FilterGenes),
 }
 
 impl Plan {
@@ -44,22 +49,43 @@ impl Plan {
     /// `gene_expression('CD3E', layer='log1p')`), so it means the same thing whatever is
     /// added to the store or the plan later. See [`Resolver::resolve`].
     ///
-    /// A gene removed upstream ([`Plan::removed_genes`]) is refused with `KY-E203`.
+    /// A gene removed upstream ([`Plan::removed_genes`]) is refused with `KY-E203`; a
+    /// stored derived cell column read after a node that changed the gene axis
+    /// ([`Plan::gene_axis_changed_by`]) with `KY-E301`, unless it is `.recompute()`d.
     ///
     /// # Errors
-    /// `KY-E201`, `KY-E203`, `KY-E205`, `KY-E210`, `KY-E211` or `KY-E109`, as
-    /// [`Resolver::resolve`] lists them.
+    /// `KY-E201`, `KY-E203`, `KY-E205`, `KY-E210`, `KY-E211`, `KY-E109`, `KY-E301` or
+    /// `KY-E302`, as [`Resolver::resolve`] lists them.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
         let root = self.root();
         let removed_genes = self.removed_genes();
-        Resolver::new(
+        let resolver = Resolver::new(
             self.schema(),
             root.gene_ids(),
             self.default_layer(),
             root.source(),
         )
-        .with_removed_genes(&removed_genes)
+        .with_removed_genes(&removed_genes);
+        match self.gene_axis_changed_by() {
+            Some(changed_by) => resolver.with_gene_axis_changed_by(changed_by),
+            None => resolver,
+        }
         .resolve(expr)
+    }
+
+    /// The first node from the scan downward that changes the gene axis, as messages
+    /// name it (`filter_genes`), or `None` if no node does. Stored derived cell columns
+    /// read after it are stale (`KY-E301`, task 3.8). 4.1's `SelectGenes` belongs here
+    /// too.
+    pub fn gene_axis_changed_by(&self) -> Option<&'static str> {
+        let mut changed_by = None;
+        for node in self.nodes() {
+            match node {
+                Self::FilterGenes(_) => changed_by = Some("filter_genes"),
+                Self::Scan(_) | Self::WithDefaultLayer(_) => {}
+            }
+        }
+        changed_by
     }
 
     /// The genes removed by nodes of this plan, each with the node that removed it, as
@@ -70,7 +96,8 @@ impl Plan {
         let removed = RemovedGenes::new();
         for node in self.nodes() {
             match node {
-                Self::Scan(_) | Self::WithDefaultLayer(_) => {}
+                // Which genes a filter on data keeps is known only when the plan runs.
+                Self::Scan(_) | Self::WithDefaultLayer(_) | Self::FilterGenes(_) => {}
             }
         }
         removed
@@ -99,11 +126,36 @@ impl Plan {
         ))))
     }
 
+    /// This plan keeping only the genes where `predicate` is true (a new plan; `self`
+    /// is unchanged). The predicate is resolved against this plan now (R6) and must be
+    /// boolean. Which genes it keeps is known only when the plan runs, but every
+    /// stored derived cell column read downstream is stale from here on (`KY-E301`).
+    ///
+    /// # Errors
+    /// Any error of [`Plan::resolve`] for `predicate`; `KY-E205` if the resolved
+    /// predicate is not boolean.
+    pub fn filter_genes(self: &Arc<Self>, predicate: &GeneExpr) -> Result<Arc<Self>, KytoError> {
+        let predicate = self.resolve(predicate)?;
+        if predicate.dtype() != ExprDtype::Boolean {
+            return Err(KytoError::ExpressionOperand {
+                operation: "filter_genes".to_owned(),
+                accepted: "a boolean gene expression".to_owned(),
+                got: format!("a {} expression", predicate.dtype().name()),
+                operand: predicate.to_string(),
+            });
+        }
+        Ok(Arc::new(Self::FilterGenes(FilterGenes::new(
+            Arc::clone(self),
+            predicate,
+        ))))
+    }
+
     /// The node's name, as `explain` will show it.
     pub fn name(&self) -> &'static str {
         match self {
             Self::Scan(_) => "SCAN",
             Self::WithDefaultLayer(_) => "WITH_DEFAULT_LAYER",
+            Self::FilterGenes(_) => "FILTER_GENES",
         }
     }
 
@@ -112,6 +164,7 @@ impl Plan {
         match self {
             Self::Scan(_) => None,
             Self::WithDefaultLayer(node) => node.input.get(),
+            Self::FilterGenes(node) => node.input.get(),
         }
     }
 
@@ -121,11 +174,13 @@ impl Plan {
     }
 
     /// The plan's output schema. Each node keeps its own (shared, not copied), so this
-    /// does not walk the chain. No node changes the schema yet (4.1 adds those).
+    /// does not walk the chain. No node changes the schema yet (4.1 adds those; a gene
+    /// filter keeps its input's schema, see [`FilterGenes`]).
     pub fn schema(&self) -> &Arc<AtlasSchema> {
         match self {
             Self::Scan(scan) => scan.schema(),
             Self::WithDefaultLayer(node) => node.schema(),
+            Self::FilterGenes(node) => node.schema(),
         }
     }
 
@@ -133,7 +188,7 @@ impl Plan {
     pub fn default_layer(&self) -> Option<&str> {
         self.nodes().find_map(|node| match node {
             Self::WithDefaultLayer(node) => Some(node.layer()),
-            Self::Scan(_) => None,
+            Self::Scan(_) | Self::FilterGenes(_) => None,
         })
     }
 
@@ -143,7 +198,7 @@ impl Plan {
         loop {
             match node {
                 Self::Scan(scan) => return scan,
-                Self::WithDefaultLayer(inner) => match inner.input.get() {
+                Self::WithDefaultLayer(_) | Self::FilterGenes(_) => match node.input() {
                     Some(input) => node = input,
                     // Only a plan being dropped has no input; it is never reachable.
                     None => unreachable!("plan node without input"),
@@ -158,6 +213,9 @@ impl Plan {
             (Self::Scan(left), Self::Scan(right)) => left == right,
             (Self::WithDefaultLayer(left), Self::WithDefaultLayer(right)) => {
                 left.layer() == right.layer()
+            }
+            (Self::FilterGenes(left), Self::FilterGenes(right)) => {
+                left.predicate() == right.predicate()
             }
             _ => false,
         }
@@ -179,6 +237,9 @@ impl Plan {
             }
             Self::WithDefaultLayer(node) => {
                 write!(formatter, "{} {:?}", self.name(), node.layer())
+            }
+            Self::FilterGenes(node) => {
+                write!(formatter, "{} {}", self.name(), node.predicate())
             }
         }
     }
@@ -243,6 +304,7 @@ impl Plan {
         match self {
             Self::Scan(_) => None,
             Self::WithDefaultLayer(node) => node.input.take(),
+            Self::FilterGenes(node) => node.input.take(),
         }
     }
 }

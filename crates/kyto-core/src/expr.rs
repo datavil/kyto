@@ -3,7 +3,8 @@
 //!
 //! Does: build immutable expression trees from sources ([`Source`]), literals and
 //! operations (comparison, arithmetic, `&`, `|`, `~`, `str.starts_with`,
-//! `str.ends_with`, the null tests `is_null` and `is_not_null`); carry each expression's dtype kind ([`ExprDtype`]) and reject an
+//! `str.ends_with`, the null tests `is_null` and `is_not_null`), and mark a column read for
+//! recomputing from its lineage (`recompute`, task 3.8); carry each expression's dtype kind ([`ExprDtype`]) and reject an
 //! operand of the wrong kind with `KY-E205`; write an expression as the Python code that
 //! builds it (`Display`, used in error messages).
 //! Does not: resolve names against a schema (task 3.5), or evaluate anything.
@@ -538,6 +539,37 @@ impl<A: ExprAxis> Expr<A> {
         ))
     }
 
+    /// This column read marked to be computed again from its lineage instead of read as
+    /// stored (task 3.8): `cell_column('n_genes').recompute()`. A new expression; its
+    /// dtype stays as it was (the plan resolves it from the schema). Calling it on a
+    /// recomputed column gives that column back. The resolver checks that the store
+    /// records lineage for the column (`KY-E302`); the executor (5.x) computes it.
+    ///
+    /// # Errors
+    /// `KY-E213` if this expression is not a plain column read (`cell_column(...)` /
+    /// `gene_column(...)`).
+    pub fn recompute(&self) -> Result<Self, KytoError> {
+        match self.node.as_ref() {
+            ExprNode::Source(Source::Column { name } | Source::Recompute { name }) => {
+                Ok(Self::from_node(
+                    ExprNode::Source(Source::Recompute { name: name.clone() }),
+                    self.dtype,
+                ))
+            }
+            _ => Err(KytoError::RecomputeOperand {
+                expression: self.to_string(),
+                example: format!(
+                    "{}('{}').recompute()",
+                    A::COLUMN,
+                    match A::AXIS {
+                        Axis::Cells => "n_genes",
+                        Axis::Genes => "n_cells",
+                    }
+                ),
+            }),
+        }
+    }
+
     /// The `KY-E206` error for using this expression as `True` / `False` in Python
     /// (`if`, `and`, `or`, `not`, chained comparisons).
     pub fn truth_value_error(&self) -> KytoError {
@@ -736,6 +768,14 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
             ),
             ExprNode::Source(Source::Feature { name }) => {
                 write!(formatter, "feature({})", python_string(&name.to_string()))
+            }
+            ExprNode::Source(Source::Recompute { name }) => {
+                write!(
+                    formatter,
+                    "{}({}).recompute()",
+                    A::COLUMN,
+                    python_string(name)
+                )
             }
             ExprNode::Literal(Literal::Boolean(value)) => {
                 formatter.write_str(if *value { "True" } else { "False" })

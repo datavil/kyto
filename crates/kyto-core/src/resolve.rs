@@ -10,7 +10,9 @@
 //! column's dtype kind from the schema and check the operations on it again
 //! (`KY-E205`), including ordering, which an unordered categorical column does not
 //! have (pandas raises the same); refuse a gene read of a gene removed earlier in the
-//! plan (`KY-E203`, task 3.7, R9).
+//! plan (`KY-E203`, task 3.7, R9); refuse a stored derived cell column (one whose
+//! schema records lineage) read after a step that changed the gene axis (`KY-E301`,
+//! task 3.8) unless the read is `.recompute()`d, which needs that lineage (`KY-E302`).
 //! Does not: suggest close matches for unknown names (task 8.2), look genes up by
 //! symbol (task 3.9), or check that a cell ID exists (the plan holds no cell IDs).
 
@@ -37,6 +39,7 @@ pub struct Resolver<'a> {
     schema: &'a AtlasSchema,
     gene_ids: &'a GeneIds,
     removed_genes: Option<&'a RemovedGenes>,
+    gene_axis_changed_by: Option<&'a str>,
     default_layer: Option<&'a str>,
     store: &'a str,
 }
@@ -133,6 +136,7 @@ impl<'a> Resolver<'a> {
             schema,
             gene_ids,
             removed_genes: None,
+            gene_axis_changed_by: None,
             default_layer,
             store,
         }
@@ -145,6 +149,32 @@ impl<'a> Resolver<'a> {
         Self {
             removed_genes: Some(removed_genes),
             ..self
+        }
+    }
+
+    /// This resolver, refusing reads of stored derived cell columns (columns whose
+    /// schema records lineage) as stale (`KY-E301`): `changed_by` (a plan node, as
+    /// messages name it: `filter_genes`) changed the gene axis after they were computed.
+    /// Every stored column was computed before the plan, so any such node makes them
+    /// stale, whichever genes it keeps. A `.recompute()`d read is not refused.
+    pub fn with_gene_axis_changed_by(self, changed_by: &'a str) -> Self {
+        Self {
+            gene_axis_changed_by: Some(changed_by),
+            ..self
+        }
+    }
+
+    /// `KY-E301` if `column`, read on axis `axis`, is a stored derived cell column and
+    /// the gene axis changed upstream.
+    fn check_not_stale(&self, axis: Axis, column: &ColumnSchema) -> Result<(), KytoError> {
+        match self.gene_axis_changed_by {
+            Some(changed_by) if axis == Axis::Cells && column.lineage.is_some() => {
+                Err(KytoError::StaleColumn {
+                    column: column.name.clone(),
+                    changed_by: changed_by.to_owned(),
+                })
+            }
+            _ => Ok(()),
         }
     }
 
@@ -176,6 +206,9 @@ impl<'a> Resolver<'a> {
     /// - `KY-E205` if a resolved column's kind does not fit an operation on it.
     /// - `KY-E203` if a gene read (`gene_expression`, or a `feature(...)` name that
     ///   resolves to one gene) names a gene removed earlier in the plan.
+    /// - `KY-E301` if a cell column read (`cell_column`, or a `feature(...)` name that
+    ///   resolves to one) names a stored derived column after the gene axis changed.
+    /// - `KY-E302` if a `.recompute()`d column records no lineage.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
         self.node(expr.node())
     }
@@ -234,7 +267,9 @@ impl<'a> Resolver<'a> {
 
     /// Whether `expr` is a resolved column stored as an unordered `Enum`.
     fn is_unordered_enum<A: ExprAxis>(&self, expr: &Expr<A>) -> bool {
-        let ExprNode::Source(Source::Column { name }) = expr.node().as_ref() else {
+        let ExprNode::Source(Source::Column { name } | Source::Recompute { name }) =
+            expr.node().as_ref()
+        else {
             return false;
         };
         self.column(A::AXIS, name)
@@ -313,6 +348,25 @@ impl<'a> Resolver<'a> {
                         format!("the {word} table has no column with this name"),
                     )
                 })?;
+                self.check_not_stale(A::AXIS, column)?;
+                (source.clone(), ExprDtype::of_column(column.dtype))
+            }
+            Source::Recompute { name } => {
+                let word = axis_word(A::AXIS);
+                let column = self.column(A::AXIS, name).ok_or_else(|| {
+                    unknown(
+                        format!("{word} column"),
+                        name,
+                        format!("the {word} table has no column with this name"),
+                    )
+                })?;
+                if column.lineage.is_none() {
+                    return Err(KytoError::NoLineage {
+                        expression: code(),
+                        kind: format!("{word} column"),
+                        column: name.clone(),
+                    });
+                }
                 (source.clone(), ExprDtype::of_column(column.dtype))
             }
             Source::Expression { layer, gene_id } => {
@@ -459,8 +513,14 @@ impl<'a> Resolver<'a> {
             0 => Err(unknown(self.no_feature_problem(name))),
             1 => {
                 let candidate = candidates.remove(0);
-                if let Candidate::Gene { gene_id, .. } = &candidate {
-                    self.check_not_removed(gene_id)?;
+                match &candidate {
+                    Candidate::Gene { gene_id, .. } => self.check_not_removed(gene_id)?,
+                    Candidate::Column { name, .. } => {
+                        if let Some(column) = self.column(Axis::Cells, name) {
+                            self.check_not_stale(Axis::Cells, column)?;
+                        }
+                    }
+                    Candidate::Embedding { .. } => {}
                 }
                 Ok(candidate.into_source())
             }

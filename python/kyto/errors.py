@@ -24,6 +24,7 @@ __all__ = [
     "InputFileError",
     "KytoError",
     "LayerDtypeError",
+    "LineageError",
     "MemoryLimitError",
     "MissingMemberError",
     "NotImplementedYetError",
@@ -264,6 +265,25 @@ class StaleColumnError(KytoError, ValueError):
     """
 
 
+class LineageError(KytoError, ValueError):
+    """A column is asked to be recomputed but records no lineage to recompute it from.
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E302``: A column without lineage is asked to be recomputed.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = LineageError("KY-E302", expression="cell_column('n_genes').recompute()", kind="cell column", column="n_genes")
+    >>> error.code
+    'KY-E302'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
 class MemoryLimitError(KytoError, MemoryError):
     """A plan cannot run within its memory limit.
 
@@ -442,6 +462,7 @@ class ExpressionError(KytoError, TypeError):
     - ``KY-E207``: An expression tree is deeper than kyto builds.
     - ``KY-E209``: An embedding component is not a non-negative int.
     - ``KY-E212``: An expression is compared with None, which is not a test for missing values.
+    - ``KY-E213``: `.recompute()` is called on an expression that is not a plain column read.
 
     See `KytoError` for the parameters and attributes.
 
@@ -893,6 +914,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("suggestion", "str"),
         ),
     ),
+    "KY-E213": _Entry(
+        class_name="ExpressionError",
+        message="'.recompute()' needs a plain column read such as {example}, got {expression}",
+        hint="call .recompute() on the column read itself, then build on the result: write {example} first",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e213",
+        fields=(
+            _Field("expression", "str"),
+            _Field("example", "str"),
+        ),
+    ),
     "KY-E301": _Entry(
         class_name="StaleColumnError",
         message="column '{column}' was computed before '{changed_by}' changed its inputs",
@@ -901,6 +932,17 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("column", "str"),
             _Field("changed_by", "str"),
+        ),
+    ),
+    "KY-E302": _Entry(
+        class_name="LineageError",
+        message="{expression} asks to recompute {kind} '{column}', but the store records no lineage for it",
+        hint="only derived columns written by kyto record their lineage (schema.json); read '{column}' as stored, or compute it again from the matrix",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e302",
+        fields=(
+            _Field("expression", "str"),
+            _Field("kind", "str"),
+            _Field("column", "str"),
         ),
     ),
     "KY-E401": _Entry(
