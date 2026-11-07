@@ -11,7 +11,7 @@ kyto is built in 10 workstreams of numbered tasks. An agent takes one unblocked 
 - IDs such as `3.4` never change. New tasks take the next free number; dropped tasks stay, struck through.
 - Start a task only when every task under its **Depends** is ticked.
 - One task = one commit on `main` (no task branches or PRs; decided by the user, Nov 6, 2026). Commit messages start with the ID: `[3.4] feature resolver`.
-- A task is done when its check passes in CI, not before.
+- A task is done when its check and the local gate (AGENTS.md "Run the whole list") pass, not before. CI runs only on demand and on release tags, not on every push (decided by the user, Nov 7, 2026).
 - Reviews cite a rule by its number (`R5`). If a task is unclear, add an open question under it instead of guessing.
 
 **Design rules** (cite as R1–R12)
@@ -64,7 +64,7 @@ Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows,
 - [x] **1.4 CI.** GitHub Actions matrix: Linux, macOS, Windows on x86\_64 and aarch64; wheels built with `maturin-action`; GPU job reserved for a self-hosted runner (9.7).
   - Depends: 1.3
   - Done when: a PR runs lint, tests and wheel builds, all green.
-  - Note: kyto commits straight to `main`, so `.github/workflows/ci.yml` runs on push to `main` as well as on `pull_request`; a green push to `main` satisfies this check.
+  - Note: kyto commits straight to `main`. Since Nov 7, 2026 (user decision) `.github/workflows/ci.yml` runs only on `workflow_dispatch` and `v*` tags, not on push or pull requests; the full matrix stays as is for those runs.
 - [x] **1.5 Test fixtures.** A seeded synthetic generator (cells, genes, sparsity, batches) plus a cached public PBMC dataset; reference outputs from scanpy stored for parity tests.
   - Depends: 1.2
   - Done when: `uv run pytest tests/fixtures` builds every fixture and checks its hash.

@@ -1,18 +1,18 @@
 # CI (task 1.4): lint once, then tests and wheel builds on every OS and architecture.
-# kyto commits straight to main, so CI runs on push to main as well as on pull requests.
+# CI runs only on demand and for releases (decided by the user, Nov 7, 2026): tasks are
+# gated locally by AGENTS.md "Run the whole list". Run it by hand with
+# `gh workflow run ci.yml`; pushing a `v*` tag runs it for a release.
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+  push:
+    tags: ["v*"]
 
-# A newer push to a PR cancels the run it supersedes (Actions minutes are billed).
-# Runs on main are never cancelled: each task commit there must get its own result.
+# A newer run on the same ref cancels the one it supersedes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

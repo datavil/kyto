@@ -50,7 +50,11 @@ decision recorded in the plan.
   tasks stay, struck through.
 - **One task = one commit on `main`.** No task branches or PRs. Commit messages
   start with the ID: `[3.4] feature resolver`.
-- A task is done when its check passes in CI, not before.
+- A task is done when its **Done when** check and the local gate pass, not before. The
+  local gate is "Run the whole list" below. CI (GitHub Actions) runs only on demand
+  (`gh workflow run ci.yml`) and on `v*` release tags, not on every push (decided by
+  the user, Nov 7, 2026). Where a **Done when** says "CI fails if ...", the check must
+  be a command in `Run by CI`, so the local gate enforces it too.
 - If a task is unclear, add an open question under it in the plan instead of guessing.
 
 ## Parity with scanpy (and when not to copy it)
@@ -238,8 +242,8 @@ Tokens are a budget. Spend them on design and verification, not on re-reading or
 
 ## Commands
 
-This is the single list of commands. CI runs the `Run by CI` block below line by line
-(`scripts/agents_commands.py`, lint job) and fails if any command fails or leaves the
+This is the single list of commands. The local gate and CI both run the `Run by CI`
+block below line by line (`scripts/agents_commands.py`; in CI, the lint job) and fail if any command fails or leaves the
 git working tree changed. Change a command here and CI follows; never copy one into
 `.github/workflows/ci.yml` by hand. Run from the repo root.
 
@@ -263,7 +267,8 @@ uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before e
 
 ### Run the whole list
 
-What CI does (`--list` only prints the commands):
+The local gate before every task commit, and what CI does (`--list` only prints the
+commands):
 
 ```bash
 uv run --no-project python scripts/agents_commands.py --list
@@ -277,7 +282,7 @@ uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy
 ```
 
 - **Bench:** no commands yet. `criterion` and `pytest-benchmark` arrive with task 10.3,
-  which adds them to `Run by CI` (or here, if too slow for every push).
+  which adds them to `Run by CI` (or here, if too slow for every task).
 - **Linux:** the Rust test binary links libpython, so `cargo test` needs it on the
   loader path once per shell:
   `export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"`.
