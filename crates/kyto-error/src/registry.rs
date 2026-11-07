@@ -313,6 +313,26 @@ pub enum KytoError {
         /// The deepest expression kyto builds.
         limit: u64,
     },
+    /// KY-E208: A feature name cannot name any feature.
+    #[error("KY-E208: invalid feature name '{name}' in feature(...): {problem}")]
+    FeatureNameSyntax {
+        /// The name as written.
+        name: String,
+        /// What is wrong with it.
+        problem: String,
+    },
+    /// KY-E209: An embedding component is not a non-negative int.
+    #[error("KY-E209: '{constructor}' needs a non-negative int component (0-based), got {got}: {component}")]
+    EmbeddingComponent {
+        /// The constructor called.
+        constructor: String,
+        /// The embedding name passed.
+        name: String,
+        /// What the component was.
+        got: String,
+        /// The component, written as code.
+        component: String,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -341,7 +361,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 35] = [
+    pub const CODES: [&'static str; 37] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -374,6 +394,8 @@ impl KytoError {
         "KY-E205",
         "KY-E206",
         "KY-E207",
+        "KY-E208",
+        "KY-E209",
         "KY-E301",
         "KY-E401",
         "KY-E501",
@@ -414,6 +436,8 @@ impl KytoError {
             Self::ExpressionOperand { .. } => "KY-E205",
             Self::ExpressionTruthValue { .. } => "KY-E206",
             Self::ExpressionDepth { .. } => "KY-E207",
+            Self::FeatureNameSyntax { .. } => "KY-E208",
+            Self::EmbeddingComponent { .. } => "KY-E209",
             Self::StaleColumn { .. } => "KY-E301",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
@@ -455,6 +479,8 @@ impl KytoError {
             Self::ExpressionOperand { .. } => "ExpressionError",
             Self::ExpressionTruthValue { .. } => "ExpressionError",
             Self::ExpressionDepth { .. } => "ExpressionError",
+            Self::FeatureNameSyntax { .. } => "ResolutionError",
+            Self::EmbeddingComponent { .. } => "ExpressionError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
@@ -559,6 +585,12 @@ impl KytoError {
             }
             Self::ExpressionDepth { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e207"
+            }
+            Self::FeatureNameSyntax { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e208"
+            }
+            Self::EmbeddingComponent { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e209"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -670,6 +702,12 @@ impl KytoError {
             }
             Self::ExpressionDepth { .. } => {
                 String::from("build long chains as a balanced tree, combining pairs and then pairs of pairs, instead of adding one term at a time")
+            }
+            Self::FeatureNameSyntax { .. } => {
+                String::from("write a short name such as 'CD3E' or 'cluster', or a full name '<prefix>:<name>' such as 'log1p:CD3E' or 'meta:cluster'")
+            }
+            Self::EmbeddingComponent { constructor, name, .. } => {
+                format!("pass the component as an int from 0, such as {constructor}('{name}', 0) for the first one")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -838,6 +876,16 @@ impl KytoError {
                 ("operation", FieldValue::Str(operation.clone())),
                 ("depth", FieldValue::Int(*depth)),
                 ("limit", FieldValue::Int(*limit)),
+            ],
+            Self::FeatureNameSyntax { name, problem } => vec![
+                ("name", FieldValue::Str(name.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::EmbeddingComponent { constructor, name, got, component } => vec![
+                ("constructor", FieldValue::Str(constructor.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("got", FieldValue::Str(got.clone())),
+                ("component", FieldValue::Str(component.clone())),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1010,6 +1058,16 @@ impl KytoError {
                 operation: "+".to_owned(),
                 depth: 1001,
                 limit: 1000,
+            },
+            Self::FeatureNameSyntax {
+                name: "log1p:".to_owned(),
+                problem: "nothing follows 'log1p:'".to_owned(),
+            },
+            Self::EmbeddingComponent {
+                constructor: "cell_embedding".to_owned(),
+                name: "pca".to_owned(),
+                got: "a negative int".to_owned(),
+                component: "-1".to_owned(),
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

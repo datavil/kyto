@@ -494,6 +494,32 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E208"
+variant = "FeatureNameSyntax"
+class = "ResolutionError"
+summary = "A feature name cannot name any feature."
+message = "invalid feature name '{name}' in feature(...): {problem}"
+hint = "write a short name such as 'CD3E' or 'cluster', or a full name '<prefix>:<name>' such as 'log1p:CD3E' or 'meta:cluster'"
+fields = [
+    { name = "name", type = "str", doc = "The name as written.", example = "log1p:" },
+    { name = "problem", type = "str", doc = "What is wrong with it.", example = "nothing follows 'log1p:'" },
+]
+
+[[errors]]
+code = "KY-E209"
+variant = "EmbeddingComponent"
+class = "ExpressionError"
+summary = "An embedding component is not a non-negative int."
+message = "'{constructor}' needs a non-negative int component (0-based), got {got}: {component}"
+hint = "pass the component as an int from 0, such as {constructor}('{name}', 0) for the first one"
+fields = [
+    { name = "constructor", type = "str", doc = "The constructor called.", example = "cell_embedding" },
+    { name = "name", type = "str", doc = "The embedding name passed.", example = "pca" },
+    { name = "got", type = "str", doc = "What the component was.", example = "a negative int" },
+    { name = "component", type = "str", doc = "The component, written as code.", example = "-1" },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"

@@ -6,13 +6,15 @@
 //!
 //! So far: [`AtlasSchema`], the typed contents of a store's `schema.json` (task 3.1);
 //! the typed expressions [`CellExpr`] and [`GeneExpr`] with their [`ExprDtype`] and
-//! [`Source`] tag, lowered to Polars when they read metadata only (task 3.3).
+//! [`Source`] tag, lowered to Polars when they read metadata only (task 3.3); the
+//! parsed but unresolved [`FeatureName`] of `feature(...)` (task 3.4).
 #![forbid(unsafe_code)]
 
 mod expr;
 mod expr_dtype;
 mod expr_polars;
 mod expr_source;
+mod feature_name;
 mod schema;
 mod schema_column;
 
@@ -22,6 +24,7 @@ pub use expr::{
 };
 pub use expr_dtype::ExprDtype;
 pub use expr_source::Source;
+pub use feature_name::FeatureName;
 pub use schema::{
     AtlasSchema, Axis, DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, EmbeddingSchema,
     FloatDtype, GraphSchema, LayerDtype, LayerSchema, ModalitySchema, TableSchema, Tiling,

@@ -22,6 +22,7 @@ use kyto_error::KytoError;
 
 use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
+use crate::feature_name::FeatureName;
 
 mod sealed {
     pub trait Sealed {}
@@ -502,6 +503,23 @@ impl CellExpr {
     }
 }
 
+impl CellExpr {
+    /// The feature `name` (short, such as `CD3E`, or full, such as `log1p:CD3E`), left
+    /// unresolved as a [`Source::Feature`] leaf for the feature resolver (task 3.5).
+    /// Its dtype is `Unknown` until then.
+    ///
+    /// # Errors
+    /// `KY-E208` if `name` cannot name any feature (see [`FeatureName::parse`]).
+    pub fn feature(name: &str) -> Result<Self, KytoError> {
+        Ok(Self::from_node(
+            ExprNode::Source(Source::Feature {
+                name: FeatureName::parse(name)?,
+            }),
+            ExprDtype::Unknown,
+        ))
+    }
+}
+
 impl GeneExpr {
     /// The values of cell `cell_id` across genes, from `layer` (`None`: the plan's
     /// default layer). Numeric.
@@ -658,6 +676,9 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
                 A::EMBEDDING,
                 python_string(name)
             ),
+            ExprNode::Source(Source::Feature { name }) => {
+                write!(formatter, "feature({})", python_string(&name.to_string()))
+            }
             ExprNode::Literal(Literal::Boolean(value)) => {
                 formatter.write_str(if *value { "True" } else { "False" })
             }

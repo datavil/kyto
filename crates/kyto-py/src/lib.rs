@@ -27,6 +27,11 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<expr::PyGeneStringNamespace>()?;
     module.add_function(wrap_pyfunction!(expr::cell_column, module)?)?;
     module.add_function(wrap_pyfunction!(expr::gene_column, module)?)?;
+    module.add_function(wrap_pyfunction!(expr::gene_expression, module)?)?;
+    module.add_function(wrap_pyfunction!(expr::cell_profile, module)?)?;
+    module.add_function(wrap_pyfunction!(expr::cell_embedding, module)?)?;
+    module.add_function(wrap_pyfunction!(expr::gene_embedding, module)?)?;
+    module.add_function(wrap_pyfunction!(expr::feature, module)?)?;
     module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;

@@ -1,11 +1,14 @@
 //! Where the values of an expression come from: the leaves of an expression tree.
 //!
-//! Does: name the four source tags (`Column`, `Expression`, `Profile`, `Embedding`) and
-//! say whether a source is metadata (a table column) or reads the matrix or an
-//! embedding.
+//! Does: name the four source tags (`Column`, `Expression`, `Profile`, `Embedding`),
+//! plus `Feature`, a name not yet resolved to one of them (task 3.4), and say whether a
+//! source is metadata (a table column) or reads the matrix or an embedding.
+//!
 //! Does not: check that the named column, layer, gene, cell or embedding exists (task
 //! 3.5 resolves names against the schema), or decide which axis a source belongs to
 //! ([`crate::CellExpr`] and [`crate::GeneExpr`] constructors do).
+
+use crate::FeatureName;
 
 /// The source tag of an expression leaf.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -36,6 +39,13 @@ pub enum Source {
         name: String,
         /// The component, 0-based.
         component: u64,
+    },
+    /// A feature name given to `feature(...)` and not resolved yet: the feature
+    /// resolver (task 3.5) replaces it with one of the tags above when the plan is
+    /// built (R6). Not metadata until then.
+    Feature {
+        /// The parsed name.
+        name: FeatureName,
     },
 }
 

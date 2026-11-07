@@ -1,7 +1,16 @@
 """kyto: lazy, streaming single-cell analysis, written in Rust, used from Python."""
 
 from kyto._convert import convert
-from kyto._kyto import __version__, cell_column, gene_column
+from kyto._kyto import (
+    __version__,
+    cell_column,
+    cell_embedding,
+    cell_profile,
+    feature,
+    gene_column,
+    gene_embedding,
+    gene_expression,
+)
 from kyto.errors import (
     AxisError,
     CorruptStoreError,
@@ -40,6 +49,11 @@ __all__ = [
     "StoreInputError",
     "__version__",
     "cell_column",
+    "cell_embedding",
+    "cell_profile",
     "convert",
+    "feature",
     "gene_column",
+    "gene_embedding",
+    "gene_expression",
 ]

@@ -190,6 +190,7 @@ class ResolutionError(KytoError, ValueError):
 
     - ``KY-E201``: A short name matches more than one feature.
     - ``KY-E204``: A gene symbol matches more than one gene ID.
+    - ``KY-E208``: A feature name cannot name any feature.
 
     See `KytoError` for the parameters and attributes.
 
@@ -436,6 +437,7 @@ class ExpressionError(KytoError, TypeError):
     - ``KY-E205``: An expression operation is given an operand of a dtype or type it does not accept.
     - ``KY-E206``: An expression is used where Python needs True or False.
     - ``KY-E207``: An expression tree is deeper than kyto builds.
+    - ``KY-E209``: An embedding component is not a non-negative int.
 
     See `KytoError` for the parameters and attributes.
 
@@ -811,6 +813,28 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("operation", "str"),
             _Field("depth", "int"),
             _Field("limit", "int"),
+        ),
+    ),
+    "KY-E208": _Entry(
+        class_name="ResolutionError",
+        message="invalid feature name '{name}' in feature(...): {problem}",
+        hint="write a short name such as 'CD3E' or 'cluster', or a full name '<prefix>:<name>' such as 'log1p:CD3E' or 'meta:cluster'",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e208",
+        fields=(
+            _Field("name", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E209": _Entry(
+        class_name="ExpressionError",
+        message="'{constructor}' needs a non-negative int component (0-based), got {got}: {component}",
+        hint="pass the component as an int from 0, such as {constructor}('{name}', 0) for the first one",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e209",
+        fields=(
+            _Field("constructor", "str"),
+            _Field("name", "str"),
+            _Field("got", "str"),
+            _Field("component", "str"),
         ),
     ),
     "KY-E301": _Entry(

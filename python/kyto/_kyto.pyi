@@ -57,11 +57,12 @@ _D_co = TypeVar("_D_co", bound=ExprDtype, covariant=True)
 class CellExpr(Generic[_D_co]):
     """An expression with one value per cell.
 
-    Built with ``cell_column`` and combined with operators; it records what to compute and
-    reads nothing. The type parameter is the dtype kind (``kyto.dtypes``): ``.str``
-    exists only on ``String`` (and ``Unknown``) expressions, ``&``, ``|`` and ``~``
-    only on ``Boolean`` ones, arithmetic only on ``Numeric`` ones. Combining it with a
-    ``GeneExpr`` raises ``AxisError`` (``KY-E202``, R5).
+    Built with ``cell_column``, ``gene_expression``, ``cell_embedding`` or ``feature``
+    and combined with operators; it records what to compute and reads nothing. The type
+    parameter is the dtype kind (``kyto.dtypes``): ``.str`` exists only on ``String``
+    (and ``Unknown``) expressions, ``&``, ``|`` and ``~`` only on ``Boolean`` ones,
+    arithmetic only on ``Numeric`` ones. Combining it with a ``GeneExpr`` raises
+    ``AxisError`` (``KY-E202``, R5).
 
     Examples
     --------
@@ -278,11 +279,12 @@ def cell_column(name: builtins.str, /) -> CellExpr[Unknown]:
 class GeneExpr(Generic[_D_co]):
     """An expression with one value per gene.
 
-    Built with ``gene_column`` and combined with operators; it records what to compute and
-    reads nothing. The type parameter is the dtype kind (``kyto.dtypes``): ``.str``
-    exists only on ``String`` (and ``Unknown``) expressions, ``&``, ``|`` and ``~``
-    only on ``Boolean`` ones, arithmetic only on ``Numeric`` ones. Combining it with a
-    ``CellExpr`` raises ``AxisError`` (``KY-E202``, R5).
+    Built with ``gene_column``, ``cell_profile`` or ``gene_embedding`` and combined with
+    operators; it records what to compute and reads nothing. The type parameter is the
+    dtype kind (``kyto.dtypes``): ``.str`` exists only on ``String`` (and ``Unknown``)
+    expressions, ``&``, ``|`` and ``~`` only on ``Boolean`` ones, arithmetic only on
+    ``Numeric`` ones. Combining it with a ``CellExpr`` raises ``AxisError``
+    (``KY-E202``, R5).
 
     Examples
     --------
@@ -493,6 +495,146 @@ def gene_column(name: builtins.str, /) -> GeneExpr[Unknown]:
     --------
     >>> gene_column("symbol").str.starts_with("MT-")
     gene_column('symbol').str.starts_with('MT-')
+    """
+
+def gene_expression(
+    gene_id: builtins.str, /, *, layer: builtins.str | None = None
+) -> CellExpr[Numeric]:
+    """The values of one gene across cells, as a ``CellExpr``.
+
+    Parameters
+    ----------
+    gene_id : str
+        The gene ID. It is checked against the schema when the plan is built (task 3.5).
+    layer : str or None, default=None
+        The layer to read. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> gene_expression("CD3E", layer="log1p") > 1.5
+    gene_expression('CD3E', layer='log1p') > 1.5
+    >>> gene_expression("CD3E").dtype
+    <class 'kyto.dtypes.Numeric'>
+    """
+
+def cell_profile(
+    cell_id: builtins.str, /, *, layer: builtins.str | None = None
+) -> GeneExpr[Numeric]:
+    """The values of one cell across genes, as a ``GeneExpr``.
+
+    Parameters
+    ----------
+    cell_id : str
+        The cell ID. It is checked against the schema when the plan is built (task 3.5).
+    layer : str or None, default=None
+        The layer to read. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> cell_profile("AAACATACAACCAC-1", layer="counts") > 0
+    cell_profile('AAACATACAACCAC-1', layer='counts') > 0
+    """
+
+def cell_embedding(name: builtins.str, component: int, /) -> CellExpr[Numeric]:
+    """One component of a cell embedding, as a ``CellExpr``.
+
+    Parameters
+    ----------
+    name : str
+        The embedding name. It is checked against the schema when the plan is built
+        (task 3.5).
+    component : int
+        The component (column of the embedding), 0-based.
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ExpressionError
+        ``KY-E209`` if ``component`` is not a non-negative ``int``.
+
+    Examples
+    --------
+    >>> cell_embedding("pca", 0) * 2
+    cell_embedding('pca', 0) * 2
+    """
+
+def gene_embedding(name: builtins.str, component: int, /) -> GeneExpr[Numeric]:
+    """One component of a gene embedding, as a ``GeneExpr``.
+
+    Parameters
+    ----------
+    name : str
+        The embedding name. It is checked against the schema when the plan is built
+        (task 3.5).
+    component : int
+        The component (column of the embedding), 0-based.
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ExpressionError
+        ``KY-E209`` if ``component`` is not a non-negative ``int``.
+
+    Examples
+    --------
+    >>> gene_embedding("loadings", 1) > 0
+    gene_embedding('loadings', 1) > 0
+    """
+
+def feature(name: builtins.str, /) -> CellExpr[Unknown]:
+    """A cell feature by name, as a ``CellExpr``.
+
+    The name is short (``"CD3E"``, ``"cluster"``) or full (``"<prefix>:<name>"``, such
+    as ``"log1p:CD3E"`` or ``"meta:cluster"``, split at the first ``:``). It is only
+    parsed here: the plan resolves it against the schema when it is built and stores
+    the full name (R6, task 3.5), so the expression's dtype is ``Unknown`` until then.
+
+    Parameters
+    ----------
+    name : str
+        The short or full feature name.
+
+    Returns
+    -------
+    CellExpr[Unknown]
+        An expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ResolutionError
+        ``KY-E208`` if ``name`` cannot name any feature: it is empty, a part around its
+        first ``:`` is empty, or the prefix is not a valid layer or embedding name.
+
+    Examples
+    --------
+    >>> feature("log1p:CD3E") > 1.5
+    feature('log1p:CD3E') > 1.5
+    >>> feature("CD3E").dtype
+    <class 'kyto.dtypes.Unknown'>
+    >>> feature("log1p:")
+    Traceback (most recent call last):
+        ...
+    kyto.errors.ResolutionError: KY-E208: invalid feature name 'log1p:'...
     """
 
 def scan(store: str | os.PathLike[str], /) -> Atlas:
