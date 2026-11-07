@@ -9,7 +9,8 @@
 //! embedding name, and the cell ID of `cell_profile` for being non-empty; set each
 //! column's dtype kind from the schema and check the operations on it again
 //! (`KY-E205`), including ordering, which an unordered categorical column does not
-//! have (pandas raises the same).
+//! have (pandas raises the same); refuse a gene read of a gene removed earlier in the
+//! plan (`KY-E203`, task 3.7, R9).
 //! Does not: suggest close matches for unknown names (task 8.2), look genes up by
 //! symbol (task 3.9), or check that a cell ID exists (the plan holds no cell IDs).
 
@@ -20,6 +21,7 @@ use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
 use crate::feature_name::FeatureName;
 use crate::gene_ids::GeneIds;
+use crate::removed_genes::RemovedGenes;
 use crate::schema::{AtlasSchema, Axis, EmbeddingSchema, TableSchema};
 use crate::schema_column::{ColumnDtype, ColumnSchema};
 use crate::{BinaryOp, CellAxis};
@@ -27,12 +29,14 @@ use crate::{BinaryOp, CellAxis};
 /// The prefix of a cell table column in a full feature name: `meta:cluster`.
 pub const META_PREFIX: &str = "meta";
 
-/// Resolves expressions against one plan: its schema, its store's gene IDs and its
-/// default layer. Holds borrowed state only and changes nothing.
+/// Resolves expressions against one plan: its schema, its store's gene IDs, the genes
+/// removed upstream and its default layer. Holds borrowed state only and changes
+/// nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct Resolver<'a> {
     schema: &'a AtlasSchema,
     gene_ids: &'a GeneIds,
+    removed_genes: Option<&'a RemovedGenes>,
     default_layer: Option<&'a str>,
     store: &'a str,
 }
@@ -128,8 +132,33 @@ impl<'a> Resolver<'a> {
         Self {
             schema,
             gene_ids,
+            removed_genes: None,
             default_layer,
             store,
+        }
+    }
+
+    /// This resolver, refusing reads of the genes in `removed_genes` (`KY-E203`). The
+    /// genes stay in `gene_ids`: a removed gene is a known name that can no longer be
+    /// read, not an unknown one (`KY-E210`).
+    pub fn with_removed_genes(self, removed_genes: &'a RemovedGenes) -> Self {
+        Self {
+            removed_genes: Some(removed_genes),
+            ..self
+        }
+    }
+
+    /// `KY-E203` if `gene_id` was removed earlier in the plan.
+    fn check_not_removed(&self, gene_id: &str) -> Result<(), KytoError> {
+        match self
+            .removed_genes
+            .and_then(|removed| removed.removed_by(gene_id))
+        {
+            Some(removed_by) => Err(KytoError::RemovedGene {
+                gene: gene_id.to_owned(),
+                removed_by: removed_by.to_owned(),
+            }),
+            None => Ok(()),
         }
     }
 
@@ -145,6 +174,8 @@ impl<'a> Resolver<'a> {
     /// - `KY-E211` if a gene or cell is read from the default layer and there is none.
     /// - `KY-E109` if a layer or embedding named in full is not in the store.
     /// - `KY-E205` if a resolved column's kind does not fit an operation on it.
+    /// - `KY-E203` if a gene read (`gene_expression`, or a `feature(...)` name that
+    ///   resolves to one gene) names a gene removed earlier in the plan.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
         self.node(expr.node())
     }
@@ -189,6 +220,7 @@ impl<'a> Resolver<'a> {
             }
             ExprNode::Not(input) => self.node::<A>(input)?.not(),
             ExprNode::Str { function, input } => self.node::<A>(input)?.str(function.clone()),
+            ExprNode::Null { test, input } => self.node::<A>(input)?.null_test(*test),
         }
     }
 
@@ -291,6 +323,7 @@ impl<'a> Resolver<'a> {
                         "no gene of the store has this gene_id".to_owned(),
                     ));
                 }
+                self.check_not_removed(gene_id)?;
                 let layer = self.layer(layer.as_deref(), &code())?;
                 (
                     Source::Expression {
@@ -424,7 +457,13 @@ impl<'a> Resolver<'a> {
         }
         match candidates.len() {
             0 => Err(unknown(self.no_feature_problem(name))),
-            1 => Ok(candidates.remove(0).into_source()),
+            1 => {
+                let candidate = candidates.remove(0);
+                if let Candidate::Gene { gene_id, .. } = &candidate {
+                    self.check_not_removed(gene_id)?;
+                }
+                Ok(candidate.into_source())
+            }
             _ => Err(KytoError::AmbiguousName {
                 name: name.to_string(),
                 candidates: Self::candidate_names(&candidates),

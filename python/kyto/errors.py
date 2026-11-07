@@ -441,6 +441,7 @@ class ExpressionError(KytoError, TypeError):
     - ``KY-E206``: An expression is used where Python needs True or False.
     - ``KY-E207``: An expression tree is deeper than kyto builds.
     - ``KY-E209``: An embedding component is not a non-negative int.
+    - ``KY-E212``: An expression is compared with None, which is not a test for missing values.
 
     See `KytoError` for the parameters and attributes.
 
@@ -879,6 +880,17 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("expression", "str"),
             _Field("layers", "list[str]"),
+        ),
+    ),
+    "KY-E212": _Entry(
+        class_name="ExpressionError",
+        message="'{operation}' with None does not test for missing values: {expression}",
+        hint="write {suggestion} instead; missing values are null (R9)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e212",
+        fields=(
+            _Field("operation", "str"),
+            _Field("expression", "str"),
+            _Field("suggestion", "str"),
         ),
     ),
     "KY-E301": _Entry(

@@ -62,3 +62,13 @@ def resolved(atlas: Atlas, numeric: CellExpr[Numeric], text: GeneExpr[String]) -
     _ = (cell, gene)
     _ = atlas.resolve(numeric).str  # pyright: ignore[reportAttributeAccessIssue]
     _ = atlas.resolve("CD3E")  # pyright: ignore[reportCallIssue, reportArgumentType]
+
+
+def null_tests(numeric: CellExpr[Numeric], text: GeneExpr[String]) -> None:
+    """Null tests take any kind and give a boolean of the same axis (task 3.7)."""
+    missing: CellExpr[Boolean] = numeric.is_null()
+    present: GeneExpr[Boolean] = text.is_not_null()
+    keep: CellExpr[Boolean] = ~cell_column("cell_type").is_null() & missing
+    _ = (present, keep)
+    _ = numeric.is_null().str  # pyright: ignore[reportAttributeAccessIssue]
+    _ = numeric.is_null() & text.is_null()  # pyright: ignore[reportOperatorIssue]

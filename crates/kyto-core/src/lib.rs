@@ -9,7 +9,9 @@
 //! the typed expressions [`CellExpr`] and [`GeneExpr`] with their [`ExprDtype`] and
 //! [`Source`] tag, lowered to Polars when they read metadata only (task 3.3); the
 //! parsed [`FeatureName`] of `feature(...)` (task 3.4); the [`Resolver`] that checks every
-//! name against a plan's schema and [`GeneIds`] and stores it in full (task 3.5).
+//! name against a plan's schema and [`GeneIds`] and stores it in full (task 3.5); the
+//! missing-value rules of R9 (task 3.7): null tests on expressions ([`NullTest`]) and
+//! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`).
 #![forbid(unsafe_code)]
 
 mod expr;
@@ -18,18 +20,20 @@ mod expr_polars;
 mod expr_source;
 mod feature_name;
 mod gene_ids;
+mod removed_genes;
 mod resolve;
 mod schema;
 mod schema_column;
 
 pub use expr::{
     BinaryOp, CellAxis, CellExpr, Expr, ExprAxis, ExprNode, GeneAxis, GeneExpr, Literal,
-    MAX_EXPR_DEPTH, Operand, StrFunction, mixed_axes,
+    MAX_EXPR_DEPTH, NullTest, Operand, StrFunction, mixed_axes,
 };
 pub use expr_dtype::ExprDtype;
 pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;
+pub use removed_genes::RemovedGenes;
 pub use resolve::{META_PREFIX, Resolver};
 pub use schema::{
     AtlasSchema, Axis, DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, EmbeddingSchema,

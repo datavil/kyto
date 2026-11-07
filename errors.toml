@@ -551,6 +551,19 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E212"
+variant = "NullComparison"
+class = "ExpressionError"
+summary = "An expression is compared with None, which is not a test for missing values."
+message = "'{operation}' with None does not test for missing values: {expression}"
+hint = "write {suggestion} instead; missing values are null (R9)"
+fields = [
+    { name = "operation", type = "str", doc = "The comparison, `==` or `!=`.", example = "==" },
+    { name = "expression", type = "str", doc = "The comparison as written, as code.", example = "cell_column('cell_type') == None" },
+    { name = "suggestion", type = "str", doc = "The null test to write instead, as code.", example = "cell_column('cell_type').is_null()" },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"

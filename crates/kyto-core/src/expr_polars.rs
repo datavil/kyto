@@ -7,7 +7,7 @@
 
 use polars::prelude::{DataType, Expr as PolarsExpr, Operator, binary_expr, col, lit};
 
-use crate::expr::{BinaryOp, Expr, ExprAxis, ExprNode, Literal, StrFunction};
+use crate::expr::{BinaryOp, Expr, ExprAxis, ExprNode, Literal, NullTest, StrFunction};
 use crate::expr_source::Source;
 
 impl<A: ExprAxis> Expr<A> {
@@ -15,7 +15,10 @@ impl<A: ExprAxis> Expr<A> {
     /// reads the matrix or an embedding (see [`Expr::is_metadata_only`]).
     ///
     /// Columns lower to `col(name)` with the name as written; `/` is true division; the
-    /// input of a `str` function is cast to String first, so `Enum` columns work.
+    /// input of a `str` function is cast to String first, so `Enum` columns work. Missing
+    /// values are Polars nulls (R9, format.md §5.5) and follow Polars: a comparison or
+    /// arithmetic with a null is null, `&` and `|` are three-valued (`null | true` is
+    /// true), and a filter keeps only rows where the condition is true.
     pub fn to_polars(&self) -> Option<PolarsExpr> {
         lower(self.node())
     }
@@ -56,5 +59,9 @@ fn lower(node: &ExprNode) -> Option<PolarsExpr> {
                 StrFunction::EndsWith(suffix) => strings.ends_with(lit(suffix.as_str())),
             }
         }
+        ExprNode::Null { test, input } => match test {
+            NullTest::IsNull => lower(input)?.is_null(),
+            NullTest::IsNotNull => lower(input)?.is_not_null(),
+        },
     })
 }

@@ -13,7 +13,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use kyto_core::{AtlasSchema, Expr, ExprAxis, GeneIds, Resolver};
+use kyto_core::{AtlasSchema, Expr, ExprAxis, GeneIds, RemovedGenes, Resolver};
 use kyto_error::KytoError;
 
 use crate::scan::Scan;
@@ -44,18 +44,36 @@ impl Plan {
     /// `gene_expression('CD3E', layer='log1p')`), so it means the same thing whatever is
     /// added to the store or the plan later. See [`Resolver::resolve`].
     ///
+    /// A gene removed upstream ([`Plan::removed_genes`]) is refused with `KY-E203`.
+    ///
     /// # Errors
-    /// `KY-E201`, `KY-E205`, `KY-E210`, `KY-E211` or `KY-E109`, as
+    /// `KY-E201`, `KY-E203`, `KY-E205`, `KY-E210`, `KY-E211` or `KY-E109`, as
     /// [`Resolver::resolve`] lists them.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
         let root = self.root();
+        let removed_genes = self.removed_genes();
         Resolver::new(
             self.schema(),
             root.gene_ids(),
             self.default_layer(),
             root.source(),
         )
+        .with_removed_genes(&removed_genes)
         .resolve(expr)
+    }
+
+    /// The genes removed by nodes of this plan, each with the node that removed it, as
+    /// known when the plan is built (R9). No node removes genes yet, so this is empty;
+    /// task 4.1's `SelectGenes` adds its genes here (walking from the scan downward, see
+    /// [`RemovedGenes::insert`]), and a filter on data leaves its check to the executor.
+    pub fn removed_genes(&self) -> RemovedGenes {
+        let removed = RemovedGenes::new();
+        for node in self.nodes() {
+            match node {
+                Self::Scan(_) | Self::WithDefaultLayer(_) => {}
+            }
+        }
+        removed
     }
 
     /// This plan with its default layer set to `layer` (a new plan; `self` is unchanged).

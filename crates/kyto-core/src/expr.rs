@@ -3,7 +3,7 @@
 //!
 //! Does: build immutable expression trees from sources ([`Source`]), literals and
 //! operations (comparison, arithmetic, `&`, `|`, `~`, `str.starts_with`,
-//! `str.ends_with`); carry each expression's dtype kind ([`ExprDtype`]) and reject an
+//! `str.ends_with`, the null tests `is_null` and `is_not_null`); carry each expression's dtype kind ([`ExprDtype`]) and reject an
 //! operand of the wrong kind with `KY-E205`; write an expression as the Python code that
 //! builds it (`Display`, used in error messages).
 //! Does not: resolve names against a schema (task 3.5), or evaluate anything.
@@ -196,6 +196,26 @@ impl StrFunction {
     }
 }
 
+/// A test for missing values (task 3.7, R9). Each returns a boolean expression that is
+/// never null itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NullTest {
+    /// `is_null()`: true where the value is missing.
+    IsNull,
+    /// `is_not_null()`: true where the value is present.
+    IsNotNull,
+}
+
+impl NullTest {
+    /// The Python method name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::IsNull => "is_null",
+            Self::IsNotNull => "is_not_null",
+        }
+    }
+}
+
 /// A node of an expression tree. Children are shared through `Arc`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprNode {
@@ -221,6 +241,13 @@ pub enum ExprNode {
         /// The string input.
         input: Arc<ExprNode>,
     },
+    /// `input.is_null()` or `input.is_not_null()`.
+    Null {
+        /// The test.
+        test: NullTest,
+        /// The input, of any kind.
+        input: Arc<ExprNode>,
+    },
 }
 
 impl ExprNode {
@@ -231,7 +258,9 @@ impl ExprNode {
             Self::Source(source) => source.is_metadata(),
             Self::Literal(_) => true,
             Self::Binary { left, right, .. } => left.is_metadata_only() && right.is_metadata_only(),
-            Self::Not(input) | Self::Str { input, .. } => input.is_metadata_only(),
+            Self::Not(input) | Self::Str { input, .. } | Self::Null { input, .. } => {
+                input.is_metadata_only()
+            }
         }
     }
 }
@@ -491,6 +520,24 @@ impl<A: ExprAxis> Expr<A> {
         ))
     }
 
+    /// `self.is_null()` or `self.is_not_null()`: a boolean expression, true where the
+    /// value is missing (or present). Accepts every kind. Metadata may be missing (R9);
+    /// matrix values, embeddings and literals never are, so on them the test is constant.
+    ///
+    /// # Errors
+    /// `KY-E207` if the result would be deeper than [`MAX_EXPR_DEPTH`].
+    pub fn null_test(&self, test: NullTest) -> Result<Self, KytoError> {
+        let depth = Self::deeper(test.name(), self.depth)?;
+        Ok(Self::with_depth(
+            ExprNode::Null {
+                test,
+                input: Arc::clone(&self.node),
+            },
+            ExprDtype::Boolean,
+            depth,
+        ))
+    }
+
     /// The `KY-E206` error for using this expression as `True` / `False` in Python
     /// (`if`, `and`, `or`, `not`, chained comparisons).
     pub fn truth_value_error(&self) -> KytoError {
@@ -718,6 +765,20 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
                     Self::child(input, nested),
                     function.name(),
                     python_string(function.argument())
+                )
+            }
+            ExprNode::Null { test, input } => {
+                // A method binds tighter than `~` and every operator, so those need
+                // parentheses; so does a literal (`(1).is_null()`, not `1.is_null()`).
+                let nested = matches!(
+                    **input,
+                    ExprNode::Binary { .. } | ExprNode::Not(_) | ExprNode::Literal(_)
+                );
+                write!(
+                    formatter,
+                    "{}.{}()",
+                    Self::child(input, nested),
+                    test.name()
                 )
             }
         }

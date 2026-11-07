@@ -353,6 +353,16 @@ pub enum KytoError {
         /// The store's layers.
         layers: Vec<String>,
     },
+    /// KY-E212: An expression is compared with None, which is not a test for missing values.
+    #[error("KY-E212: '{operation}' with None does not test for missing values: {expression}")]
+    NullComparison {
+        /// The comparison, `==` or `!=`.
+        operation: String,
+        /// The comparison as written, as code.
+        expression: String,
+        /// The null test to write instead, as code.
+        suggestion: String,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -389,7 +399,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 40] = [
+    pub const CODES: [&'static str; 41] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -426,6 +436,7 @@ impl KytoError {
         "KY-E209",
         "KY-E210",
         "KY-E211",
+        "KY-E212",
         "KY-E301",
         "KY-E401",
         "KY-E501",
@@ -471,6 +482,7 @@ impl KytoError {
             Self::EmbeddingComponent { .. } => "KY-E209",
             Self::UnknownName { .. } => "KY-E210",
             Self::NoDefaultLayer { .. } => "KY-E211",
+            Self::NullComparison { .. } => "KY-E212",
             Self::StaleColumn { .. } => "KY-E301",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
@@ -517,6 +529,7 @@ impl KytoError {
             Self::EmbeddingComponent { .. } => "ExpressionError",
             Self::UnknownName { .. } => "ResolutionError",
             Self::NoDefaultLayer { .. } => "ResolutionError",
+            Self::NullComparison { .. } => "ExpressionError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
@@ -634,6 +647,9 @@ impl KytoError {
             }
             Self::NoDefaultLayer { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e211"
+            }
+            Self::NullComparison { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e212"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -760,6 +776,9 @@ impl KytoError {
             }
             Self::NoDefaultLayer { layers, .. } => {
                 format!("set one with .with_default_layer(...) before resolving, or name the layer; the store has {}", quoted_list(layers))
+            }
+            Self::NullComparison { suggestion, .. } => {
+                format!("write {suggestion} instead; missing values are null (R9)")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -951,6 +970,11 @@ impl KytoError {
             Self::NoDefaultLayer { expression, layers } => vec![
                 ("expression", FieldValue::Str(expression.clone())),
                 ("layers", FieldValue::StrList(layers.clone())),
+            ],
+            Self::NullComparison { operation, expression, suggestion } => vec![
+                ("operation", FieldValue::Str(operation.clone())),
+                ("expression", FieldValue::Str(expression.clone())),
+                ("suggestion", FieldValue::Str(suggestion.clone())),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1147,6 +1171,11 @@ impl KytoError {
             Self::NoDefaultLayer {
                 expression: "feature('CD3E')".to_owned(),
                 layers: vec!["counts".to_owned(), "log1p".to_owned()],
+            },
+            Self::NullComparison {
+                operation: "==".to_owned(),
+                expression: "cell_column('cell_type') == None".to_owned(),
+                suggestion: "cell_column('cell_type').is_null()".to_owned(),
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

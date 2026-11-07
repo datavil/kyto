@@ -2,7 +2,9 @@
 //! format.md §4.8).
 //!
 //! Does: hold one block of rows as `indptr: u64`, `indices: u32` and `data: f32 | u32`,
-//! read through slices.
+//! read through slices; densify it, or one gene of it, with every absent entry 0 (R9,
+//! task 3.7). Every dense read of layer values goes through these, so the rule lives in
+//! one place.
 //! Does not: pool or align its buffers (task 5.1 adds that behind the same accessors),
 //! or know which cells its rows are (the tile reader's `SelectedBlock` says).
 //!
@@ -23,6 +25,31 @@ pub enum CellValues<'a> {
 }
 
 impl CellValues<'_> {
+    /// Number of values.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F32(values) => values.len(),
+            Self::U32(values) => values.len(),
+        }
+    }
+
+    /// True when there are no values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Dense values densified from a [`CellBlock`], in the layer's dtype. Absent entries
+/// are 0, never null or `NaN` (R9).
+#[derive(Debug, Clone, PartialEq)]
+pub enum DenseValues {
+    /// Values of a `float32` layer.
+    F32(Vec<f32>),
+    /// Values of a `uint32` layer.
+    U32(Vec<u32>),
+}
+
+impl DenseValues {
     /// Number of values.
     pub fn len(&self) -> usize {
         match self {
@@ -151,6 +178,100 @@ impl CellBlock {
     /// Number of stored entries.
     pub fn nnz(&self) -> u64 {
         self.indices.len() as u64
+    }
+
+    /// The block as a dense row-major `n_rows x n_genes` array: the value of row `r` and
+    /// gene position `g` is at `r * n_genes + g`, and every entry the block does not store
+    /// is 0 (R9). Stored values, `NaN` included, are copied as they are.
+    ///
+    /// Allocates the whole array: callers bound its size first (R8; `to_dense(max_bytes=)`
+    /// is task 7.3, block sizes are the physical plan's, task 4.5).
+    ///
+    /// # Errors
+    /// `KY-E117` if `n_rows x n_genes` values are more bytes than this platform can
+    /// address (`isize::MAX`), or if the allocation fails.
+    pub fn to_dense(&self) -> Result<DenseValues, KytoError> {
+        Ok(match &self.data {
+            CellData::F32(values) => DenseValues::F32(self.scatter(values)?),
+            CellData::U32(values) => DenseValues::U32(self.scatter(values)?),
+        })
+    }
+
+    /// The values of gene position `position` (in the gene selection) for every row, in
+    /// row order; a row that does not store the gene gives 0 (R9).
+    ///
+    /// # Errors
+    /// `KY-E117` if `position` is not below [`CellBlock::n_genes`].
+    pub fn gene_values(&self, position: u32) -> Result<DenseValues, KytoError> {
+        if u64::from(position) >= self.n_genes {
+            return Err(KytoError::InvalidCellBlock {
+                context: "CellBlock::gene_values".to_owned(),
+                problem: format!(
+                    "gene position {position} is not below n_genes = {}",
+                    self.n_genes
+                ),
+            });
+        }
+        Ok(match &self.data {
+            CellData::F32(values) => DenseValues::F32(self.gather(values, position)),
+            CellData::U32(values) => DenseValues::U32(self.gather(values, position)),
+        })
+    }
+
+    /// The bounds of row `row` in `indices` and `data`.
+    fn row_range(&self, row: usize) -> std::ops::Range<usize> {
+        // indptr was checked: it does not decrease and ends at indices.len().
+        self.indptr[row] as usize..self.indptr[row + 1] as usize
+    }
+
+    /// `values` written into a zeroed row-major `n_rows x n_genes` array.
+    fn scatter<T: Copy + Default>(&self, values: &[T]) -> Result<Vec<T>, KytoError> {
+        let too_large = |reason: &str| KytoError::InvalidCellBlock {
+            context: "CellBlock::to_dense".to_owned(),
+            problem: format!(
+                "{} rows x {} genes of {} bytes each {reason}; densify fewer rows or genes \
+                 at a time",
+                self.n_rows(),
+                self.n_genes,
+                size_of::<T>()
+            ),
+        };
+        let n_genes = usize::try_from(self.n_genes).ok();
+        let length = n_genes.and_then(|n_genes| n_genes.checked_mul(self.n_rows()));
+        let bytes = length.and_then(|length| length.checked_mul(size_of::<T>()));
+        let (Some(n_genes), Some(length), Some(bytes)) = (n_genes, length, bytes) else {
+            return Err(too_large("are more bytes than this platform can address"));
+        };
+        if isize::try_from(bytes).is_err() {
+            return Err(too_large("are more bytes than this platform can address"));
+        }
+        let mut dense = Vec::new();
+        dense
+            .try_reserve_exact(length)
+            .map_err(|_| too_large("could not be allocated"))?;
+        dense.resize(length, T::default());
+        for row in 0..self.n_rows() {
+            let range = self.row_range(row);
+            let start = row * n_genes;
+            for (&gene, &value) in self.indices[range.clone()].iter().zip(&values[range]) {
+                dense[start + gene as usize] = value;
+            }
+        }
+        Ok(dense)
+    }
+
+    /// The value at gene `position` of each row, 0 where the row does not store it.
+    fn gather<T: Copy + Default>(&self, values: &[T], position: u32) -> Vec<T> {
+        (0..self.n_rows())
+            .map(|row| {
+                let range = self.row_range(row);
+                // Indices are strictly increasing within a row.
+                match self.indices[range.clone()].binary_search(&position) {
+                    Ok(offset) => values[range.start + offset],
+                    Err(_) => T::default(),
+                }
+            })
+            .collect()
     }
 }
 

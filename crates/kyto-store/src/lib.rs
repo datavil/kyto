@@ -54,7 +54,7 @@ mod value;
 mod write_options;
 mod zarr_arrays;
 
-pub use cell_block::{CellBlock, CellValues};
+pub use cell_block::{CellBlock, CellValues, DenseValues};
 pub use csr::CsrMatrix;
 pub use export_h5ad::{DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad};
 pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};
