@@ -13,7 +13,7 @@ a rechunked frame: each single-chunk batch is one row group (`table_io::write_ta
   has no Int8/Int16/UInt8/UInt16 series at all; all four are needed for §5.3.
 - polars 0.55 does not re-export `ZstdLevel`; `ParquetCompression::Zstd(None)` is level 3.
 - polars publishes no `rust-version` but needs a recent stable Rust (sysinfo 0.39 wants
-  1.95), so the workspace `rust-version = "1.85"` no longer holds; CI builds on stable.
+  1.95), so the workspace `rust-version` is 1.95 (bumped Nov 7, 2026).
 - Polars `Enum` has no `ordered` flag; §8 keeps it in `schema.json` (`TableColumn`).
 - Rust polars 0.55.2 files read in Python polars 2.x with the same dtypes, Enum categories
   included (`tests/table_round_trip.rs::python_polars_reads_the_dtypes`, needs `uv run`).

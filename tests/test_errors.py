@@ -5,6 +5,7 @@ from __future__ import annotations
 import doctest
 import importlib.util
 import pickle
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -202,6 +203,33 @@ VALID = VALID_TEMPLATE.replace("@CODE@", "KY-E" + "901")
 def test_validator_accepts_a_valid_registry() -> None:
     registry = registry_script.parse(VALID)
     assert [entry.code for entry in registry.entries] == ["KY-E" + "901"]
+
+
+ONE_FIELD = VALID.replace('hint = "fix {items}"', 'hint = "fix it"').replace(
+    '    { name = "items", type = "list[str]", doc = "The items.", example = ["b"] },\n',
+    "",
+)
+NO_FIELD = ONE_FIELD.replace("thing '{name}' failed", "thing failed").replace(
+    '    { name = "name", type = "str", doc = "The thing.", example = "a" },\n', ""
+)
+
+
+@pytest.mark.parametrize("text", [NO_FIELD, ONE_FIELD, VALID], ids=["0", "1", "2"])
+def test_generated_python_is_ruff_formatted(text: str) -> None:
+    # A one-field tuple's trailing comma is not "magic", so ruff joins it onto one
+    # line; the generator must already emit that form or the drift check fails.
+    registry = registry_script.parse(text)
+    assert [len(entry.fields) for entry in registry.entries] == [text.count("{ name")]
+    source = registry_script.render_python(registry)
+    formatted = subprocess.run(
+        [sys.executable, "-m", "ruff", "format", "--stdin-filename", "errors.py", "-"],
+        input=source,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=ROOT,
+    ).stdout
+    assert formatted == source
 
 
 @pytest.mark.parametrize(

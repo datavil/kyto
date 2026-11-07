@@ -12,6 +12,7 @@ index order. Parallelism, when needed (2.5), goes across shards, not inside one.
 `tests/layer_format.rs::rewrites_are_byte_identical` guards it; run it several times
 after touching the writer or upgrading zarrs.
 
-**Also:** zarrs 0.23 needs Rust 1.91; the workspace MSRV is 1.85, so cargo resolves
-zarrs 0.22.x. Write metadata with `with_include_zarrs_metadata(false)` so zarr.json
+**Also:** zarrs is pinned to 0.22.x by its version requirement (`0.22.10`); moving to
+0.23 (needs Rust 1.91, within the 1.95 MSRV) is a deliberate upgrade: rerun the
+byte-identity test. Write metadata with `with_include_zarrs_metadata(false)` so zarr.json
 carries no zarrs version attributes.

@@ -504,6 +504,27 @@ def _class_doc(registry: Registry, item: ErrorClass) -> list[str]:
     return lines
 
 
+def _python_fields(fields: tuple[Field, ...]) -> list[str]:
+    """Render an entry's `fields=` tuple exactly as `ruff format` leaves it.
+
+    Two or more fields keep one per line (ruff's magic trailing comma). A single
+    field's trailing comma is required syntax, not magic, so ruff joins it onto one
+    line whenever that fits the 88-character line length.
+    """
+    items = [f'_Field("{item.name}", "{item.type}"),' for item in fields]
+    if not items:
+        return ["        fields=(),"]
+    if len(items) == 1:
+        inline = f"        fields=({items[0]}),"
+        if len(inline) <= 88:
+            return [inline]
+    return [
+        "        fields=(",
+        *[f"            {item}" for item in items],
+        "        ),",
+    ]
+
+
 def render_python(registry: Registry) -> str:
     """Return the text of python/kyto/errors.py."""
     names = ["KytoError", *[item.name for item in registry.classes]]
@@ -670,18 +691,7 @@ def render_python(registry: Registry) -> str:
             f'        message="{entry.message}",',
             f'        hint="{entry.hint}",',
             f'        docs_url="{entry.docs_url(registry.docs_base)}",',
-            *(
-                [
-                    "        fields=(",
-                    *[
-                        f'            _Field("{item.name}", "{item.type}"),'
-                        for item in entry.fields
-                    ],
-                    "        ),",
-                ]
-                if entry.fields
-                else ["        fields=(),"]
-            ),
+            *_python_fields(entry.fields),
             "    ),",
         ]
     out += ["}", ""]

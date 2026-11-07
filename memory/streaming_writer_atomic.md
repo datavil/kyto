@@ -15,9 +15,8 @@ file next to, not inside, the temporary (format.md §10.1 step 5). After locking
 the lock file still exists: another writer's cleanup may have deleted it first.
 
 **Also:**
-- `File::lock` is Rust 1.89; clippy's `incompatible_msrv` fires against the declared
-  `rust-version = "1.85"` (already stale, see polars_parquet_tables.md). `atomic_dir.rs`
-  allows the lint locally; bumping the workspace `rust-version` is a separate decision.
+- `File::lock` is Rust 1.89; the workspace `rust-version` is 1.95 (bumped Nov 7, 2026,
+  see polars_parquet_tables.md), so clippy's `incompatible_msrv` no longer fires.
 - zarrs omits `attributes` from a group `zarr.json` when it is empty.
 - The kill test re-runs its own test binary (`current_exe()`, an `#[ignore]` child test
   gated by an env var) and kills it with `Child::kill` (SIGKILL / TerminateProcess).

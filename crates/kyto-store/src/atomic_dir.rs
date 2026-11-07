@@ -15,11 +15,6 @@
 //! a stale temporary directory (lock free) from one that is still being written (lock
 //! held) and deletes only the stale ones.
 
-// `File::lock` and `File::try_lock` are Rust 1.89. The workspace still declares
-// rust-version 1.85, which no longer holds: polars needs 1.95
-// (memory/polars_parquet_tables.md), and CI builds on stable.
-#![allow(clippy::incompatible_msrv)]
-
 use std::fs::{File, OpenOptions};
 use std::hash::{BuildHasher, Hasher};
 use std::io::ErrorKind;
