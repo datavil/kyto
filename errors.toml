@@ -390,6 +390,19 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E125"
+variant = "InvalidRemoteStore"
+class = "StoreInputError"
+summary = "A remote store URL or one of its storage options cannot be used to open an object store (task 2.8)."
+message = "cannot open remote store '{url}': {problem}"
+hint = "{advice}, then open the store again"
+fields = [
+    { name = "url", type = "str", doc = "The store URL, with any password removed.", example = "s3://bucket/pbmc.kyto" },
+    { name = "problem", type = "str", doc = "What is wrong with the URL or the options.", example = "unknown storage option 'aws_acess_key_id'" },
+    { name = "advice", type = "str", doc = "How to fix it.", example = "use an option key object_store accepts for s3, such as aws_access_key_id, aws_secret_access_key, aws_region, aws_endpoint or allow_http" },
+]
+
+[[errors]]
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"

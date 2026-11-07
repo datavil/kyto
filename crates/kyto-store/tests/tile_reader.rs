@@ -5,15 +5,23 @@
 //!
 //! Reads are counted by [`CountingStore`], a storage wrapper passed to the reader (no
 //! global state, R7), and mapped back to inner chunks through each shard's index.
+//!
+//! Every test runs on each backend of `support/backends.rs` (task 2.8): the local
+//! filesystem, HTTP, and S3 (MinIO) when configured. The reads counted are the same on
+//! all of them, since remote storage reads the byte ranges zarrs asks for.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used)]
+
+#[path = "support/backends.rs"]
+mod backends;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use backends::{Backend, Storage, backends, storage};
 use kyto_store::{
     AxisSelection, CellValues, CsrMatrix, LayerReader, LayerValue, LayerWriteOptions,
     SelectedBlock, TileGrid, Tiling, read_layer, write_layer,
@@ -106,7 +114,7 @@ fn dense(n_cells: u64, n_genes: u64) -> CsrMatrix<f32> {
     matrix
 }
 
-fn open<S: ReadableStorageTraits + 'static>(
+fn open<S: ?Sized + ReadableStorageTraits + 'static>(
     storage: Arc<S>,
     n_cells: u64,
     n_genes: u64,
@@ -116,7 +124,7 @@ fn open<S: ReadableStorageTraits + 'static>(
     LayerReader::open(storage, "test.kyto", LAYER, grid).unwrap()
 }
 
-fn collect<S: ReadableStorageTraits + 'static>(
+fn collect<S: ?Sized + ReadableStorageTraits + 'static>(
     reader: &LayerReader<S>,
     cells: &AxisSelection,
     genes: &AxisSelection,
@@ -305,16 +313,13 @@ fn dense_tile_range(block: u64, gene_block: u64) -> (u64, u64) {
     unreachable!()
 }
 
-fn counted_store() -> (
-    tempfile::TempDir,
-    Arc<CountingStore<FilesystemStore>>,
-    LayerReader<CountingStore<FilesystemStore>>,
-) {
+/// Any backend's storage, with its reads counted.
+type Counted = CountingStore<Arc<Storage>>;
+
+fn counted_store(backend: Backend) -> (tempfile::TempDir, Arc<Counted>, LayerReader<Counted>) {
     let dir = tempfile::tempdir().unwrap();
     write_store(dir.path(), &dense(N_CELLS, N_GENES), TILING, &OPTIONS);
-    let storage = Arc::new(CountingStore::new(
-        FilesystemStore::new(dir.path()).unwrap(),
-    ));
+    let storage = Arc::new(CountingStore::new(storage(backend, dir.path())));
     let reader = open(storage.clone(), N_CELLS, N_GENES, TILING);
     let opened = storage.take();
     assert!(
@@ -393,73 +398,81 @@ fn assert_read_tiles(parts: &Parts, cell_blocks: &[u64], gene_blocks: &[u64]) {
 
 #[test]
 fn three_genes_read_one_gene_block_per_cell_block() {
-    let (dir, storage, reader) = counted_store();
-    // Genes 3, 4 and 5 are gene block 1.
-    let genes = AxisSelection::Indices(vec![3, 4, 5]);
-    let blocks = collect(&reader, &AxisSelection::All, &genes, 2);
-    assert_eq!(blocks.len(), 3);
-    let parts = classify(dir.path(), &storage.take(), 4, 2);
-    // Per cell block exactly one indptr shard index lookup and inner chunk (b, 1), and
-    // only the entry chunks of tiles (b, 1).
-    assert_read_tiles(&parts, &[0, 1, 2], &[1]);
-    let full = dense(N_CELLS, N_GENES);
-    let all_cells: Vec<u64> = (0..N_CELLS).collect();
-    let expected = reference(&full, &all_cells, &[3, 4, 5]);
-    assert_eq!(join(&blocks, 3), expected);
+    for backend in backends() {
+        let (dir, storage, reader) = counted_store(backend);
+        // Genes 3, 4 and 5 are gene block 1.
+        let genes = AxisSelection::Indices(vec![3, 4, 5]);
+        let blocks = collect(&reader, &AxisSelection::All, &genes, 2);
+        assert_eq!(blocks.len(), 3);
+        let parts = classify(dir.path(), &storage.take(), 4, 2);
+        // Per cell block exactly one indptr shard index lookup and inner chunk (b, 1), and
+        // only the entry chunks of tiles (b, 1).
+        assert_read_tiles(&parts, &[0, 1, 2], &[1]);
+        let full = dense(N_CELLS, N_GENES);
+        let all_cells: Vec<u64> = (0..N_CELLS).collect();
+        let expected = reference(&full, &all_cells, &[3, 4, 5]);
+        assert_eq!(join(&blocks, 3), expected);
+    }
 }
 
 #[test]
 fn cell_selection_skips_cell_blocks_and_genes_in_two_blocks_read_two() {
-    let (dir, storage, reader) = counted_store();
-    // Cells 1 and 9: blocks 0 and 2, block 1 is skipped. Genes 2 and 9: blocks 0 and 3.
-    let cells = AxisSelection::Indices(vec![1, 9]);
-    let genes = AxisSelection::Indices(vec![2, 9]);
-    let blocks = collect(&reader, &cells, &genes, 1);
-    assert_eq!(
-        blocks
-            .iter()
-            .map(|block| block.cell_block)
-            .collect::<Vec<_>>(),
-        vec![0, 2]
-    );
-    let parts = classify(dir.path(), &storage.take(), 4, 2);
-    assert_read_tiles(&parts, &[0, 2], &[0, 3]);
-    let expected = reference(&dense(N_CELLS, N_GENES), &[1, 9], &[2, 9]);
-    assert_eq!(join(&blocks, 2), expected);
-    // Gene 9 is position 1 of the selection.
-    assert_eq!(blocks[1].block.indices(), &[0, 1]);
+    for backend in backends() {
+        let (dir, storage, reader) = counted_store(backend);
+        // Cells 1 and 9: blocks 0 and 2, block 1 is skipped. Genes 2 and 9: blocks 0 and 3.
+        let cells = AxisSelection::Indices(vec![1, 9]);
+        let genes = AxisSelection::Indices(vec![2, 9]);
+        let blocks = collect(&reader, &cells, &genes, 1);
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| block.cell_block)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        let parts = classify(dir.path(), &storage.take(), 4, 2);
+        assert_read_tiles(&parts, &[0, 2], &[0, 3]);
+        let expected = reference(&dense(N_CELLS, N_GENES), &[1, 9], &[2, 9]);
+        assert_eq!(join(&blocks, 2), expected);
+        // Gene 9 is position 1 of the selection.
+        assert_eq!(blocks[1].block.indices(), &[0, 1]);
+    }
 }
 
 #[test]
 fn every_tile_is_read_once_for_a_full_read() {
-    let (dir, storage, reader) = counted_store();
-    let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::All, 3);
-    let parts = classify(dir.path(), &storage.take(), 4, 2);
-    assert_read_tiles(&parts, &[0, 1, 2], &[0, 1, 2, 3]);
-    let full = dense(N_CELLS, N_GENES);
-    let (cells, indptr, indices, data) = join(&blocks, N_GENES);
-    assert_eq!(cells, (0..N_CELLS).collect::<Vec<_>>());
-    assert_eq!(
-        (indptr, indices, data),
-        (full.indptr, full.indices, full.data)
-    );
+    for backend in backends() {
+        let (dir, storage, reader) = counted_store(backend);
+        let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::All, 3);
+        let parts = classify(dir.path(), &storage.take(), 4, 2);
+        assert_read_tiles(&parts, &[0, 1, 2], &[0, 1, 2, 3]);
+        let full = dense(N_CELLS, N_GENES);
+        let (cells, indptr, indices, data) = join(&blocks, N_GENES);
+        assert_eq!(cells, (0..N_CELLS).collect::<Vec<_>>());
+        assert_eq!(
+            (indptr, indices, data),
+            (full.indptr, full.indices, full.data)
+        );
+    }
 }
 
 #[test]
 fn empty_selections_read_no_tiles() {
-    let (_dir, storage, reader) = counted_store();
-    let none = AxisSelection::Indices(Vec::new());
-    assert!(collect(&reader, &none, &AxisSelection::All, 2).is_empty());
-    assert!(collect(&reader, &AxisSelection::Range(3..3), &AxisSelection::All, 2).is_empty());
-    // No genes: one block per selected cell block, rows without entries.
-    let blocks = collect(&reader, &AxisSelection::Range(2..6), &none, 2);
-    assert_eq!(blocks.len(), 2);
-    assert_eq!(blocks[0].cells, vec![2, 3]);
-    assert_eq!(blocks[1].cells, vec![4, 5]);
-    assert_eq!(blocks[0].block.indptr(), &[0, 0, 0]);
-    assert_eq!(blocks[0].block.n_genes(), 0);
-    assert!(blocks[1].block.data().is_empty());
-    assert!(storage.take().is_empty(), "an empty selection read storage");
+    for backend in backends() {
+        let (_dir, storage, reader) = counted_store(backend);
+        let none = AxisSelection::Indices(Vec::new());
+        assert!(collect(&reader, &none, &AxisSelection::All, 2).is_empty());
+        assert!(collect(&reader, &AxisSelection::Range(3..3), &AxisSelection::All, 2).is_empty());
+        // No genes: one block per selected cell block, rows without entries.
+        let blocks = collect(&reader, &AxisSelection::Range(2..6), &none, 2);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].cells, vec![2, 3]);
+        assert_eq!(blocks[1].cells, vec![4, 5]);
+        assert_eq!(blocks[0].block.indptr(), &[0, 0, 0]);
+        assert_eq!(blocks[0].block.n_genes(), 0);
+        assert!(blocks[1].block.data().is_empty());
+        assert!(storage.take().is_empty(), "an empty selection read storage");
+    }
 }
 
 #[test]
@@ -471,25 +484,26 @@ fn stream_is_identical_on_any_thread_count() {
         gene_block_size: 4,
     };
     write_store(dir.path(), &matrix, tiling, &OPTIONS);
-    let storage = Arc::new(FilesystemStore::new(dir.path()).unwrap());
-    let reader = open(storage, 37, 23, tiling);
-    let cells = AxisSelection::Indices((0..37).filter(|cell| cell % 3 != 1).collect());
-    let genes = AxisSelection::Indices(vec![0, 3, 4, 5, 9, 16, 22]);
-    let run = |threads: usize, in_flight: usize| {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .unwrap();
-        pool.install(|| collect(&reader, &cells, &genes, in_flight))
-    };
-    let single = run(1, 1);
-    assert_eq!(single.len(), 8);
-    for (threads, in_flight) in [(1, 4), (4, 1), (4, 3), (8, 8), (3, 100)] {
-        assert_eq!(
-            run(threads, in_flight),
-            single,
-            "{threads} threads, {in_flight} in flight"
-        );
+    for backend in backends() {
+        let reader = open(storage(backend, dir.path()), 37, 23, tiling);
+        let cells = AxisSelection::Indices((0..37).filter(|cell| cell % 3 != 1).collect());
+        let genes = AxisSelection::Indices(vec![0, 3, 4, 5, 9, 16, 22]);
+        let run = |threads: usize, in_flight: usize| {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            pool.install(|| collect(&reader, &cells, &genes, in_flight))
+        };
+        let single = run(1, 1);
+        assert_eq!(single.len(), 8);
+        for (threads, in_flight) in [(1, 4), (4, 1), (4, 3), (8, 8), (3, 100)] {
+            assert_eq!(
+                run(threads, in_flight),
+                single,
+                "{backend:?}: {threads} threads, {in_flight} in flight"
+            );
+        }
     }
 }
 
@@ -498,17 +512,18 @@ fn zero_cell_and_zero_gene_stores() {
     for (n_cells, n_genes) in [(0, 5), (6, 0), (0, 0)] {
         let dir = tempfile::tempdir().unwrap();
         write_store(dir.path(), &dense(n_cells, n_genes), TILING, &OPTIONS);
-        let storage = Arc::new(FilesystemStore::new(dir.path()).unwrap());
-        let reader = open(storage, n_cells, n_genes, TILING);
-        let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::All, 2);
-        assert_eq!(
-            blocks.len() as u64,
-            n_cells.div_ceil(4),
-            "{n_cells} x {n_genes}"
-        );
-        for block in &blocks {
-            assert_eq!(block.block.nnz(), 0);
-            assert_eq!(block.block.n_genes(), 0);
+        for backend in backends() {
+            let reader = open(storage(backend, dir.path()), n_cells, n_genes, TILING);
+            let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::All, 2);
+            assert_eq!(
+                blocks.len() as u64,
+                n_cells.div_ceil(4),
+                "{backend:?}: {n_cells} x {n_genes}"
+            );
+            for block in &blocks {
+                assert_eq!(block.block.nnz(), 0);
+                assert_eq!(block.block.n_genes(), 0);
+            }
         }
     }
 }
@@ -524,17 +539,14 @@ fn uint32_layers_stream_uint32_values() {
         data: vec![5, 6, 7],
     };
     write_store(dir.path(), &matrix, TILING, &OPTIONS);
-    let reader = open(
-        Arc::new(FilesystemStore::new(dir.path()).unwrap()),
-        3,
-        4,
-        TILING,
-    );
-    let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::Range(2..4), 1);
-    assert_eq!(blocks.len(), 1);
-    assert_eq!(blocks[0].block.indptr(), &[0, 1, 1, 2]);
-    assert_eq!(blocks[0].block.indices(), &[1, 0]);
-    assert_eq!(blocks[0].block.data(), CellValues::U32(&[6, 7]));
+    for backend in backends() {
+        let reader = open(storage(backend, dir.path()), 3, 4, TILING);
+        let blocks = collect(&reader, &AxisSelection::All, &AxisSelection::Range(2..4), 1);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].block.indptr(), &[0, 1, 1, 2]);
+        assert_eq!(blocks[0].block.indices(), &[1, 0]);
+        assert_eq!(blocks[0].block.data(), CellValues::U32(&[6, 7]));
+    }
 }
 
 fn error_of<T>(result: Result<T, kyto_error::KytoError>) -> kyto_error::KytoError {
@@ -546,92 +558,95 @@ fn error_of<T>(result: Result<T, kyto_error::KytoError>) -> kyto_error::KytoErro
 
 #[test]
 fn bad_selections_fail_before_reading() {
-    let (_dir, storage, reader) = counted_store();
-    let one = NonZeroUsize::new(1).unwrap();
-    let cases = [
-        (
-            AxisSelection::All,
-            AxisSelection::Indices(vec![2, 10]),
-            "invalid genes selection: position 1 is 10, not below the axis length 10",
-        ),
-        (
-            AxisSelection::All,
-            AxisSelection::Indices(vec![5, 3]),
-            "position 1 is 3, which does not follow 5",
-        ),
-        (
-            AxisSelection::All,
-            AxisSelection::Indices(vec![4, 4]),
-            "position 1 repeats 4",
-        ),
-        (
-            AxisSelection::Range(0..11),
-            AxisSelection::All,
-            "invalid cells selection: range 0..11 ends after the axis length 10",
-        ),
-        (
-            AxisSelection::Indices(vec![9, 0]),
-            AxisSelection::All,
-            "invalid cells selection: position 1 is 0, which does not follow 9",
-        ),
-    ];
-    for (cells, genes, message) in cases {
-        let error = error_of(reader.cell_blocks(&cells, &genes, one));
-        assert_eq!(error.code(), "KY-E114");
-        assert!(error.to_string().contains(message), "{error}");
-        assert!(error.hint().contains("sorted, unique"), "{}", error.hint());
+    for backend in backends() {
+        let (_dir, storage, reader) = counted_store(backend);
+        let one = NonZeroUsize::new(1).unwrap();
+        let cases = [
+            (
+                AxisSelection::All,
+                AxisSelection::Indices(vec![2, 10]),
+                "invalid genes selection: position 1 is 10, not below the axis length 10",
+            ),
+            (
+                AxisSelection::All,
+                AxisSelection::Indices(vec![5, 3]),
+                "position 1 is 3, which does not follow 5",
+            ),
+            (
+                AxisSelection::All,
+                AxisSelection::Indices(vec![4, 4]),
+                "position 1 repeats 4",
+            ),
+            (
+                AxisSelection::Range(0..11),
+                AxisSelection::All,
+                "invalid cells selection: range 0..11 ends after the axis length 10",
+            ),
+            (
+                AxisSelection::Indices(vec![9, 0]),
+                AxisSelection::All,
+                "invalid cells selection: position 1 is 0, which does not follow 9",
+            ),
+        ];
+        for (cells, genes, message) in cases {
+            let error = error_of(reader.cell_blocks(&cells, &genes, one));
+            assert_eq!(error.code(), "KY-E114");
+            assert!(error.to_string().contains(message), "{error}");
+            assert!(error.hint().contains("sorted, unique"), "{}", error.hint());
+        }
+        assert!(storage.take().is_empty());
     }
-    assert!(storage.take().is_empty());
 }
 
 #[test]
 fn open_checks_format_version_and_layer() {
-    let dir = tempfile::tempdir().unwrap();
-    write_layer(dir.path(), LAYER, &dense(3, 3), TILING, &OPTIONS).unwrap();
-    let grid = TileGrid::new(3, 3, TILING).unwrap();
-    let try_open = |layer: &str| {
-        let storage = Arc::new(FilesystemStore::new(dir.path()).unwrap());
-        LayerReader::open(storage, "test.kyto", layer, grid).map(|_| ())
-    };
-    let error = error_of(try_open(LAYER));
-    assert_eq!(error.code(), "KY-E116");
-    assert!(
-        error
-            .to_string()
-            .contains("'test.kyto' is not a kyto store: no root zarr.json")
-    );
-    let root = dir.path().join("zarr.json");
-    std::fs::write(
-        &root,
-        r#"{"zarr_format":3,"node_type":"group","attributes":{}}"#,
-    )
-    .unwrap();
-    assert!(
-        error_of(try_open(LAYER))
-            .to_string()
-            .contains("no string attributes.kyto.format_version")
-    );
-    std::fs::write(&root, "not json").unwrap();
-    assert!(
-        error_of(try_open(LAYER))
-            .to_string()
-            .contains("not valid JSON")
-    );
-    for version in ["0.2", "1.0", "0.10", ""] {
-        std::fs::write(&root, root_json(version)).unwrap();
+    for backend in backends() {
+        let dir = tempfile::tempdir().unwrap();
+        write_layer(dir.path(), LAYER, &dense(3, 3), TILING, &OPTIONS).unwrap();
+        let grid = TileGrid::new(3, 3, TILING).unwrap();
+        let try_open = |layer: &str| {
+            LayerReader::open(storage(backend, dir.path()), "test.kyto", layer, grid).map(|_| ())
+        };
         let error = error_of(try_open(LAYER));
-        assert_eq!(error.code(), "KY-E115", "{version}");
+        assert_eq!(error.code(), "KY-E116");
         assert!(
-            error.to_string().contains(&format!(
-                "has format_version '{version}', but this kyto reads only '0.1'"
-            )),
-            "{error}"
+            error
+                .to_string()
+                .contains("'test.kyto' is not a kyto store: no root zarr.json")
         );
+        let root = dir.path().join("zarr.json");
+        std::fs::write(
+            &root,
+            r#"{"zarr_format":3,"node_type":"group","attributes":{}}"#,
+        )
+        .unwrap();
+        assert!(
+            error_of(try_open(LAYER))
+                .to_string()
+                .contains("no string attributes.kyto.format_version")
+        );
+        std::fs::write(&root, "not json").unwrap();
+        assert!(
+            error_of(try_open(LAYER))
+                .to_string()
+                .contains("not valid JSON")
+        );
+        for version in ["0.2", "1.0", "0.10", ""] {
+            std::fs::write(&root, root_json(version)).unwrap();
+            let error = error_of(try_open(LAYER));
+            assert_eq!(error.code(), "KY-E115", "{version}");
+            assert!(
+                error.to_string().contains(&format!(
+                    "has format_version '{version}', but this kyto reads only '0.1'"
+                )),
+                "{error}"
+            );
+        }
+        std::fs::write(&root, root_json("0.1")).unwrap();
+        try_open(LAYER).unwrap();
+        assert_eq!(error_of(try_open("y")).code(), "KY-E109");
+        assert_eq!(error_of(try_open("a/b")).code(), "KY-E102");
     }
-    std::fs::write(&root, root_json("0.1")).unwrap();
-    try_open(LAYER).unwrap();
-    assert_eq!(error_of(try_open("y")).code(), "KY-E109");
-    assert_eq!(error_of(try_open("a/b")).code(), "KY-E102");
 }
 
 #[test]
@@ -642,25 +657,25 @@ fn corrupt_tile_is_reported_and_ends_the_stream() {
     // entries) by swapping shards: cell block 1's indptr shard becomes block 2's.
     let indptr = dir.path().join(format!("layers/{LAYER}/indptr/c"));
     std::fs::copy(indptr.join("2/0/0"), indptr.join("1/0/0")).unwrap();
-    let reader = open(
-        Arc::new(FilesystemStore::new(dir.path()).unwrap()),
-        N_CELLS,
-        N_GENES,
-        TILING,
-    );
-    let stream: Vec<_> = reader
-        .cell_blocks(
-            &AxisSelection::All,
-            &AxisSelection::Indices(vec![0]),
-            NonZeroUsize::new(3).unwrap(),
-        )
-        .unwrap()
-        .collect();
-    assert_eq!(stream.len(), 2, "the stream ends after the error");
-    assert!(stream[0].is_ok());
-    let error = stream[1].as_ref().unwrap_err();
-    assert_eq!(error.code(), "KY-E107");
-    assert!(error.to_string().contains("tile (1, 0)"), "{error}");
+    for backend in backends() {
+        let reader = open(storage(backend, dir.path()), N_CELLS, N_GENES, TILING);
+        let stream: Vec<_> = reader
+            .cell_blocks(
+                &AxisSelection::All,
+                &AxisSelection::Indices(vec![0]),
+                NonZeroUsize::new(3).unwrap(),
+            )
+            .unwrap()
+            .collect();
+        assert_eq!(stream.len(), 2, "the stream ends after the error");
+        assert!(stream[0].is_ok());
+        let error = stream[1].as_ref().unwrap_err();
+        assert_eq!(error.code(), "KY-E107");
+        assert!(
+            error.to_string().contains("tile (1, 0)"),
+            "{backend:?}: {error}"
+        );
+    }
 }
 
 /// A random matrix of the given density, from its own seeded generator (memory/test_seed_isolation.md).
@@ -721,7 +736,6 @@ proptest! {
         let matrix = random_matrix(n_cells, n_genes, density, seed);
         write_store(dir.path(), &matrix, tiling, &OPTIONS);
         let whole: CsrMatrix<f32> = read_layer(dir.path(), LAYER, n_cells, n_genes, tiling).unwrap();
-        let reader = open(Arc::new(FilesystemStore::new(dir.path()).unwrap()), n_cells, n_genes, tiling);
         let cells = subset(n_cells, &cell_mask);
         let genes = subset(n_genes, &gene_mask);
         let (cell_selection, cell_list) = if as_range {
@@ -731,8 +745,12 @@ proptest! {
         } else {
             (AxisSelection::Indices(cells.clone()), cells)
         };
-        let blocks = collect(&reader, &cell_selection, &AxisSelection::Indices(genes.clone()), in_flight);
-        prop_assert_eq!(join(&blocks, genes.len() as u64), reference(&whole, &cell_list, &genes));
+        let expected = reference(&whole, &cell_list, &genes);
+        for backend in backends() {
+            let reader = open(storage(backend, dir.path()), n_cells, n_genes, tiling);
+            let blocks = collect(&reader, &cell_selection, &AxisSelection::Indices(genes.clone()), in_flight);
+            prop_assert_eq!(join(&blocks, genes.len() as u64), expected.clone(), "{:?}", backend);
+        }
     }
 }
 
@@ -750,37 +768,37 @@ fn first_corrupt_tile_is_reported_on_any_thread_count() {
     let mut offsets: Vec<u64> = (0..=64).collect();
     offsets[6] = 7;
     offsets[41] = 42;
-    let storage = Arc::new(FilesystemStore::new(dir.path()).unwrap());
-    let array =
-        zarrs::array::Array::open(storage.clone(), &format!("/layers/{LAYER}/tile_offsets"))
-            .unwrap();
+    let local = Arc::new(FilesystemStore::new(dir.path()).unwrap());
+    let array = zarrs::array::Array::open(local, &format!("/layers/{LAYER}/tile_offsets")).unwrap();
     let mut chunk = offsets.clone();
     chunk.resize(65536, 0);
     array.store_chunk_elements(&[0], &chunk).unwrap();
-    let reader = open(storage, 1, 64, tiling);
-    for threads in [1, 2, 8, 16] {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .build()
-            .unwrap();
-        for _ in 0..20 {
-            let first = pool.install(|| {
-                reader
-                    .cell_blocks(
-                        &AxisSelection::All,
-                        &AxisSelection::All,
-                        NonZeroUsize::new(1).unwrap(),
-                    )
-                    .unwrap()
-                    .next()
-                    .unwrap()
-            });
-            let error = first.unwrap_err();
-            assert_eq!(error.code(), "KY-E107");
-            assert!(
-                error.to_string().contains("tile (0, 5)"),
-                "{threads} threads: {error}"
-            );
+    for backend in backends() {
+        let reader = open(storage(backend, dir.path()), 1, 64, tiling);
+        for threads in [1, 2, 8, 16] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            for _ in 0..20 {
+                let first = pool.install(|| {
+                    reader
+                        .cell_blocks(
+                            &AxisSelection::All,
+                            &AxisSelection::All,
+                            NonZeroUsize::new(1).unwrap(),
+                        )
+                        .unwrap()
+                        .next()
+                        .unwrap()
+                });
+                let error = first.unwrap_err();
+                assert_eq!(error.code(), "KY-E107");
+                assert!(
+                    error.to_string().contains("tile (0, 5)"),
+                    "{backend:?}, {threads} threads: {error}"
+                );
+            }
         }
     }
 }

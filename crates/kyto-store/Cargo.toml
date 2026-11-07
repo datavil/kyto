@@ -20,6 +20,11 @@ zarrs = { version = "0.22.10", default-features = false, features = ["filesystem
 hdf5-metno = { version = "0.15.1", features = ["static", "zlib", "lzf"] }
 flate2 = "1.1.11"
 sha2 = "0.11.1"
+# Remote stores (task 2.8): the object_store version polars already uses, so one copy.
+object_store = { version = "0.13.2", default-features = false, features = ["aws", "gcp", "http"] }
+tokio = { version = "1.54.1", default-features = false, features = ["rt-multi-thread", "net", "time"] }
+futures = "0.3.34"
+url = "2.5.8"
 
 [dev-dependencies]
 proptest = "1.11.0"

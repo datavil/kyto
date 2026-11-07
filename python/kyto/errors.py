@@ -315,6 +315,7 @@ class StoreInputError(KytoError, ValueError):
     - ``KY-E119``: A cell or gene table given to a store writer does not have one row per matrix row or column (format.md section 5.1).
     - ``KY-E123``: An export's target path already exists (sink_h5ad, task 2.7).
     - ``KY-E124``: A store holds a name or value the export format cannot hold (sink_h5ad, task 2.7).
+    - ``KY-E125``: A remote store URL or one of its storage options cannot be used to open an object store (task 2.8).
 
     See `KytoError` for the parameters and attributes.
 
@@ -704,6 +705,17 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("location", "str"),
             _Field("path", "str"),
+            _Field("problem", "str"),
+            _Field("advice", "str"),
+        ),
+    ),
+    "KY-E125": _Entry(
+        class_name="StoreInputError",
+        message="cannot open remote store '{url}': {problem}",
+        hint="{advice}, then open the store again",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e125",
+        fields=(
+            _Field("url", "str"),
             _Field("problem", "str"),
             _Field("advice", "str"),
         ),

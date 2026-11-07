@@ -254,6 +254,7 @@ uv sync                                   # dev env; builds and installs the ext
 uv sync --reinstall-package kyto          # force an extension rebuild (never mix in `maturin develop`)
 uv run cargo build --workspace --locked   # build all crates (uv run: PyO3 sees .venv python)
 uv run cargo test --workspace --locked    # Rust tests (Linux: libpython on LD_LIBRARY_PATH, see below)
+uv run python scripts/remote_store_tests.py   # tile reader suite on S3 in MinIO: native `minio` on PATH, else docker or podman (prints SKIPPED without any)
 uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lint
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format

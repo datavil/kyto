@@ -1,7 +1,7 @@
 //! kyto-store: the on-disk format of a kyto atlas.
 //!
 //! Does: the Zarr v3 layout, tiled sparse matrix I/O, metadata tables and
-//! importers (`.h5ad`, 10x `.h5`, `.mtx`), the `.h5ad` export.
+//! importers (`.h5ad`, 10x `.h5`, `.mtx`), the `.h5ad` export, remote (object store) reads.
 //! Does not: plan, optimize or compute anything; it only reads and writes tiles.
 //!
 //! So far: one whole tiled sparse layer, written by [`write_layer`] and read by
@@ -10,7 +10,8 @@
 //! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8), and a
 //! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
 //! 2.5, §10), and inputs imported into a new store by [`convert`] (`.h5ad`, 10x `.h5`,
-//! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7).
+//! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7), and stores on S3, GCS
+//! or HTTP read through [`RemoteStorage`] by the same [`LayerReader`] (task 2.8).
 #![forbid(unsafe_code)]
 
 mod atomic_dir;
@@ -33,6 +34,7 @@ mod layer_io;
 mod layer_open;
 mod layer_stream;
 mod names;
+mod remote_store;
 mod selection;
 mod store_json;
 mod store_schema;
@@ -58,6 +60,7 @@ pub use import_ids::OnDuplicateIds;
 pub use layer_io::{read_layer, write_layer};
 pub use layer_open::ValueDtype;
 pub use names::validate_member_name;
+pub use remote_store::RemoteStorage;
 pub use selection::AxisSelection;
 pub use store_json::ImportSource;
 pub use store_version::{FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS, check_format_version};

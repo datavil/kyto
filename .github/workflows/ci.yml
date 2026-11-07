@@ -48,8 +48,11 @@ jobs:
       - name: put libpython on the loader path
         run: echo "LD_LIBRARY_PATH=$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
       # Fails on the first failing command, or if the commands changed the tree
-      # (unformatted code, a stale lock file).
+      # (unformatted code, a stale lock file). The runner has docker, so the MinIO reader
+      # tests must run here, not skip (scripts/remote_store_tests.py, task 2.8).
       - run: uv run --no-project python scripts/agents_commands.py --check-clean
+        env:
+          KYTO_REQUIRE_MINIO: "1"
 
   test:
     name: test (${{ matrix.os }})

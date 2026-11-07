@@ -241,6 +241,16 @@ pub enum KytoError {
         /// How to fix it.
         advice: String,
     },
+    /// KY-E125: A remote store URL or one of its storage options cannot be used to open an object store (task 2.8).
+    #[error("KY-E125: cannot open remote store '{url}': {problem}")]
+    InvalidRemoteStore {
+        /// The store URL, with any password removed.
+        url: String,
+        /// What is wrong with the URL or the options.
+        problem: String,
+        /// How to fix it.
+        advice: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -303,7 +313,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 31] = [
+    pub const CODES: [&'static str; 32] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -328,6 +338,7 @@ impl KytoError {
         "KY-E122",
         "KY-E123",
         "KY-E124",
+        "KY-E125",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -364,6 +375,7 @@ impl KytoError {
             Self::CorruptSchema { .. } => "KY-E122",
             Self::OutputExists { .. } => "KY-E123",
             Self::UnsupportedExport { .. } => "KY-E124",
+            Self::InvalidRemoteStore { .. } => "KY-E125",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -401,6 +413,7 @@ impl KytoError {
             Self::CorruptSchema { .. } => "CorruptStoreError",
             Self::OutputExists { .. } => "StoreInputError",
             Self::UnsupportedExport { .. } => "StoreInputError",
+            Self::InvalidRemoteStore { .. } => "StoreInputError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -485,6 +498,9 @@ impl KytoError {
             }
             Self::UnsupportedExport { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e124"
+            }
+            Self::InvalidRemoteStore { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e125"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -584,6 +600,9 @@ impl KytoError {
             }
             Self::UnsupportedExport { advice, .. } => {
                 format!("{advice}, then export again")
+            }
+            Self::InvalidRemoteStore { advice, .. } => {
+                format!("{advice}, then open the store again")
             }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
@@ -726,6 +745,11 @@ impl KytoError {
             Self::UnsupportedExport { location, path, problem, advice } => vec![
                 ("location", FieldValue::Str(location.clone())),
                 ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("advice", FieldValue::Str(advice.clone())),
+            ],
+            Self::InvalidRemoteStore { url, problem, advice } => vec![
+                ("url", FieldValue::Str(url.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
                 ("advice", FieldValue::Str(advice.clone())),
             ],
@@ -881,6 +905,11 @@ impl KytoError {
                 path: "pbmc.h5ad".to_owned(),
                 problem: "h5ad names cannot contain '/'".to_owned(),
                 advice: "rename the column without '/'".to_owned(),
+            },
+            Self::InvalidRemoteStore {
+                url: "s3://bucket/pbmc.kyto".to_owned(),
+                problem: "unknown storage option 'aws_acess_key_id'".to_owned(),
+                advice: "use an option key object_store accepts for s3, such as aws_access_key_id, aws_secret_access_key, aws_region, aws_endpoint or allow_http".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),
