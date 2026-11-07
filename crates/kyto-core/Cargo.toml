@@ -11,8 +11,19 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+kyto-error = { path = "../kyto-error" }
+# Metadata-only expressions lower to Polars `Expr` (task 3.3): the DSL needs `lazy`, the
+# `str` namespace needs `strings`, and polars-expr 0.55.2 compiles `strings` only with
+# `temporal` (it imports polars-time unconditionally). Same version as kyto-store.
+polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "temporal"] }
 serde = { version = "1.0.229", features = ["derive"] }
 
+# Grows the stack on demand in the recursive walks over expression trees (rendering,
+# lowering), as Polars does for its own plans; already a Polars dependency.
+recursive = "0.1.1"
+
 [dev-dependencies]
+# Categorical (`Enum`) columns in the lowering tests; kyto-store enables it anyway.
+polars = { version = "0.55.2", default-features = false, features = ["dtype-categorical"] }
 proptest = "1.11.0"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }

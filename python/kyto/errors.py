@@ -18,6 +18,7 @@ __all__ = [
     "CorruptStoreError",
     "DeviceError",
     "DuplicateIdError",
+    "ExpressionError",
     "FieldValue",
     "FormatVersionError",
     "InputFileError",
@@ -427,6 +428,27 @@ class LayerDtypeError(KytoError, TypeError):
     """
 
 
+class ExpressionError(KytoError, TypeError):
+    """An expression is given an operand, or used in a context, that it does not support.
+
+    Subclasses `KytoError` and `TypeError`. Raised with these codes:
+
+    - ``KY-E205``: An expression operation is given an operand of a dtype or type it does not accept.
+    - ``KY-E206``: An expression is used where Python needs True or False.
+    - ``KY-E207``: An expression tree is deeper than kyto builds.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = ExpressionError("KY-E205", operation="str.starts_with", accepted="a string expression", got="a numeric expression", operand="cell_column('n_genes') + 1")
+    >>> error.code
+    'KY-E205'
+    >>> isinstance(error, TypeError)
+    True
+    """
+
+
 class InputFileError(KytoError, ValueError):
     """An input file given to convert has a format, encoding or value kyto cannot import.
 
@@ -759,6 +781,36 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("symbol", "str"),
             _Field("gene_ids", "list[str]"),
+        ),
+    ),
+    "KY-E205": _Entry(
+        class_name="ExpressionError",
+        message="'{operation}' needs {accepted}, got {got}: {operand}",
+        hint="pass {accepted} to '{operation}', or use an operation that accepts {got}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e205",
+        fields=(
+            _Field("operation", "str"),
+            _Field("accepted", "str"),
+            _Field("got", "str"),
+            _Field("operand", "str"),
+        ),
+    ),
+    "KY-E206": _Entry(
+        class_name="ExpressionError",
+        message="the truth value of an expression is ambiguous: {expression}",
+        hint="combine conditions with &, | and ~ instead of and, or and not, and write a < b < c as (a < b) & (b < c); an expression is evaluated only when the plan runs",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e206",
+        fields=(_Field("expression", "str"),),
+    ),
+    "KY-E207": _Entry(
+        class_name="ExpressionError",
+        message="'{operation}' would make an expression {depth} levels deep; the limit is {limit}",
+        hint="build long chains as a balanced tree, combining pairs and then pairs of pairs, instead of adding one term at a time",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e207",
+        fields=(
+            _Field("operation", "str"),
+            _Field("depth", "int"),
+            _Field("limit", "int"),
         ),
     ),
     "KY-E301": _Entry(

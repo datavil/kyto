@@ -76,6 +76,10 @@ doc = "A layer, embedding or graph is not in the store."
 base = "TypeError"
 doc = "A layer is read with a value dtype other than the one it stores."
 
+[classes.ExpressionError]
+base = "TypeError"
+doc = "An expression is given an operand, or used in a context, that it does not support."
+
 [classes.InputFileError]
 base = "ValueError"
 doc = "An input file given to convert has a format, encoding or value kyto cannot import."
@@ -449,6 +453,44 @@ hint = "select the gene by ID with by='id', one of {gene_ids}"
 fields = [
     { name = "symbol", type = "str", doc = "The symbol as written.", example = "TBCE" },
     { name = "gene_ids", type = "list[str]", doc = "The gene IDs that carry this symbol.", example = ["ENSG00000284770", "ENSG00000285053"] },
+]
+
+[[errors]]
+code = "KY-E205"
+variant = "ExpressionOperand"
+class = "ExpressionError"
+summary = "An expression operation is given an operand of a dtype or type it does not accept."
+message = "'{operation}' needs {accepted}, got {got}: {operand}"
+hint = "pass {accepted} to '{operation}', or use an operation that accepts {got}"
+fields = [
+    { name = "operation", type = "str", doc = "The operator or method, such as `+`, `&` or `str.starts_with`.", example = "str.starts_with" },
+    { name = "accepted", type = "str", doc = "What the operation accepts.", example = "a string expression" },
+    { name = "got", type = "str", doc = "What it was given.", example = "a numeric expression" },
+    { name = "operand", type = "str", doc = "The operand, written as code.", example = "cell_column('n_genes') + 1" },
+]
+
+[[errors]]
+code = "KY-E206"
+variant = "ExpressionTruthValue"
+class = "ExpressionError"
+summary = "An expression is used where Python needs True or False."
+message = "the truth value of an expression is ambiguous: {expression}"
+hint = "combine conditions with &, | and ~ instead of and, or and not, and write a < b < c as (a < b) & (b < c); an expression is evaluated only when the plan runs"
+fields = [
+    { name = "expression", type = "str", doc = "The expression, written as code.", example = "cell_column('n_genes') > 200" },
+]
+
+[[errors]]
+code = "KY-E207"
+variant = "ExpressionDepth"
+class = "ExpressionError"
+summary = "An expression tree is deeper than kyto builds."
+message = "'{operation}' would make an expression {depth} levels deep; the limit is {limit}"
+hint = "build long chains as a balanced tree, combining pairs and then pairs of pairs, instead of adding one term at a time"
+fields = [
+    { name = "operation", type = "str", doc = "The operator or method that would exceed the limit.", example = "+" },
+    { name = "depth", type = "int", doc = "The depth the result would have.", example = 1001 },
+    { name = "limit", type = "int", doc = "The deepest expression kyto builds.", example = 1000 },
 ]
 
 [[errors]]

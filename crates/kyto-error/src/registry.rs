@@ -285,6 +285,34 @@ pub enum KytoError {
         /// The gene IDs that carry this symbol.
         gene_ids: Vec<String>,
     },
+    /// KY-E205: An expression operation is given an operand of a dtype or type it does not accept.
+    #[error("KY-E205: '{operation}' needs {accepted}, got {got}: {operand}")]
+    ExpressionOperand {
+        /// The operator or method, such as `+`, `&` or `str.starts_with`.
+        operation: String,
+        /// What the operation accepts.
+        accepted: String,
+        /// What it was given.
+        got: String,
+        /// The operand, written as code.
+        operand: String,
+    },
+    /// KY-E206: An expression is used where Python needs True or False.
+    #[error("KY-E206: the truth value of an expression is ambiguous: {expression}")]
+    ExpressionTruthValue {
+        /// The expression, written as code.
+        expression: String,
+    },
+    /// KY-E207: An expression tree is deeper than kyto builds.
+    #[error("KY-E207: '{operation}' would make an expression {depth} levels deep; the limit is {limit}")]
+    ExpressionDepth {
+        /// The operator or method that would exceed the limit.
+        operation: String,
+        /// The depth the result would have.
+        depth: u64,
+        /// The deepest expression kyto builds.
+        limit: u64,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -313,7 +341,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 32] = [
+    pub const CODES: [&'static str; 35] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -343,6 +371,9 @@ impl KytoError {
         "KY-E202",
         "KY-E203",
         "KY-E204",
+        "KY-E205",
+        "KY-E206",
+        "KY-E207",
         "KY-E301",
         "KY-E401",
         "KY-E501",
@@ -380,6 +411,9 @@ impl KytoError {
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
             Self::AmbiguousSymbol { .. } => "KY-E204",
+            Self::ExpressionOperand { .. } => "KY-E205",
+            Self::ExpressionTruthValue { .. } => "KY-E206",
+            Self::ExpressionDepth { .. } => "KY-E207",
             Self::StaleColumn { .. } => "KY-E301",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
@@ -418,6 +452,9 @@ impl KytoError {
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
             Self::AmbiguousSymbol { .. } => "ResolutionError",
+            Self::ExpressionOperand { .. } => "ExpressionError",
+            Self::ExpressionTruthValue { .. } => "ExpressionError",
+            Self::ExpressionDepth { .. } => "ExpressionError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
@@ -513,6 +550,15 @@ impl KytoError {
             }
             Self::AmbiguousSymbol { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e204"
+            }
+            Self::ExpressionOperand { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e205"
+            }
+            Self::ExpressionTruthValue { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e206"
+            }
+            Self::ExpressionDepth { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e207"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -615,6 +661,15 @@ impl KytoError {
             }
             Self::AmbiguousSymbol { gene_ids, .. } => {
                 format!("select the gene by ID with by='id', one of {}", quoted_list(gene_ids))
+            }
+            Self::ExpressionOperand { operation, accepted, got, .. } => {
+                format!("pass {accepted} to '{operation}', or use an operation that accepts {got}")
+            }
+            Self::ExpressionTruthValue { .. } => {
+                String::from("combine conditions with &, | and ~ instead of and, or and not, and write a < b < c as (a < b) & (b < c); an expression is evaluated only when the plan runs")
+            }
+            Self::ExpressionDepth { .. } => {
+                String::from("build long chains as a balanced tree, combining pairs and then pairs of pairs, instead of adding one term at a time")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -769,6 +824,20 @@ impl KytoError {
             Self::AmbiguousSymbol { symbol, gene_ids } => vec![
                 ("symbol", FieldValue::Str(symbol.clone())),
                 ("gene_ids", FieldValue::StrList(gene_ids.clone())),
+            ],
+            Self::ExpressionOperand { operation, accepted, got, operand } => vec![
+                ("operation", FieldValue::Str(operation.clone())),
+                ("accepted", FieldValue::Str(accepted.clone())),
+                ("got", FieldValue::Str(got.clone())),
+                ("operand", FieldValue::Str(operand.clone())),
+            ],
+            Self::ExpressionTruthValue { expression } => vec![
+                ("expression", FieldValue::Str(expression.clone())),
+            ],
+            Self::ExpressionDepth { operation, depth, limit } => vec![
+                ("operation", FieldValue::Str(operation.clone())),
+                ("depth", FieldValue::Int(*depth)),
+                ("limit", FieldValue::Int(*limit)),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -927,6 +996,20 @@ impl KytoError {
             Self::AmbiguousSymbol {
                 symbol: "TBCE".to_owned(),
                 gene_ids: vec!["ENSG00000284770".to_owned(), "ENSG00000285053".to_owned()],
+            },
+            Self::ExpressionOperand {
+                operation: "str.starts_with".to_owned(),
+                accepted: "a string expression".to_owned(),
+                got: "a numeric expression".to_owned(),
+                operand: "cell_column('n_genes') + 1".to_owned(),
+            },
+            Self::ExpressionTruthValue {
+                expression: "cell_column('n_genes') > 200".to_owned(),
+            },
+            Self::ExpressionDepth {
+                operation: "+".to_owned(),
+                depth: 1001,
+                limit: 1000,
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

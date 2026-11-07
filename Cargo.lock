@@ -1385,7 +1385,10 @@ version = "0.0.0"
 name = "kyto-core"
 version = "0.0.0"
 dependencies = [
+ "kyto-error",
+ "polars",
  "proptest",
+ "recursive",
  "serde",
  "serde_json",
 ]
@@ -1418,6 +1421,7 @@ dependencies = [
 name = "kyto-py"
 version = "0.0.0"
 dependencies = [
+ "kyto-core",
  "kyto-error",
  "kyto-plan",
  "kyto-store",
@@ -2206,6 +2210,7 @@ dependencies = [
  "polars-error",
  "polars-parquet",
  "polars-schema",
+ "polars-time",
  "polars-utils",
  "rand 0.10.3",
  "rayon",
