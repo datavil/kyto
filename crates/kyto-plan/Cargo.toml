@@ -11,3 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+kyto-core = { path = "../kyto-core" }
+kyto-error = { path = "../kyto-error" }
+
+[dev-dependencies]
+serde_json = "1.0.154"

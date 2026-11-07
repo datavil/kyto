@@ -12,10 +12,13 @@ use std::path::Path;
 
 use kyto_core::{AtlasSchema, ColumnDtype};
 use kyto_error::KytoError;
+use zarrs::filesystem::FilesystemStore;
 
 use crate::layer_open::ValueDtype;
+use crate::store_version::check_format_version;
 use crate::table_axis::TableAxis;
 use crate::tiling::TileGrid;
+use crate::zarr_arrays::store_io;
 
 /// One `layers` entry of `schema.json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +75,20 @@ pub fn read_atlas_schema(store: &Path) -> Result<AtlasSchema, KytoError> {
     }
     TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
     Ok(schema)
+}
+
+/// Check that `store` is a local kyto store of a supported format version, then read
+/// its `schema.json` (what a scan needs; reads no table or matrix).
+///
+/// # Errors
+/// - `KY-E116`, `KY-E115` if `store` is not a kyto store of a supported version.
+/// - As [`read_atlas_schema`] otherwise.
+pub fn open_atlas_schema(store: &Path) -> Result<AtlasSchema, KytoError> {
+    let store_text = store.display().to_string();
+    let storage =
+        FilesystemStore::new(store).map_err(|error| store_io("open store", &store_text, error))?;
+    check_format_version(&storage, &store_text)?;
+    read_atlas_schema(store)
 }
 
 /// Read `schema.json` of the store at `store` and derive the reader's view of it.

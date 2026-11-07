@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 
+pub mod atlas;
 pub mod convert;
 pub mod errors;
 pub mod sink_h5ad;
@@ -17,6 +18,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[pymodule]
 fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", VERSION)?;
+    module.add_class::<atlas::Atlas>()?;
+    module.add_function(wrap_pyfunction!(atlas::scan, module)?)?;
     module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;

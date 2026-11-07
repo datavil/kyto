@@ -65,7 +65,7 @@ pub use names::validate_member_name;
 pub use remote_store::RemoteStorage;
 pub use selection::AxisSelection;
 pub use store_json::ImportSource;
-pub use store_schema::read_atlas_schema;
+pub use store_schema::{open_atlas_schema, read_atlas_schema};
 pub use store_version::{FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS, check_format_version};
 pub use store_writer::{LayerSpec, StoreWriter};
 pub use table_axis::TableAxis;

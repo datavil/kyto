@@ -1408,12 +1408,18 @@ version = "0.0.0"
 [[package]]
 name = "kyto-plan"
 version = "0.0.0"
+dependencies = [
+ "kyto-core",
+ "kyto-error",
+ "serde_json",
+]
 
 [[package]]
 name = "kyto-py"
 version = "0.0.0"
 dependencies = [
  "kyto-error",
+ "kyto-plan",
  "kyto-store",
  "pyo3",
 ]
