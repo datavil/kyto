@@ -75,7 +75,17 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
     for name in ("__getitem__", "__setitem__", "X", "obs", "var", "__dict__"):
         assert not hasattr(atlas, name), name
     public = {name for name in dir(_kyto.Atlas) if not name.startswith("_")}
-    assert public == {"resolve", "with_default_layer"}
+    # The handle accessors (task 3.6, taken early from 7.3) are read-only too.
+    assert public == {
+        "resolve",
+        "with_default_layer",
+        "cells",
+        "genes",
+        "layer",
+        "embedding",
+        "graph",
+        "modality",
+    }
 
 
 def test_unknown_layer_is_ky_e109(store: Path) -> None:

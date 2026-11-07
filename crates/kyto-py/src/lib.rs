@@ -10,6 +10,7 @@ pub mod atlas;
 pub mod convert;
 pub mod errors;
 pub mod expr;
+pub mod handles;
 pub mod sink_h5ad;
 
 /// The package version, taken from the workspace `Cargo.toml` (the single source).
@@ -21,6 +22,11 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", VERSION)?;
     module.add_class::<atlas::Atlas>()?;
     module.add_function(wrap_pyfunction!(atlas::scan, module)?)?;
+    module.add_class::<handles::PyTable>()?;
+    module.add_class::<handles::PyMatrix>()?;
+    module.add_class::<handles::PyEmbedding>()?;
+    module.add_class::<handles::PyGraph>()?;
+    module.add_class::<handles::PyModality>()?;
     module.add_class::<expr::PyCellExpr>()?;
     module.add_class::<expr::PyGeneExpr>()?;
     module.add_class::<expr::PyCellStringNamespace>()?;

@@ -3,7 +3,8 @@
 //!
 //! Does: wrap an `Arc<kyto_plan::Plan>` in a frozen pyclass whose every method returns a
 //! new `Atlas` (R2); resolve an expression's names against the plan (task 3.5); build
-//! the root plan from a store's `schema.json` and the `gene_id` column of its gene table.
+//! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
+//! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early).
 //! Does not: read other columns or the matrix; hold any state besides the plan (R7); expose
 //! `__getitem__`, `.X`, `obs` or `var` (R4). The public `kyto.scan` and the chain
 //! methods arrive with 7.1/7.2; `scan` is private until then.
@@ -19,6 +20,7 @@ use pyo3::{IntoPyObjectExt, PyAny};
 
 use crate::errors::to_py_err;
 use crate::expr::{PyCellExpr, PyGeneExpr};
+use crate::handles::{PyEmbedding, PyGraph, PyMatrix, PyModality, PyTable};
 
 /// A lazy, immutable plan over a kyto store.
 ///
@@ -148,6 +150,158 @@ impl Atlas {
                 .map_or_else(|_| format!("<{type_name}>"), |text| text.to_string()),
         };
         Err(to_py_err(py, &error))
+    }
+
+    /// The cell table: a read-only, lazy handle (nothing is read).
+    ///
+    /// Returns
+    /// -------
+    /// Table
+    ///     A new handle on this plan's cell table.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).cells.names()
+    /// ['cell_id']
+    #[getter]
+    fn cells(&self) -> PyTable {
+        PyTable::new(kyto_plan::Table::new(&self.plan, kyto_core::Axis::Cells))
+    }
+
+    /// The gene table: a read-only, lazy handle (nothing is read).
+    ///
+    /// Returns
+    /// -------
+    /// Table
+    ///     A new handle on this plan's gene table.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).genes.names()
+    /// ['gene_id', 'symbol', 'feature_type']
+    #[getter]
+    fn genes(&self) -> PyTable {
+        PyTable::new(kyto_plan::Table::new(&self.plan, kyto_core::Axis::Genes))
+    }
+
+    /// A layer, as a read-only, lazy matrix handle (nothing is read).
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Name of a layer of the store, as stored (case-sensitive).
+    ///
+    /// Returns
+    /// -------
+    /// Matrix
+    ///     A new handle on the layer.
+    ///
+    /// Raises
+    /// ------
+    /// MissingMemberError
+    ///     ``KY-E109``: the store has no layer named ``name``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).layer("counts").schema()
+    /// {'name': 'counts', 'dtype': 'uint32', 'nnz': 3}
+    #[pyo3(signature = (name, /))]
+    fn layer(&self, py: Python<'_>, name: &str) -> PyResult<PyMatrix> {
+        kyto_plan::Matrix::new(&self.plan, name)
+            .map(PyMatrix::new)
+            .map_err(|error| to_py_err(py, &error))
+    }
+
+    /// An embedding, as a read-only, lazy handle (nothing is read).
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Name of an embedding of the store, as stored (case-sensitive).
+    ///
+    /// Returns
+    /// -------
+    /// Embedding
+    ///     A new handle on the embedding.
+    ///
+    /// Raises
+    /// ------
+    /// MissingMemberError
+    ///     ``KY-E109``: the store has no embedding named ``name``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).embedding("X_pca")
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.MissingMemberError: KY-E109: no embedding named 'X_pca' in the store at '...'...
+    #[pyo3(signature = (name, /))]
+    fn embedding(&self, py: Python<'_>, name: &str) -> PyResult<PyEmbedding> {
+        kyto_plan::Embedding::new(&self.plan, name)
+            .map(PyEmbedding::new)
+            .map_err(|error| to_py_err(py, &error))
+    }
+
+    /// A graph, as a read-only, lazy handle (nothing is read).
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Name of a graph of the store, as stored (case-sensitive).
+    ///
+    /// Returns
+    /// -------
+    /// Graph
+    ///     A new handle on the graph.
+    ///
+    /// Raises
+    /// ------
+    /// MissingMemberError
+    ///     ``KY-E109``: the store has no graph named ``name``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).graph("connectivities")
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.MissingMemberError: KY-E109: no graph named 'connectivities' in the store at '...'...
+    #[pyo3(signature = (name, /))]
+    fn graph(&self, py: Python<'_>, name: &str) -> PyResult<PyGraph> {
+        kyto_plan::Graph::new(&self.plan, name)
+            .map(PyGraph::new)
+            .map_err(|error| to_py_err(py, &error))
+    }
+
+    /// A modality, as a read-only, lazy handle (nothing is read).
+    ///
+    /// Store format v0 holds no modalities, so for now this always raises.
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Name of a modality of the store, as stored (case-sensitive).
+    ///
+    /// Returns
+    /// -------
+    /// Modality
+    ///     A new handle on the modality.
+    ///
+    /// Raises
+    /// ------
+    /// MissingMemberError
+    ///     ``KY-E109``: the store has no modality named ``name``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).modality("adt")
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.MissingMemberError: KY-E109: no modality named 'adt' in the store at '...'...
+    #[pyo3(signature = (name, /))]
+    fn modality(&self, py: Python<'_>, name: &str) -> PyResult<PyModality> {
+        kyto_plan::Modality::new(&self.plan, name)
+            .map(PyModality::new)
+            .map_err(|error| to_py_err(py, &error))
     }
 
     /// The plan, one node per line, from the last step down to the scan.

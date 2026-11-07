@@ -20,7 +20,7 @@ pub enum KytoError {
     /// KY-E102: A layer, embedding or graph name breaks the naming rules of format.md section 2.1.
     #[error("KY-E102: invalid {kind} name '{name}': {rule}")]
     InvalidMemberName {
-        /// The member kind: `layer`, `embedding` or `graph`.
+        /// The member kind: `layer`, `embedding`, `graph` or `modality`.
         kind: String,
         /// The name as given.
         name: String,
@@ -30,7 +30,7 @@ pub enum KytoError {
     /// KY-E103: A member with the same name, compared case-insensitively, is already in the store.
     #[error("KY-E103: {kind} '{name}' already exists in the store as '{existing}'")]
     MemberExists {
-        /// The member kind: `layer`, `embedding` or `graph`.
+        /// The member kind: `layer`, `embedding`, `graph` or `modality`.
         kind: String,
         /// The name as given.
         name: String,
@@ -85,10 +85,10 @@ pub enum KytoError {
         /// The dtype asked for.
         requested: String,
     },
-    /// KY-E109: A layer, embedding or graph is not in the store.
+    /// KY-E109: A layer, embedding, graph or modality is not in the store.
     #[error("KY-E109: no {kind} named '{name}' in the store at '{store}'")]
     MissingMember {
-        /// The member kind: `layer`, `embedding` or `graph`.
+        /// The member kind: `layer`, `embedding`, `graph` or `modality`.
         kind: String,
         /// The name asked for.
         name: String,
@@ -377,11 +377,19 @@ pub enum KytoError {
         /// The device requested.
         device: String,
     },
+    /// KY-E601: A documented method is called before the task that implements it is done.
+    #[error("KY-E601: '{method}' is not implemented yet: it arrives with task {task} of the implementation plan")]
+    NotImplementedYet {
+        /// The method called, as Class.method.
+        method: String,
+        /// The task of the implementation plan that implements it.
+        task: String,
+    },
 }
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 39] = [
+    pub const CODES: [&'static str; 40] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -421,6 +429,7 @@ impl KytoError {
         "KY-E301",
         "KY-E401",
         "KY-E501",
+        "KY-E601",
     ];
 
     /// The stable `KY-Exxx` code.
@@ -465,6 +474,7 @@ impl KytoError {
             Self::StaleColumn { .. } => "KY-E301",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
+            Self::NotImplementedYet { .. } => "KY-E601",
         }
     }
 
@@ -510,6 +520,7 @@ impl KytoError {
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
+            Self::NotImplementedYet { .. } => "NotImplementedYetError",
         }
     }
 
@@ -633,6 +644,9 @@ impl KytoError {
             Self::MissingKernel { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e501"
             }
+            Self::NotImplementedYet { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e601"
+            }
         }
     }
 
@@ -755,6 +769,9 @@ impl KytoError {
             }
             Self::MissingKernel { .. } => {
                 String::from("pass device='auto' to fall back to the CPU for this step, or device='cpu'")
+            }
+            Self::NotImplementedYet { .. } => {
+                String::from("inspect the data without reading it through names(), schema() and estimate() until then")
             }
         }
     }
@@ -947,6 +964,10 @@ impl KytoError {
                 ("operation", FieldValue::Str(operation.clone())),
                 ("device", FieldValue::Str(device.clone())),
             ],
+            Self::NotImplementedYet { method, task } => vec![
+                ("method", FieldValue::Str(method.clone())),
+                ("task", FieldValue::Str(task.clone())),
+            ],
         }
     }
 
@@ -1138,6 +1159,10 @@ impl KytoError {
             Self::MissingKernel {
                 operation: "leiden".to_owned(),
                 device: "cuda".to_owned(),
+            },
+            Self::NotImplementedYet {
+                method: "Matrix.to_scipy".to_owned(),
+                task: "7.5".to_owned(),
             },
         ]
     }

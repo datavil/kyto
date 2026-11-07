@@ -26,6 +26,7 @@ __all__ = [
     "LayerDtypeError",
     "MemoryLimitError",
     "MissingMemberError",
+    "NotImplementedYetError",
     "RemovedFeatureError",
     "ResolutionError",
     "StaleColumnError",
@@ -394,11 +395,11 @@ class StoreIOError(KytoError, RuntimeError):
 
 
 class MissingMemberError(KytoError, LookupError):
-    """A layer, embedding or graph is not in the store.
+    """A layer, embedding, graph or modality is not in the store.
 
     Subclasses `KytoError` and `LookupError`. Raised with these codes:
 
-    - ``KY-E109``: A layer, embedding or graph is not in the store.
+    - ``KY-E109``: A layer, embedding, graph or modality is not in the store.
 
     See `KytoError` for the parameters and attributes.
 
@@ -469,6 +470,25 @@ class InputFileError(KytoError, ValueError):
     >>> error.code
     'KY-E120'
     >>> isinstance(error, ValueError)
+    True
+    """
+
+
+class NotImplementedYetError(KytoError, NotImplementedError):
+    """A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it.
+
+    Subclasses `KytoError` and `NotImplementedError`. Raised with these codes:
+
+    - ``KY-E601``: A documented method is called before the task that implements it is done.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = NotImplementedYetError("KY-E601", method="Matrix.to_scipy", task="7.5")
+    >>> error.code
+    'KY-E601'
+    >>> isinstance(error, NotImplementedError)
     True
     """
 
@@ -889,6 +909,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("operation", "str"),
             _Field("device", "str"),
+        ),
+    ),
+    "KY-E601": _Entry(
+        class_name="NotImplementedYetError",
+        message="'{method}' is not implemented yet: it arrives with task {task} of the implementation plan",
+        hint="inspect the data without reading it through names(), schema() and estimate() until then",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e601",
+        fields=(
+            _Field("method", "str"),
+            _Field("task", "str"),
         ),
     ),
 }

@@ -27,6 +27,8 @@ dev = [
     "pyright[nodejs]>=1.1.414",
     "pytest>=8",
     "ruff>=0.17.4",
+    # Types the handle terminals that return SciPy matrices in the stubs (task 3.6).
+    "scipy>=1.15",
     # Reference implementations for parity (task 1.5), pinned in uv.lock. Only on
     # Python >= 3.12 (scanpy 1.12) and not on Windows ARM64 or macOS x86_64: numcodecs,
     # numba, llvmlite or scikit-misc have no wheels there. Parity tests skip without

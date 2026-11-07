@@ -10,6 +10,7 @@
 # Codes are stable: never reuse or renumber one. Ranges:
 #   KY-E1xx storage    KY-E2xx names, axes and expressions (plan build)
 #   KY-E3xx lineage    KY-E4xx memory    KY-E5xx devices
+#   KY-E6xx not implemented yet (a documented method whose task is not done)
 #
 # Templates: `{field}` inserts a field. Field types are `str`, `int` (a non-negative
 # integer, u64 in Rust) and `list[str]` (rendered as 'a', 'b', 'c'). Write the quotes
@@ -70,7 +71,7 @@ doc = "The file system or the Zarr layer failed while reading or writing a store
 
 [classes.MissingMemberError]
 base = "LookupError"
-doc = "A layer, embedding or graph is not in the store."
+doc = "A layer, embedding, graph or modality is not in the store."
 
 [classes.LayerDtypeError]
 base = "TypeError"
@@ -83,6 +84,10 @@ doc = "An expression is given an operand, or used in a context, that it does not
 [classes.InputFileError]
 base = "ValueError"
 doc = "An input file given to convert has a format, encoding or value kyto cannot import."
+
+[classes.NotImplementedYetError]
+base = "NotImplementedError"
+doc = "A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it."
 
 [[errors]]
 code = "KY-E101"
@@ -105,7 +110,7 @@ summary = "A layer, embedding or graph name breaks the naming rules of format.md
 message = "invalid {kind} name '{name}': {rule}"
 hint = "use 1 to 64 characters from A-Z a-z 0-9 _ . - that do not start with . or __, do not end with . and are not a Windows device name such as CON"
 fields = [
-    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding`, `graph` or `modality`.", example = "layer" },
     { name = "name", type = "str", doc = "The name as given.", example = "log1p/counts" },
     { name = "rule", type = "str", doc = "The rule it breaks.", example = "character '/' is not allowed" },
 ]
@@ -118,7 +123,7 @@ summary = "A member with the same name, compared case-insensitively, is already 
 message = "{kind} '{name}' already exists in the store as '{existing}'"
 hint = "choose another name; names are compared case-insensitively because macOS and Windows file systems are"
 fields = [
-    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding`, `graph` or `modality`.", example = "layer" },
     { name = "name", type = "str", doc = "The name as given.", example = "Counts" },
     { name = "existing", type = "str", doc = "The name already in the store.", example = "counts" },
 ]
@@ -191,11 +196,11 @@ fields = [
 code = "KY-E109"
 variant = "MissingMember"
 class = "MissingMemberError"
-summary = "A layer, embedding or graph is not in the store."
+summary = "A layer, embedding, graph or modality is not in the store."
 message = "no {kind} named '{name}' in the store at '{store}'"
 hint = "check the name against the store's schema; names are case-sensitive when read"
 fields = [
-    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding` or `graph`.", example = "layer" },
+    { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding`, `graph` or `modality`.", example = "layer" },
     { name = "name", type = "str", doc = "The name asked for.", example = "count" },
     { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
 ]
@@ -579,4 +584,16 @@ hint = "pass device='auto' to fall back to the CPU for this step, or device='cpu
 fields = [
     { name = "operation", type = "str", doc = "The operation without a kernel.", example = "leiden" },
     { name = "device", type = "str", doc = "The device requested.", example = "cuda" },
+]
+
+[[errors]]
+code = "KY-E601"
+variant = "NotImplementedYet"
+class = "NotImplementedYetError"
+summary = "A documented method is called before the task that implements it is done."
+message = "'{method}' is not implemented yet: it arrives with task {task} of the implementation plan"
+hint = "inspect the data without reading it through names(), schema() and estimate() until then"
+fields = [
+    { name = "method", type = "str", doc = "The method called, as Class.method.", example = "Matrix.to_scipy" },
+    { name = "task", type = "str", doc = "The task of the implementation plan that implements it.", example = "7.5" },
 ]
