@@ -213,6 +213,34 @@ pub enum KytoError {
         /// How to fix it.
         advice: String,
     },
+    /// KY-E122: A store's schema.json is missing, is not JSON, or breaks format.md section 8.
+    #[error("KY-E122: schema.json of the store at '{store}' is invalid: {problem}")]
+    CorruptSchema {
+        /// The store path.
+        store: String,
+        /// The key that is missing or wrong.
+        problem: String,
+    },
+    /// KY-E123: An export's target path already exists (sink_h5ad, task 2.7).
+    #[error("KY-E123: cannot write '{path}': {problem}")]
+    OutputExists {
+        /// The target path.
+        path: String,
+        /// What is there.
+        problem: String,
+    },
+    /// KY-E124: A store holds a name or value the export format cannot hold (sink_h5ad, task 2.7).
+    #[error("KY-E124: cannot export {location} to '{path}': {problem}")]
+    UnsupportedExport {
+        /// What cannot be exported: column, layer or value.
+        location: String,
+        /// The target path.
+        path: String,
+        /// Why the format cannot hold it.
+        problem: String,
+        /// How to fix it.
+        advice: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -275,7 +303,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 28] = [
+    pub const CODES: [&'static str; 31] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -297,6 +325,9 @@ impl KytoError {
         "KY-E119",
         "KY-E120",
         "KY-E121",
+        "KY-E122",
+        "KY-E123",
+        "KY-E124",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -330,6 +361,9 @@ impl KytoError {
             Self::TableLength { .. } => "KY-E119",
             Self::UnsupportedInput { .. } => "KY-E120",
             Self::InvalidInput { .. } => "KY-E121",
+            Self::CorruptSchema { .. } => "KY-E122",
+            Self::OutputExists { .. } => "KY-E123",
+            Self::UnsupportedExport { .. } => "KY-E124",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -364,6 +398,9 @@ impl KytoError {
             Self::TableLength { .. } => "StoreInputError",
             Self::UnsupportedInput { .. } => "InputFileError",
             Self::InvalidInput { .. } => "InputFileError",
+            Self::CorruptSchema { .. } => "CorruptStoreError",
+            Self::OutputExists { .. } => "StoreInputError",
+            Self::UnsupportedExport { .. } => "StoreInputError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -439,6 +476,15 @@ impl KytoError {
             }
             Self::InvalidInput { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e121"
+            }
+            Self::CorruptSchema { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e122"
+            }
+            Self::OutputExists { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e123"
+            }
+            Self::UnsupportedExport { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e124"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -529,6 +575,15 @@ impl KytoError {
             }
             Self::InvalidInput { advice, .. } => {
                 format!("{advice}, then convert again")
+            }
+            Self::CorruptSchema { .. } => {
+                String::from("the store breaks docs/format.md section 8; write the store again with kyto, or report a bug if kyto wrote it")
+            }
+            Self::OutputExists { .. } => {
+                String::from("choose another path, remove the existing one first, or pass overwrite=True to replace an existing file (it is replaced only after the new file is complete; a directory is never replaced)")
+            }
+            Self::UnsupportedExport { advice, .. } => {
+                format!("{advice}, then export again")
             }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
@@ -657,6 +712,20 @@ impl KytoError {
             Self::InvalidInput { path, location, problem, advice } => vec![
                 ("path", FieldValue::Str(path.clone())),
                 ("location", FieldValue::Str(location.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("advice", FieldValue::Str(advice.clone())),
+            ],
+            Self::CorruptSchema { store, problem } => vec![
+                ("store", FieldValue::Str(store.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::OutputExists { path, problem } => vec![
+                ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::UnsupportedExport { location, path, problem, advice } => vec![
+                ("location", FieldValue::Str(location.clone())),
+                ("path", FieldValue::Str(path.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
                 ("advice", FieldValue::Str(advice.clone())),
             ],
@@ -798,6 +867,20 @@ impl KytoError {
                 location: "cell 4, gene 17".to_owned(),
                 problem: "integer value -3 is negative".to_owned(),
                 advice: "integer matrices become uint32 layers; cast X to float32 in anndata before converting to keep negative values".to_owned(),
+            },
+            Self::CorruptSchema {
+                store: "pbmc.kyto".to_owned(),
+                problem: "layers[0].dtype is 'int64', not 'float32' or 'uint32'".to_owned(),
+            },
+            Self::OutputExists {
+                path: "pbmc.h5ad".to_owned(),
+                problem: "a file already exists there".to_owned(),
+            },
+            Self::UnsupportedExport {
+                location: "cells column 'a/b'".to_owned(),
+                path: "pbmc.h5ad".to_owned(),
+                problem: "h5ad names cannot contain '/'".to_owned(),
+                advice: "rename the column without '/'".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),

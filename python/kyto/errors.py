@@ -313,6 +313,8 @@ class StoreInputError(KytoError, ValueError):
     - ``KY-E117``: A CellBlock is not valid CSR, or does not fit the store or layer it is written to (format.md sections 4.8 and 10.2).
     - ``KY-E118``: A store writer's target path already exists (format.md section 10.1).
     - ``KY-E119``: A cell or gene table given to a store writer does not have one row per matrix row or column (format.md section 5.1).
+    - ``KY-E123``: An export's target path already exists (sink_h5ad, task 2.7).
+    - ``KY-E124``: A store holds a name or value the export format cannot hold (sink_h5ad, task 2.7).
 
     See `KytoError` for the parameters and attributes.
 
@@ -334,6 +336,7 @@ class CorruptStoreError(KytoError, ValueError):
     - ``KY-E107``: A stored layer breaks the tiled sparse format (format.md section 4).
     - ``KY-E113``: A stored cell or gene table breaks format.md section 5.
     - ``KY-E116``: A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3).
+    - ``KY-E122``: A store's schema.json is missing, is not JSON, or breaks format.md section 8.
 
     See `KytoError` for the parameters and attributes.
 
@@ -669,6 +672,38 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("path", "str"),
             _Field("location", "str"),
+            _Field("problem", "str"),
+            _Field("advice", "str"),
+        ),
+    ),
+    "KY-E122": _Entry(
+        class_name="CorruptStoreError",
+        message="schema.json of the store at '{store}' is invalid: {problem}",
+        hint="the store breaks docs/format.md section 8; write the store again with kyto, or report a bug if kyto wrote it",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e122",
+        fields=(
+            _Field("store", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E123": _Entry(
+        class_name="StoreInputError",
+        message="cannot write '{path}': {problem}",
+        hint="choose another path, remove the existing one first, or pass overwrite=True to replace an existing file (it is replaced only after the new file is complete; a directory is never replaced)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e123",
+        fields=(
+            _Field("path", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E124": _Entry(
+        class_name="StoreInputError",
+        message="cannot export {location} to '{path}': {problem}",
+        hint="{advice}, then export again",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e124",
+        fields=(
+            _Field("location", "str"),
+            _Field("path", "str"),
             _Field("problem", "str"),
             _Field("advice", "str"),
         ),

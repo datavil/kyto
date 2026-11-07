@@ -352,6 +352,44 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E122"
+variant = "CorruptSchema"
+class = "CorruptStoreError"
+summary = "A store's schema.json is missing, is not JSON, or breaks format.md section 8."
+message = "schema.json of the store at '{store}' is invalid: {problem}"
+hint = "the store breaks docs/format.md section 8; write the store again with kyto, or report a bug if kyto wrote it"
+fields = [
+    { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+    { name = "problem", type = "str", doc = "The key that is missing or wrong.", example = "layers[0].dtype is 'int64', not 'float32' or 'uint32'" },
+]
+
+[[errors]]
+code = "KY-E123"
+variant = "OutputExists"
+class = "StoreInputError"
+summary = "An export's target path already exists (sink_h5ad, task 2.7)."
+message = "cannot write '{path}': {problem}"
+hint = "choose another path, remove the existing one first, or pass overwrite=True to replace an existing file (it is replaced only after the new file is complete; a directory is never replaced)"
+fields = [
+    { name = "path", type = "str", doc = "The target path.", example = "pbmc.h5ad" },
+    { name = "problem", type = "str", doc = "What is there.", example = "a file already exists there" },
+]
+
+[[errors]]
+code = "KY-E124"
+variant = "UnsupportedExport"
+class = "StoreInputError"
+summary = "A store holds a name or value the export format cannot hold (sink_h5ad, task 2.7)."
+message = "cannot export {location} to '{path}': {problem}"
+hint = "{advice}, then export again"
+fields = [
+    { name = "location", type = "str", doc = "What cannot be exported: column, layer or value.", example = "cells column 'a/b'" },
+    { name = "path", type = "str", doc = "The target path.", example = "pbmc.h5ad" },
+    { name = "problem", type = "str", doc = "Why the format cannot hold it.", example = "h5ad names cannot contain '/'" },
+    { name = "advice", type = "str", doc = "How to fix it.", example = "rename the column without '/'" },
+]
+
+[[errors]]
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"

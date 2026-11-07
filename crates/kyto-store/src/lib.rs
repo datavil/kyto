@@ -1,7 +1,7 @@
 //! kyto-store: the on-disk format of a kyto atlas.
 //!
 //! Does: the Zarr v3 layout, tiled sparse matrix I/O, metadata tables and
-//! importers (`.h5ad`, 10x `.h5`, `.mtx`).
+//! importers (`.h5ad`, 10x `.h5`, `.mtx`), the `.h5ad` export.
 //! Does not: plan, optimize or compute anything; it only reads and writes tiles.
 //!
 //! So far: one whole tiled sparse layer, written by [`write_layer`] and read by
@@ -10,12 +10,16 @@
 //! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8), and a
 //! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
 //! 2.5, §10), and inputs imported into a new store by [`convert`] (`.h5ad`, 10x `.h5`,
-//! Matrix Market; task 2.6).
+//! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7).
 #![forbid(unsafe_code)]
 
 mod atomic_dir;
+mod atomic_file;
 mod cell_block;
 mod csr;
+mod export_h5;
+mod export_h5ad;
+mod export_h5ad_table;
 mod import_10x;
 mod import_convert;
 mod import_h5;
@@ -31,6 +35,7 @@ mod layer_stream;
 mod names;
 mod selection;
 mod store_json;
+mod store_schema;
 mod store_version;
 mod store_writer;
 mod table_axis;
@@ -47,6 +52,7 @@ mod zarr_arrays;
 
 pub use cell_block::{CellBlock, CellValues};
 pub use csr::CsrMatrix;
+pub use export_h5ad::{DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad};
 pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};
 pub use import_ids::OnDuplicateIds;
 pub use layer_io::{read_layer, write_layer};

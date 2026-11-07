@@ -18,3 +18,13 @@ def convert(
     overwrite: bool,
 ) -> None:
     """Import `source` into a new store at `target` (see `kyto.convert`)."""
+
+def sink_h5ad(
+    store: str,
+    target: str,
+    /,
+    *,
+    x_layer: str | None,
+    overwrite: bool,
+) -> None:
+    """Export the store at `store` as an `.h5ad` file at `target` (private, task 2.7)."""

@@ -306,7 +306,7 @@ fn is_random(text: &str) -> bool {
 
 /// 16 hex digits from the standard library's randomly keyed hasher. Not part of the
 /// store, so it does not affect determinism (format.md §10.3).
-fn random_suffix() -> String {
+pub(crate) fn random_suffix() -> String {
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_u32(std::process::id());
     if let Ok(elapsed) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
@@ -341,7 +341,7 @@ fn sync_tree(directory: &Path) -> Result<(), KytoError> {
 
 /// Fsync a directory, so the names in it are durable. Windows cannot open a directory
 /// as a file and makes renames durable itself, so this is a no-op there.
-fn sync_dir(directory: &Path) -> Result<(), KytoError> {
+pub(crate) fn sync_dir(directory: &Path) -> Result<(), KytoError> {
     if cfg!(windows) {
         return Ok(());
     }
