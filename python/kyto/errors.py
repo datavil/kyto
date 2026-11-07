@@ -309,6 +309,9 @@ class StoreInputError(KytoError, ValueError):
     - ``KY-E111``: The ID column of a cell or gene table holds null or empty IDs.
     - ``KY-E112``: A column of a cell or gene table breaks format.md section 5 (name, dtype or position).
     - ``KY-E114``: A cell or gene selection given to the tile reader is out of range, unsorted or repeats a position.
+    - ``KY-E117``: A CellBlock is not valid CSR, or does not fit the store or layer it is written to (format.md sections 4.8 and 10.2).
+    - ``KY-E118``: A store writer's target path already exists (format.md section 10.1).
+    - ``KY-E119``: A cell or gene table given to a store writer does not have one row per matrix row or column (format.md section 5.1).
 
     See `KytoError` for the parameters and attributes.
 
@@ -593,6 +596,37 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("store", "str"),
             _Field("problem", "str"),
+        ),
+    ),
+    "KY-E117": _Entry(
+        class_name="StoreInputError",
+        message="invalid CellBlock ({context}): {problem}",
+        hint="build CellBlocks with indptr starting at 0, non-decreasing and ending at nnz, and sorted, unique gene positions below n_genes in each row; a store writer also needs one block per layer, in layer order, over all genes of the store, with the layer's dtype and the same rows in every layer",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e117",
+        fields=(
+            _Field("context", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E118": _Entry(
+        class_name="StoreInputError",
+        message="cannot write a store to '{path}': {problem}",
+        hint="choose another path, remove the existing one first, or write with overwrite=True to replace an existing kyto store (it is replaced only after the new store is complete)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e118",
+        fields=(
+            _Field("path", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E119": _Entry(
+        class_name="StoreInputError",
+        message="the {axis} table has {n_rows} rows, but the matrix has {n_axis} {axis}",
+        hint="pass one {axis} table row per matrix {axis} entry, in matrix order",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e119",
+        fields=(
+            _Field("axis", "str"),
+            _Field("n_rows", "int"),
+            _Field("n_axis", "int"),
         ),
     ),
     "KY-E201": _Entry(

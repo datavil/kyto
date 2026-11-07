@@ -16,6 +16,7 @@ use zarrs::array::codec::{
 };
 use zarrs::array::{Array, ArrayBuilder, ArrayMetadataOptions, DataType, Element};
 use zarrs::filesystem::FilesystemStore;
+use zarrs::group::GroupBuilder;
 
 use crate::tiling::TileGrid;
 use crate::value::LayerValue;
@@ -131,6 +132,25 @@ impl LayerArrays<'_> {
         builder.array_to_bytes_codec(sharding(&[options.nnz_chunk_size], options.zstd_level)?);
         self.build(name, &mut builder, &["entry"])
     }
+}
+
+/// Write the `zarr.json` of the group at Zarr path `path`, with `{"kyto": kyto}` as its
+/// attributes, or none when `kyto` is `None`.
+pub(crate) fn store_group(
+    storage: &Arc<FilesystemStore>,
+    path: &str,
+    kyto: Option<serde_json::Value>,
+) -> Result<(), KytoError> {
+    let mut attributes = serde_json::Map::new();
+    if let Some(kyto) = kyto {
+        attributes.insert("kyto".to_owned(), kyto);
+    }
+    GroupBuilder::new()
+        .attributes(attributes)
+        .build(storage.clone(), path)
+        .map_err(|error| store_io("create group", path, error))?
+        .store_metadata()
+        .map_err(|error| store_io("write metadata of", path, error))
 }
 
 /// Write an array's `zarr.json`, without zarrs' own version attributes (so bytes

@@ -3,7 +3,7 @@
 //!
 //! Does: map a Polars dtype to one of the v0 column dtypes, and describe a table's
 //! columns as the `columns` list of `schema.json`.
-//! Does not: write `schema.json` (task 2.5) or check IDs (see `table_check`).
+//! Does not: write `schema.json` (see `store_json`, task 2.5) or check IDs (see `table_check`).
 
 use kyto_error::KytoError;
 use polars::prelude::{DataFrame, DataType};

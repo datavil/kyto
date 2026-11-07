@@ -4,8 +4,9 @@
 //! its four arrays; [`read_layer`] reads them back, checks them and returns the CSR
 //! matrix.
 //! Does not: write the rest of a store (`schema.json`, tables, the root and `layers`
-//! group `zarr.json`), write atomically or stream (task 2.5), or read only some tiles
-//! (see `tile_reader`). A failed write can leave a partial layer behind.
+//! group `zarr.json`), write atomically or stream (see `store_writer`, task 2.5), or
+//! read only some tiles (see `tile_reader`). A failed write can leave a partial layer
+//! behind.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,7 +15,6 @@ use kyto_error::KytoError;
 use zarrs::array::DataType;
 use zarrs::array_subset::ArraySubset;
 use zarrs::filesystem::FilesystemStore;
-use zarrs::group::GroupBuilder;
 
 use crate::csr::CsrMatrix;
 use crate::layer_open::{LAYER_KIND, open_layer, read_all};
@@ -25,7 +25,7 @@ use crate::tiling::{TileGrid, Tiling};
 use crate::value::LayerValue;
 use crate::write_options::LayerWriteOptions;
 use crate::zarr_arrays::{
-    LayerArrays, TILE_OFFSETS_CHUNK, store_1d, store_chunk, store_io, store_metadata,
+    LayerArrays, TILE_OFFSETS_CHUNK, store_1d, store_chunk, store_group, store_io, store_metadata,
 };
 
 fn open_storage(store: &Path) -> Result<Arc<FilesystemStore>, KytoError> {
@@ -68,15 +68,11 @@ pub fn write_layer<T: LayerValue>(
 
     let storage = open_storage(store)?;
     let group_path = format!("/layers/{name}");
-    let mut attributes = serde_json::Map::new();
-    attributes.insert("kyto".to_owned(), serde_json::json!({ "kind": LAYER_KIND }));
-    let group = GroupBuilder::new()
-        .attributes(attributes)
-        .build(storage.clone(), &group_path)
-        .map_err(|error| store_io("create group", &group_path, error))?;
-    group
-        .store_metadata()
-        .map_err(|error| store_io("write metadata of", &group_path, error))?;
+    store_group(
+        &storage,
+        &group_path,
+        Some(serde_json::json!({ "kind": LAYER_KIND })),
+    )?;
 
     let arrays = LayerArrays {
         storage: &storage,

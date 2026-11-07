@@ -4,8 +4,8 @@
 //! `Enum` and writes `cells.parquet` or `genes.parquet` with the settings of §5.7;
 //! [`read_table`] reads one back and checks it.
 //! Does not: check the row count against the matrix, write `schema.json` or write
-//! atomically (task 2.5), or import anndata tables (task 2.6). A failed write can leave
-//! a partial file behind.
+//! atomically (see `store_writer`, task 2.5), or import anndata tables (task 2.6). A
+//! failed write can leave a partial file behind.
 
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -19,6 +19,7 @@ use polars::prelude::{
 
 use crate::table_axis::TableAxis;
 use crate::table_check::{PlainStrings, check_table};
+use crate::table_columns::{TableColumn, table_columns};
 use crate::tiling::Tiling;
 use crate::zarr_arrays::store_io;
 
@@ -43,6 +44,17 @@ pub fn write_table(
     frame: &DataFrame,
     tiling: Tiling,
 ) -> Result<(), KytoError> {
+    write_table_columns(store, axis, frame, tiling).map(|_| ())
+}
+
+/// [`write_table`], returning the stored columns as `schema.json` lists them (format.md
+/// §8): string columns as they were stored, as `Enum`.
+pub(crate) fn write_table_columns(
+    store: &Path,
+    axis: TableAxis,
+    frame: &DataFrame,
+    tiling: Tiling,
+) -> Result<Vec<TableColumn>, KytoError> {
     check_table(axis, frame, PlainStrings::Allowed)?;
     let row_group_size = match axis.row_group_size(tiling) {
         0 => {
@@ -93,7 +105,7 @@ pub fn write_table(
         offset += block.height();
     }
     writer.finish().map_err(write_error)?;
-    Ok(())
+    table_columns(axis, &stored)
 }
 
 /// Read the `axis` table of the store at `store` and check it (format.md §5).

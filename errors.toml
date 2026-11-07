@@ -284,6 +284,43 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E117"
+variant = "InvalidCellBlock"
+class = "StoreInputError"
+summary = "A CellBlock is not valid CSR, or does not fit the store or layer it is written to (format.md sections 4.8 and 10.2)."
+message = "invalid CellBlock ({context}): {problem}"
+hint = "build CellBlocks with indptr starting at 0, non-decreasing and ending at nnz, and sorted, unique gene positions below n_genes in each row; a store writer also needs one block per layer, in layer order, over all genes of the store, with the layer's dtype and the same rows in every layer"
+fields = [
+    { name = "context", type = "str", doc = "Where the block was given: the constructor, or the writer layer.", example = "StoreWriter.push, layer 'counts'" },
+    { name = "problem", type = "str", doc = "What is wrong and where (row, position).", example = "the block has 2000 genes but the store has 32738" },
+]
+
+[[errors]]
+code = "KY-E118"
+variant = "StoreExists"
+class = "StoreInputError"
+summary = "A store writer's target path already exists (format.md section 10.1)."
+message = "cannot write a store to '{path}': {problem}"
+hint = "choose another path, remove the existing one first, or write with overwrite=True to replace an existing kyto store (it is replaced only after the new store is complete)"
+fields = [
+    { name = "path", type = "str", doc = "The target path.", example = "pbmc.kyto" },
+    { name = "problem", type = "str", doc = "What is there.", example = "a kyto store already exists there" },
+]
+
+[[errors]]
+code = "KY-E119"
+variant = "TableLength"
+class = "StoreInputError"
+summary = "A cell or gene table given to a store writer does not have one row per matrix row or column (format.md section 5.1)."
+message = "the {axis} table has {n_rows} rows, but the matrix has {n_axis} {axis}"
+hint = "pass one {axis} table row per matrix {axis} entry, in matrix order"
+fields = [
+    { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "cells" },
+    { name = "n_rows", type = "int", doc = "Rows in the table.", example = 2699 },
+    { name = "n_axis", type = "int", doc = "Length of the matrix axis.", example = 2700 },
+]
+
+[[errors]]
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"

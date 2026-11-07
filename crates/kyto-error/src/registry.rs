@@ -165,6 +165,32 @@ pub enum KytoError {
         /// What is missing or wrong.
         problem: String,
     },
+    /// KY-E117: A CellBlock is not valid CSR, or does not fit the store or layer it is written to (format.md sections 4.8 and 10.2).
+    #[error("KY-E117: invalid CellBlock ({context}): {problem}")]
+    InvalidCellBlock {
+        /// Where the block was given: the constructor, or the writer layer.
+        context: String,
+        /// What is wrong and where (row, position).
+        problem: String,
+    },
+    /// KY-E118: A store writer's target path already exists (format.md section 10.1).
+    #[error("KY-E118: cannot write a store to '{path}': {problem}")]
+    StoreExists {
+        /// The target path.
+        path: String,
+        /// What is there.
+        problem: String,
+    },
+    /// KY-E119: A cell or gene table given to a store writer does not have one row per matrix row or column (format.md section 5.1).
+    #[error("KY-E119: the {axis} table has {n_rows} rows, but the matrix has {n_axis} {axis}")]
+    TableLength {
+        /// The axis, `cells` or `genes`.
+        axis: String,
+        /// Rows in the table.
+        n_rows: u64,
+        /// Length of the matrix axis.
+        n_axis: u64,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -227,7 +253,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 23] = [
+    pub const CODES: [&'static str; 26] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -244,6 +270,9 @@ impl KytoError {
         "KY-E114",
         "KY-E115",
         "KY-E116",
+        "KY-E117",
+        "KY-E118",
+        "KY-E119",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -272,6 +301,9 @@ impl KytoError {
             Self::InvalidSelection { .. } => "KY-E114",
             Self::UnsupportedFormatVersion { .. } => "KY-E115",
             Self::NotAStore { .. } => "KY-E116",
+            Self::InvalidCellBlock { .. } => "KY-E117",
+            Self::StoreExists { .. } => "KY-E118",
+            Self::TableLength { .. } => "KY-E119",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -301,6 +333,9 @@ impl KytoError {
             Self::InvalidSelection { .. } => "StoreInputError",
             Self::UnsupportedFormatVersion { .. } => "FormatVersionError",
             Self::NotAStore { .. } => "CorruptStoreError",
+            Self::InvalidCellBlock { .. } => "StoreInputError",
+            Self::StoreExists { .. } => "StoreInputError",
+            Self::TableLength { .. } => "StoreInputError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -361,6 +396,15 @@ impl KytoError {
             }
             Self::NotAStore { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e116"
+            }
+            Self::InvalidCellBlock { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e117"
+            }
+            Self::StoreExists { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e118"
+            }
+            Self::TableLength { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e119"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -436,6 +480,15 @@ impl KytoError {
             }
             Self::NotAStore { .. } => {
                 String::from("check the path; a kyto store has a root zarr.json with attributes.kyto.format_version, written last, so an interrupted write leaves none")
+            }
+            Self::InvalidCellBlock { .. } => {
+                String::from("build CellBlocks with indptr starting at 0, non-decreasing and ending at nnz, and sorted, unique gene positions below n_genes in each row; a store writer also needs one block per layer, in layer order, over all genes of the store, with the layer's dtype and the same rows in every layer")
+            }
+            Self::StoreExists { .. } => {
+                String::from("choose another path, remove the existing one first, or write with overwrite=True to replace an existing kyto store (it is replaced only after the new store is complete)")
+            }
+            Self::TableLength { axis, .. } => {
+                format!("pass one {axis} table row per matrix {axis} entry, in matrix order")
             }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
@@ -542,6 +595,19 @@ impl KytoError {
             Self::NotAStore { store, problem } => vec![
                 ("store", FieldValue::Str(store.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::InvalidCellBlock { context, problem } => vec![
+                ("context", FieldValue::Str(context.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::StoreExists { path, problem } => vec![
+                ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::TableLength { axis, n_rows, n_axis } => vec![
+                ("axis", FieldValue::Str(axis.clone())),
+                ("n_rows", FieldValue::Int(*n_rows)),
+                ("n_axis", FieldValue::Int(*n_axis)),
             ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
@@ -657,6 +723,19 @@ impl KytoError {
             Self::NotAStore {
                 store: "pbmc.kyto".to_owned(),
                 problem: "no root zarr.json".to_owned(),
+            },
+            Self::InvalidCellBlock {
+                context: "StoreWriter.push, layer 'counts'".to_owned(),
+                problem: "the block has 2000 genes but the store has 32738".to_owned(),
+            },
+            Self::StoreExists {
+                path: "pbmc.kyto".to_owned(),
+                problem: "a kyto store already exists there".to_owned(),
+            },
+            Self::TableLength {
+                axis: "cells".to_owned(),
+                n_rows: 2699,
+                n_axis: 2700,
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),

@@ -484,6 +484,24 @@ excludes them when comparing stores (§10.3). Unknown keys: see §11.
 4. On any failure it removes the temporary directory (best effort). A leftover
    `.kyto-tmp-` directory never has a target name, is never a valid store, and is safe
    to delete.
+5. **Stale temporaries** (a killed writer runs no cleanup). `<random>` is 16 lowercase
+   hex digits. While it writes, a writer holds an OS file lock on
+   `<parent>/.<target name>.kyto-tmp-<random>.lock`, created before the directory and
+   deleted after the rename. The OS releases the lock when the process dies, even by
+   SIGKILL. A writer starting on a target first deletes every
+   `.<target name>.kyto-tmp-<random>` directory of that target whose lock it can take,
+   and lock files left without a directory; directories whose lock is held belong to a
+   live writer and are kept. `.kyto-old-` directories are never deleted automatically:
+   after a kill between the two renames of an overwrite, the old store there is the only
+   copy.
+
+Implemented by `kyto_store::StoreWriter` (2.5). If the target exists, it fails with
+`KY-E118`; with overwrite it replaces only a kyto store (a directory whose root
+`zarr.json` has `attributes.kyto.format_version`), never another file or directory.
+Writes to one target from two processes at once are safe (each has its own temporary
+directory) but only the first rename succeeds. A symbolic link at the target is not
+followed: overwrite replaces the link itself with the new store and leaves what it
+pointed at untouched.
 
 A killed write therefore leaves the target path absent (2.5 Done when). Object stores
 (2.8) have no atomic rename; there the root `zarr.json`, written last, is the commit
@@ -511,6 +529,10 @@ marker (§3).
   `genes.parquet` (and `cells.parquet` if buffered), `provenance.json`, then
   `schema.json` with final counts.
 - The root `zarr.json` is written **last**.
+- Writer memory (2.5): per layer, fewer than `C` buffered rows, fewer than `S`
+  unwritten entries and `tile_offsets` (8 bytes per tile) between pushes; during a push,
+  a copy of the pushed rows and one `indptr` shard. Never a whole layer. `StoreWriter`
+  takes the cell table whole at the end (the buffered path above).
 
 ### 10.3 Determinism (R11, 8.7)
 

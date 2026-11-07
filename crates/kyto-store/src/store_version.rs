@@ -2,7 +2,7 @@
 //!
 //! Does: read the root `zarr.json`, require `attributes.kyto.format_version`, and accept
 //! exactly the `0.x` versions this kyto implements.
-//! Does not: write the root group (task 2.5) or check `schema.json` (§8).
+//! Does not: write the root group (see `store_writer`, task 2.5) or check `schema.json` (§8).
 
 use kyto_error::KytoError;
 use serde_json::Value;

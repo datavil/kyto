@@ -7,16 +7,22 @@
 //! So far: one whole tiled sparse layer, written by [`write_layer`] and read by
 //! [`read_layer`] (task 2.2, `docs/format.md` §4), and the cell and gene tables, written
 //! by [`write_table`] and read by [`read_table`] (task 2.3, §5), and selected tiles of a
-//! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8).
+//! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8), and a
+//! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
+//! 2.5, §10).
 #![forbid(unsafe_code)]
 
+mod atomic_dir;
 mod cell_block;
 mod csr;
 mod layer_io;
 mod layer_open;
+mod layer_stream;
 mod names;
 mod selection;
+mod store_json;
 mod store_version;
+mod store_writer;
 mod table_axis;
 mod table_check;
 mod table_columns;
@@ -32,9 +38,12 @@ mod zarr_arrays;
 pub use cell_block::{CellBlock, CellValues};
 pub use csr::CsrMatrix;
 pub use layer_io::{read_layer, write_layer};
+pub use layer_open::ValueDtype;
 pub use names::validate_member_name;
 pub use selection::AxisSelection;
+pub use store_json::ImportSource;
 pub use store_version::{FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS, check_format_version};
+pub use store_writer::{LayerSpec, StoreWriter};
 pub use table_axis::TableAxis;
 pub use table_columns::{ColumnDtype, TableColumn, table_columns};
 pub use table_io::{read_table, write_table};

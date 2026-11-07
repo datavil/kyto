@@ -93,10 +93,11 @@ Goal: a Zarr v3 store where reading a few genes costs about the same as reading 
   - Done when: a test counter shows that selecting 3 genes reads one gene block per cell block, nothing more.
   - Spec: `docs/format.md` §4.7 (reading a tile), §4.8 (tiles to CellBlock), §3 and §11 (version check on open).
   - Done: `kyto_store::LayerReader` (generic over Zarr storage; `tests/tile_reader.rs` counts reads with a wrapping store). Selections are plain canonical positions (`AxisSelection`: all, range, strictly increasing indices); unsorted, repeated or out-of-range positions raise `KY-E114` (the plan canonicalises, §4.8). The minimal `CellBlock` lives in kyto-store (exec depends on store); 5.1 adds pooling and alignment behind its slice accessors. Open checks `format_version` (`KY-E115`, `KY-E116`); `read_layer` (2.2) does not yet.
-- [ ] **2.5 Streaming writer.** Writes `CellBlock`s as they arrive; writes to a temporary path and renames on success, so a failed run leaves no half store.
+- [x] **2.5 Streaming writer.** Writes `CellBlock`s as they arrive; writes to a temporary path and renames on success, so a failed run leaves no half store.
   - Depends: 2.2, 2.3
   - Done when: killing a write midway leaves the target path absent.
   - Spec: `docs/format.md` §10 (atomic write, write order, determinism), §8, §9, §3 (root `zarr.json` last).
+  - Done: `kyto_store::StoreWriter` (`create` with the gene table and `LayerSpec`s, `push` one `CellBlock` per layer, `finish` with the cell table and an optional `ImportSource`); public checked `CellBlock::from_f32`/`from_u32`. Re-blocks into cell blocks of `C` rows and writes shards as they fill; bytes equal `write_layer`'s for any batching and thread count. Target exists: `KY-E118` (overwrite replaces only a kyto store); bad blocks `KY-E117`; table length `KY-E119`. Stale temporaries are found by a free OS file lock and deleted by the next write (format.md §10.1 step 5). `tests/store_writer_kill.rs` SIGKILLs a child writer midway. Open: the declared `rust-version = "1.85"` no longer holds (`File::lock` is 1.89, polars needs 1.95); `atomic_dir.rs` allows `clippy::incompatible_msrv` until the workspace bumps it. Enum `ordered` flags are always `false` from this writer; 2.6 needs a way to pass them.
 - [ ] **2.6 Importers.** `ky.convert()` from `.h5ad` (dense, CSR, CSC; streamed through the `hdf5` crate), 10x `.h5`, and `.mtx` + TSV. `on_duplicate_ids="error"` by default, `"suffix"` opt-in.
   - Depends: 2.5
   - Done when: every fixture converts and matches anndata's values exactly.

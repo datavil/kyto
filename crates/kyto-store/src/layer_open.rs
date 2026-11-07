@@ -24,11 +24,21 @@ pub(crate) const LAYER_KIND: &str = "tiled_csr";
 
 /// The value dtype a layer stores (format.md §4.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ValueDtype {
+pub enum ValueDtype {
     /// `float32`.
     F32,
     /// `uint32`.
     U32,
+}
+
+impl ValueDtype {
+    /// The Zarr v3 dtype name, as `zarr.json` and `schema.json` write it.
+    pub fn zarr_name(self) -> &'static str {
+        match self {
+            Self::F32 => f32::ZARR_DTYPE,
+            Self::U32 => u32::ZARR_DTYPE,
+        }
+    }
 }
 
 /// An opened layer whose arrays passed the checks of [`open_layer`].
