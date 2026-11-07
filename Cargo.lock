@@ -1384,6 +1384,11 @@ version = "0.0.0"
 [[package]]
 name = "kyto-core"
 version = "0.0.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "kyto-error"
@@ -1420,11 +1425,13 @@ dependencies = [
  "flate2",
  "futures",
  "hdf5-metno",
+ "kyto-core",
  "kyto-error",
  "object_store",
  "polars",
  "proptest",
  "rayon",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

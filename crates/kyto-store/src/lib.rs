@@ -11,7 +11,9 @@
 //! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
 //! 2.5, §10), and inputs imported into a new store by [`convert`] (`.h5ad`, 10x `.h5`,
 //! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7), and stores on S3, GCS
-//! or HTTP read through [`RemoteStorage`] by the same [`LayerReader`] (task 2.8).
+//! or HTTP read through [`RemoteStorage`] by the same [`LayerReader`] (task 2.8), and `schema.json` read as a
+//! [`kyto_core::AtlasSchema`] by [`read_atlas_schema`] (task 3.1), the one typed model the
+//! writer also writes it from.
 #![forbid(unsafe_code)]
 
 mod atomic_dir;
@@ -63,10 +65,11 @@ pub use names::validate_member_name;
 pub use remote_store::RemoteStorage;
 pub use selection::AxisSelection;
 pub use store_json::ImportSource;
+pub use store_schema::read_atlas_schema;
 pub use store_version::{FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS, check_format_version};
 pub use store_writer::{LayerSpec, StoreWriter};
 pub use table_axis::TableAxis;
-pub use table_columns::{ColumnDtype, TableColumn, table_columns};
+pub use table_columns::{ColumnDtype, ColumnSchema, table_columns};
 pub use table_io::{read_table, write_table};
 pub use tile_reader::{CellBlocks, LayerReader, SelectedBlock};
 pub use tiling::{DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, TileGrid, Tiling};

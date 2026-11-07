@@ -6,36 +6,13 @@
 
 use kyto_error::KytoError;
 
-/// Provisional default `cell_block_size` (`C`). Task 10.4 sets the real default.
-pub const DEFAULT_CELL_BLOCK_SIZE: u64 = 4096;
-/// Provisional default `gene_block_size` (`G`). Task 10.4 sets the real default.
-pub const DEFAULT_GENE_BLOCK_SIZE: u64 = 1024;
+// The tile sizes are part of the schema model (task 3.1); kyto-store re-exports them.
+pub use kyto_core::{DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, Tiling};
 
 /// Largest value of an axis length and of `C * G` (format.md §4.5).
 const U32_LIMIT: u64 = u32::MAX as u64;
 /// Largest size in bytes of one buffered `indptr` shard (format.md §4.5).
 const SHARD_BYTES_LIMIT: u64 = 1 << 31;
-
-/// The tile sizes of a store: `C` cells by `G` genes per tile (format.md §4.1).
-///
-/// The same for every layer of a store; recorded in `schema.json` `tiling` (§8).
-/// [`Tiling::default`] gives provisional sizes until task 10.4 benchmarks them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Tiling {
-    /// `C`: cells per cell block.
-    pub cell_block_size: u64,
-    /// `G`: genes per gene block.
-    pub gene_block_size: u64,
-}
-
-impl Default for Tiling {
-    fn default() -> Self {
-        Self {
-            cell_block_size: DEFAULT_CELL_BLOCK_SIZE,
-            gene_block_size: DEFAULT_GENE_BLOCK_SIZE,
-        }
-    }
-}
 
 /// The tile grid of one `n_cells x n_genes` layer under a [`Tiling`].
 ///

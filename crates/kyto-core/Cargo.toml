@@ -11,3 +11,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1.11.0"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }

@@ -185,7 +185,7 @@ fn schema_columns_describe_the_stored_table() {
     let columns = table_columns(TableAxis::Cells, &read).unwrap();
     let json: Vec<String> = columns
         .iter()
-        .map(|column| column.to_json().to_string())
+        .map(|column| serde_json::to_string(column).unwrap())
         .collect();
     assert_eq!(json[0], r#"{"name":"cell_id","dtype":"String"}"#);
     assert_eq!(json[1], r#"{"name":"boolean","dtype":"Boolean"}"#);

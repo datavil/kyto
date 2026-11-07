@@ -19,7 +19,7 @@ use polars::prelude::{
 
 use crate::table_axis::TableAxis;
 use crate::table_check::{PlainStrings, check_table};
-use crate::table_columns::{TableColumn, table_columns};
+use crate::table_columns::{ColumnSchema, table_columns};
 use crate::tiling::Tiling;
 use crate::zarr_arrays::store_io;
 
@@ -54,7 +54,7 @@ pub(crate) fn write_table_columns(
     axis: TableAxis,
     frame: &DataFrame,
     tiling: Tiling,
-) -> Result<Vec<TableColumn>, KytoError> {
+) -> Result<Vec<ColumnSchema>, KytoError> {
     check_table(axis, frame, PlainStrings::Allowed)?;
     let row_group_size = match axis.row_group_size(tiling) {
         0 => {

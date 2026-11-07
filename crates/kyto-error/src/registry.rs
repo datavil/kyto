@@ -218,7 +218,7 @@ pub enum KytoError {
     CorruptSchema {
         /// The store path.
         store: String,
-        /// The key that is missing or wrong.
+        /// What is wrong, with the line and column of the key.
         problem: String,
     },
     /// KY-E123: An export's target path already exists (sink_h5ad, task 2.7).
@@ -894,7 +894,7 @@ impl KytoError {
             },
             Self::CorruptSchema {
                 store: "pbmc.kyto".to_owned(),
-                problem: "layers[0].dtype is 'int64', not 'float32' or 'uint32'".to_owned(),
+                problem: "it does not match the format (unknown variant `int64`, expected `float32` or `uint32` at line 7 column 40)".to_owned(),
             },
             Self::OutputExists {
                 path: "pbmc.h5ad".to_owned(),

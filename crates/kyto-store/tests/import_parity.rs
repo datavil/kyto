@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use kyto_store::{
     AxisSelection, CellValues, ConvertOptions, LayerReader, TableAxis, TileGrid, Tiling, convert,
-    read_table,
+    read_atlas_schema, read_table,
 };
 use polars::prelude::{DataFrame, DataType, ParquetReader, SerReader};
 use serde_json::Value;
@@ -118,6 +118,16 @@ fn check_case(case: &Value, expected_root: &Path, work: &Path) {
         ..ConvertOptions::default()
     };
     convert(input, &target, &options).unwrap_or_else(|error| panic!("{name}: {error}"));
+
+    // Task 3.1: the typed schema read back writes the stored file byte for byte.
+    let atlas = read_atlas_schema(&target).unwrap();
+    let mut bytes = serde_json::to_vec_pretty(&atlas).unwrap();
+    bytes.push(b'\n');
+    assert_eq!(
+        bytes,
+        std::fs::read(target.join("schema.json")).unwrap(),
+        "{name}"
+    );
 
     let schema = read_json(&target.join("schema.json"));
     let want = read_json(&expected.join("schema.json"));

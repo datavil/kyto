@@ -360,7 +360,7 @@ message = "schema.json of the store at '{store}' is invalid: {problem}"
 hint = "the store breaks docs/format.md section 8; write the store again with kyto, or report a bug if kyto wrote it"
 fields = [
     { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
-    { name = "problem", type = "str", doc = "The key that is missing or wrong.", example = "layers[0].dtype is 'int64', not 'float32' or 'uint32'" },
+    { name = "problem", type = "str", doc = "What is wrong, with the line and column of the key.", example = "it does not match the format (unknown variant `int64`, expected `float32` or `uint32` at line 7 column 40)" },
 ]
 
 [[errors]]

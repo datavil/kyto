@@ -18,3 +18,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Static HDF5 through hdf5-metno](hdf5_static_build.md): user chose hdf5-metno `static` (bundled HDF5 via CMake from PyPI, dev group and build-system requires); 6-target build unverified until next CI run.
 - [Release extension misaligned LINKEDIT on macOS 27](macos_ld_linkedit_alignment.md): ld with the 27 SDK leaves the string pool 4 bytes off and `import kyto` fails for release builds; `export SDKROOT=.../MacOSX26.5.sdk` on this machine fixes it.
 - [MinIO for the remote store tests](minio_native_tests.md): native Homebrew `minio` here (formula disabled 2027-02-17), docker/podman in CI; SigV4 bucket creation; `Path::parse` for zarr keys.
+- [serde validation and R10](serde_errors_r10.md): no `try_from` with String errors; hand-written `Deserialize` with `missing_field`/`unknown_variant`; reject `null` optional keys for exact round trips.

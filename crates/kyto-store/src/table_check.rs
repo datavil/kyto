@@ -12,7 +12,7 @@ use kyto_error::KytoError;
 use polars::prelude::{Column, DataFrame, DataType};
 
 use crate::table_axis::{RESERVED_ID_COLUMNS, TableAxis};
-use crate::table_columns::{ACCEPTED_DTYPES, ColumnDtype};
+use crate::table_columns::{ACCEPTED_DTYPES, ColumnDtype, column_dtype};
 
 /// How many offending IDs or rows an error lists.
 const SHOWN: usize = 5;
@@ -100,7 +100,7 @@ fn check_column(column: &Column, plain_strings: PlainStrings) -> Result<(), (Str
                 .to_owned(),
         ));
     }
-    match ColumnDtype::from_polars(column.dtype()) {
+    match column_dtype(column.dtype()) {
         Some(ColumnDtype::String) if plain_strings == PlainStrings::Forbidden => Err((
             "has dtype String; only the ID column may".to_owned(),
             "store string columns as Enum".to_owned(),

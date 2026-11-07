@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use kyto_core::LayerSchema;
 use kyto_error::KytoError;
 use polars::prelude::DataFrame;
 use rayon::prelude::*;
@@ -30,11 +31,11 @@ use crate::cell_block::{CellBlock, CellValues};
 use crate::layer_open::{LAYER_KIND, ValueDtype};
 use crate::layer_stream::LayerStream;
 use crate::names::validate_member_name;
-use crate::store_json::{ImportSource, LayerSummary, Schema, provenance_json};
+use crate::store_json::{ImportSource, atlas_schema, provenance_json};
 use crate::store_version::FORMAT_VERSION;
 use crate::table_axis::TableAxis;
 use crate::table_check::{PlainStrings, check_table};
-use crate::table_columns::{ColumnDtype, TableColumn};
+use crate::table_columns::{ColumnDtype, ColumnSchema};
 use crate::table_io::write_table_columns;
 use crate::tiling::{TileGrid, Tiling};
 use crate::write_options::LayerWriteOptions;
@@ -271,9 +272,9 @@ impl StoreWriter {
                 LayerState::F32(stream) => stream.finish(n_cells)?,
                 LayerState::U32(stream) => stream.finish(n_cells)?,
             };
-            summaries.push(LayerSummary {
+            summaries.push(LayerSchema {
                 name: name.clone(),
-                dtype: dtype.zarr_name(),
+                dtype: (*dtype).into(),
                 nnz,
             });
         }
@@ -300,15 +301,15 @@ impl StoreWriter {
         }
         let provenance = provenance_json(source, self.started_at, SystemTime::now());
         write_json(&store.join("provenance.json"), &provenance)?;
-        let schema = Schema {
+        let schema = atlas_schema(
             n_cells,
             n_genes,
-            tiling: self.tiling,
-            cell_columns: &cell_columns,
-            gene_columns: &gene_columns,
-            layers: &summaries,
-        };
-        write_json(&store.join("schema.json"), &schema.to_json())?;
+            self.tiling,
+            cell_columns,
+            gene_columns,
+            summaries,
+        );
+        write_json(&store.join("schema.json"), &schema)?;
         // ... and the root zarr.json last (format.md §3).
         let kyto = serde_json::json!({ "format_version": FORMAT_VERSION });
         store_group(storage, "/", Some(kyto))?;
@@ -387,9 +388,9 @@ impl StoreWriter {
 ///
 /// # Errors
 /// `KY-E112` if the table has no such column or it is not an `Enum`.
-fn set_ordered(axis: TableAxis, columns: &mut [TableColumn], name: &str) -> Result<(), KytoError> {
+fn set_ordered(axis: TableAxis, columns: &mut [ColumnSchema], name: &str) -> Result<(), KytoError> {
     let problem = match columns.iter_mut().find(|column| column.name == name) {
-        Some(TableColumn {
+        Some(ColumnSchema {
             dtype: ColumnDtype::Enum { ordered, .. },
             ..
         }) => {
@@ -408,7 +409,7 @@ fn set_ordered(axis: TableAxis, columns: &mut [TableColumn], name: &str) -> Resu
 }
 
 /// Write a JSON file with keys in insertion order (format.md §10.3) and a final newline.
-fn write_json(path: &Path, value: &serde_json::Value) -> Result<(), KytoError> {
+fn write_json(path: &Path, value: &impl serde::Serialize) -> Result<(), KytoError> {
     let path_text = path.display().to_string();
     let mut bytes =
         serde_json::to_vec_pretty(value).map_err(|error| store_io("write", &path_text, error))?;

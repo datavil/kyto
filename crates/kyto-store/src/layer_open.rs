@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use kyto_core::LayerDtype;
 use kyto_error::KytoError;
 use zarrs::array::{Array, DataType, ElementOwned};
 use zarrs::group::Group;
@@ -29,6 +30,24 @@ pub enum ValueDtype {
     F32,
     /// `uint32`.
     U32,
+}
+
+impl From<ValueDtype> for LayerDtype {
+    fn from(dtype: ValueDtype) -> Self {
+        match dtype {
+            ValueDtype::F32 => Self::Float32,
+            ValueDtype::U32 => Self::Uint32,
+        }
+    }
+}
+
+impl From<LayerDtype> for ValueDtype {
+    fn from(dtype: LayerDtype) -> Self {
+        match dtype {
+            LayerDtype::Float32 => Self::F32,
+            LayerDtype::Uint32 => Self::U32,
+        }
+    }
 }
 
 impl ValueDtype {

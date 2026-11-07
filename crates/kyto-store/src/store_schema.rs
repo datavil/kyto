@@ -1,20 +1,21 @@
-//! Read the parts of a store's `schema.json` a reader needs before it opens a layer
-//! (format.md §8).
+//! Read a store's `schema.json` (format.md §8) as a `kyto_core::AtlasSchema`, and the
+//! parts of it a reader needs before it opens a layer.
 //!
-//! Does: parse `n_cells`, `n_genes`, `tiling`, the `layers` list (name, dtype, nnz) and
-//! the `ordered` flag of every `Enum` column, and check their types.
+//! Does: parse `schema.json` with serde into an [`AtlasSchema`] (unknown keys and wrong
+//! types are `KY-E122`), check the tiling and that a v0 store has no modalities, and
+//! derive the [`StoreSchema`] view (tile grid, layers with their value dtype, the
+//! `ordered` flag of every `Enum` column).
 //! Does not: check that `schema.json` agrees with the members it describes (each reader
-//! checks what it opens: the tile reader the layer arrays, `read_table` the tables), or
-//! read `lineage`, `embeddings` or `graphs` (not used yet).
+//! checks what it opens: the tile reader the layer arrays, `read_table` the tables).
 
 use std::path::Path;
 
+use kyto_core::{AtlasSchema, ColumnDtype};
 use kyto_error::KytoError;
-use serde_json::Value;
 
 use crate::layer_open::ValueDtype;
 use crate::table_axis::TableAxis;
-use crate::tiling::{TileGrid, Tiling};
+use crate::tiling::TileGrid;
 
 /// One `layers` entry of `schema.json`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,102 +36,68 @@ pub(crate) struct StoreSchema {
     pub ordered: Vec<(TableAxis, String)>,
 }
 
-/// Read `schema.json` of the store at `store`.
+/// Read `schema.json` of the local store at `store`.
+///
+/// The result equals the schema the store's writer wrote, and serializing it with
+/// `serde_json::to_vec_pretty` gives the file's bytes back (without the final newline).
 ///
 /// # Errors
 /// - `KY-E110` if the file cannot be read.
-/// - `KY-E122` if it is not JSON or a key is missing or of the wrong type.
+/// - `KY-E122` if it is not JSON, a key is missing, unknown or of the wrong type, or it
+///   lists modalities (format v0 has none).
 /// - `KY-E104`/`KY-E105` (from [`TileGrid::new`]) if the tiling is invalid.
-pub(crate) fn read_schema(store: &Path) -> Result<StoreSchema, KytoError> {
-    let path = store.join("schema.json");
+pub fn read_atlas_schema(store: &Path) -> Result<AtlasSchema, KytoError> {
     let store_text = store.display().to_string();
     let corrupt = |problem: String| KytoError::CorruptSchema {
         store: store_text.clone(),
         problem,
     };
-    let bytes = std::fs::read(&path).map_err(|error| KytoError::StoreIo {
+    let bytes = std::fs::read(store.join("schema.json")).map_err(|error| KytoError::StoreIo {
         operation: "read schema.json of".to_owned(),
         path: store_text.clone(),
         detail: error.to_string(),
     })?;
-    let root: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| corrupt(format!("it is not valid JSON ({error})")))?;
-    let integer = |value: &Value, key: &str| {
-        value
-            .as_u64()
-            .ok_or_else(|| corrupt(format!("{key} is not a non-negative integer")))
-    };
-    // `key` is the full path for messages (`layers[0].name`); its last part is looked up.
-    let field = |value: &'_ Value, key: &str| -> Result<Value, KytoError> {
-        value
-            .get(key.rsplit('.').next().unwrap_or(key))
-            .cloned()
-            .ok_or_else(|| corrupt(format!("{key} is missing")))
-    };
-    let n_cells = integer(&field(&root, "n_cells")?, "n_cells")?;
-    let n_genes = integer(&field(&root, "n_genes")?, "n_genes")?;
-    let tiling_value = field(&root, "tiling")?;
-    let tiling = Tiling {
-        cell_block_size: integer(
-            &field(&tiling_value, "tiling.cell_block_size")?,
-            "tiling.cell_block_size",
-        )?,
-        gene_block_size: integer(
-            &field(&tiling_value, "tiling.gene_block_size")?,
-            "tiling.gene_block_size",
-        )?,
-    };
-    let grid = TileGrid::new(n_cells, n_genes, tiling)?;
-
-    let layers_value = field(&root, "layers")?;
-    let entries = layers_value
-        .as_array()
-        .ok_or_else(|| corrupt("layers is not a list".to_owned()))?;
-    let mut layers = Vec::with_capacity(entries.len());
-    for (position, entry) in entries.iter().enumerate() {
-        let key = format!("layers[{position}]");
-        let name = field(entry, &format!("{key}.name"))?
-            .as_str()
-            .ok_or_else(|| corrupt(format!("{key}.name is not a string")))?
-            .to_owned();
-        let dtype_value = field(entry, &format!("{key}.dtype"))?;
-        let dtype = match dtype_value.as_str() {
-            Some("float32") => ValueDtype::F32,
-            Some("uint32") => ValueDtype::U32,
-            _ => {
-                return Err(corrupt(format!(
-                    "{key}.dtype is {dtype_value}, not 'float32' or 'uint32'"
-                )));
-            }
+    let schema: AtlasSchema = serde_json::from_slice(&bytes).map_err(|error| {
+        let problem = if error.is_syntax() || error.is_eof() {
+            format!("it is not valid JSON ({error})")
+        } else {
+            format!("it does not match the format ({error})")
         };
-        let nnz = integer(&field(entry, &format!("{key}.nnz"))?, &format!("{key}.nnz"))?;
-        layers.push(SchemaLayer { name, dtype, nnz });
+        corrupt(problem)
+    })?;
+    if !schema.modalities.is_empty() {
+        return Err(corrupt(
+            "it lists modalities, which format 0.1 stores do not have".to_owned(),
+        ));
     }
+    TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
+    Ok(schema)
+}
 
+/// Read `schema.json` of the store at `store` and derive the reader's view of it.
+///
+/// # Errors
+/// As [`read_atlas_schema`].
+pub(crate) fn read_schema(store: &Path) -> Result<StoreSchema, KytoError> {
+    let schema = read_atlas_schema(store)?;
+    let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
+    let layers = schema
+        .layers
+        .into_iter()
+        .map(|layer| SchemaLayer {
+            name: layer.name,
+            dtype: layer.dtype.into(),
+            nnz: layer.nnz,
+        })
+        .collect();
     let mut ordered = Vec::new();
-    for axis in [TableAxis::Cells, TableAxis::Genes] {
-        let key = axis.as_str();
-        let columns_value = field(&field(&root, key)?, &format!("{key}.columns"))?;
-        let columns = columns_value
-            .as_array()
-            .ok_or_else(|| corrupt(format!("{key}.columns is not a list")))?;
-        for (position, column) in columns.iter().enumerate() {
-            let column_key = format!("{key}.columns[{position}]");
-            if column.get("dtype").and_then(Value::as_str) != Some("Enum") {
-                continue;
-            }
-            let name = field(column, &format!("{column_key}.name"))?;
-            let name = name
-                .as_str()
-                .ok_or_else(|| corrupt(format!("{column_key}.name is not a string")))?;
-            match column.get("ordered") {
-                Some(Value::Bool(true)) => ordered.push((axis, name.to_owned())),
-                Some(Value::Bool(false)) => {}
-                _ => {
-                    return Err(corrupt(format!(
-                        "{column_key}.ordered is missing or not a boolean"
-                    )));
-                }
+    for (axis, table) in [
+        (TableAxis::Cells, &schema.cells),
+        (TableAxis::Genes, &schema.genes),
+    ] {
+        for column in &table.columns {
+            if let ColumnDtype::Enum { ordered: true, .. } = column.dtype {
+                ordered.push((axis, column.name.clone()));
             }
         }
     }
@@ -158,7 +125,8 @@ mod tests {
             {"name": "stage", "dtype": "Enum", "n_categories": 2, "ordered": true}]},
         "genes": {"columns": [{"name": "gene_id", "dtype": "String"},
             {"name": "symbol", "dtype": "Enum", "n_categories": 2, "ordered": false}]},
-        "layers": [{"name": "counts", "dtype": "uint32", "nnz": 4}]}"#;
+        "layers": [{"name": "counts", "dtype": "uint32", "nnz": 4}],
+        "embeddings": [], "graphs": []}"#;
 
     #[test]
     fn reads_grid_layers_and_ordered_flags() {
@@ -181,16 +149,21 @@ mod tests {
     fn bad_schemas_are_e122() {
         for (text, needle) in [
             ("not json", "not valid JSON"),
-            (&VALID.replace("\"n_genes\": 2,", ""), "n_genes is missing"),
-            (&VALID.replace("\"uint32\"", "\"int64\""), "layers[0].dtype"),
-            (&VALID.replace("\"nnz\": 4", "\"nnz\": -1"), "layers[0].nnz"),
-            (
-                &VALID.replace("\"ordered\": true", "\"ordered\": 1"),
-                "cells.columns[1].ordered",
-            ),
+            (&VALID.replace("\"n_genes\": 2,", ""), "missing field `n_genes`"),
+            (&VALID.replace("\"uint32\"", "\"int64\""), "unknown variant `int64`"),
+            (&VALID.replace("\"nnz\": 4", "\"nnz\": -1"), "invalid value: integer `-1`"),
+            (&VALID.replace("\"ordered\": true", "\"ordered\": 1"), "invalid type"),
             (
                 &VALID.replace("\"cell_block_size\": 4,", ""),
-                "tiling.cell_block_size is missing",
+                "missing field `cell_block_size`",
+            ),
+            (
+                &VALID.replace("\"n_genes\": 2,", "\"n_genes\": 2, \"extra\": 0,"),
+                "unknown field `extra`",
+            ),
+            (
+                &VALID.replace("\"graphs\": []", "\"graphs\": [], \"modalities\": [{\"name\": \"adt\", \"n_features\": 1, \"features\": {\"columns\": []}, \"layers\": []}]"),
+                "lists modalities",
             ),
         ] {
             let (_dir, result) = write_schema(text);

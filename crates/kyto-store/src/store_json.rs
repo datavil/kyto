@@ -1,27 +1,16 @@
 //! The store's JSON files: `schema.json` (format.md §8) and `provenance.json` (§9).
 //!
-//! Does: build both as JSON with keys in the order the spec lists them and member lists
-//! sorted by name (format.md §10.3), and format the `run` timestamps as RFC 3339 UTC.
+//! Does: build `schema.json` as a `kyto_core::AtlasSchema` (whose serde order is the
+//! spec's key order) with member lists sorted by name (format.md §10.3), build
+//! `provenance.json` with keys in spec order, and format the `run` timestamps as RFC 3339
+//! UTC.
 //! Does not: write files (see `store_writer`), or fill in a plan, seeds or timings
 //! (tasks 4.3 and 8.5); v0 writes `null`, `{}` and `{}`.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kyto_core::{AtlasSchema, ColumnSchema, LayerSchema, TableSchema, Tiling};
 use serde_json::{Value, json};
-
-use crate::table_columns::TableColumn;
-use crate::tiling::Tiling;
-
-/// One `layers` entry of `schema.json`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LayerSummary {
-    /// Layer name.
-    pub name: String,
-    /// Zarr dtype of its `data` array.
-    pub dtype: &'static str,
-    /// Stored entries.
-    pub nnz: u64,
-}
 
 /// The input file of an import, recorded as `source` in `provenance.json` (format.md §9).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,40 +23,31 @@ pub struct ImportSource {
     pub sha256: String,
 }
 
-/// The parts of `schema.json` (format.md §8).
-pub(crate) struct Schema<'a> {
-    pub n_cells: u64,
-    pub n_genes: u64,
-    pub tiling: Tiling,
-    pub cell_columns: &'a [TableColumn],
-    pub gene_columns: &'a [TableColumn],
-    pub layers: &'a [LayerSummary],
-}
-
-impl Schema<'_> {
-    /// `schema.json` with keys in spec order; layers sorted by name in byte order.
-    /// The store has no embeddings or graphs yet (their writers come with 6.x).
-    pub(crate) fn to_json(&self) -> Value {
-        let mut layers: Vec<&LayerSummary> = self.layers.iter().collect();
-        layers.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
-        let columns =
-            |columns: &[TableColumn]| columns.iter().map(TableColumn::to_json).collect::<Vec<_>>();
-        json!({
-            "n_cells": self.n_cells,
-            "n_genes": self.n_genes,
-            "tiling": {
-                "cell_block_size": self.tiling.cell_block_size,
-                "gene_block_size": self.tiling.gene_block_size,
-            },
-            "cells": {"columns": columns(self.cell_columns)},
-            "genes": {"columns": columns(self.gene_columns)},
-            "layers": layers
-                .iter()
-                .map(|layer| json!({"name": layer.name, "dtype": layer.dtype, "nnz": layer.nnz}))
-                .collect::<Vec<_>>(),
-            "embeddings": [],
-            "graphs": [],
-        })
+/// The [`AtlasSchema`] of a new store (format.md §8), layers sorted by name in byte
+/// order. The store has no embeddings or graphs yet (their writers come with 6.x).
+pub(crate) fn atlas_schema(
+    n_cells: u64,
+    n_genes: u64,
+    tiling: Tiling,
+    cell_columns: Vec<ColumnSchema>,
+    gene_columns: Vec<ColumnSchema>,
+    mut layers: Vec<LayerSchema>,
+) -> AtlasSchema {
+    layers.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
+    AtlasSchema {
+        n_cells,
+        n_genes,
+        tiling,
+        cells: TableSchema {
+            columns: cell_columns,
+        },
+        genes: TableSchema {
+            columns: gene_columns,
+        },
+        layers,
+        embeddings: Vec::new(),
+        graphs: Vec::new(),
+        modalities: Vec::new(),
     }
 }
 
