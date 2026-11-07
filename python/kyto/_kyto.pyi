@@ -1319,22 +1319,39 @@ def gene_column(name: builtins.str, /) -> GeneExpr[Unknown]:
     """
 
 def gene_expression(
-    gene_id: builtins.str, /, *, layer: builtins.str | None = None
+    gene_id: builtins.str,
+    /,
+    *,
+    layer: builtins.str | None = None,
+    by: Literal["id", "symbol"] = "id",
 ) -> CellExpr[Numeric]:
     """The values of one gene across cells, as a ``CellExpr``.
 
     Parameters
     ----------
     gene_id : str
-        The gene ID. It is checked against the schema when the plan is built (task 3.5).
+        The gene ID, or its symbol with ``by='symbol'``. It is checked against the
+        schema when the plan is built (task 3.5).
     layer : str or None, default=None
         The layer to read. ``None`` reads the plan's default layer
         (``Atlas.with_default_layer``).
+    by : {'id', 'symbol'}, default='id'
+        How ``gene_id`` names the gene. ``'id'``: it is the gene ID (the ``gene_id``
+        column). ``'symbol'``: it is a gene symbol (the ``symbol`` column of the gene
+        table), resolved once to the ID of the one gene that carries it when the plan
+        is built (R6). A symbol several genes carry raises ``ResolutionError``
+        (``KY-E204``) listing their IDs; one no gene carries, or a store without
+        symbols, raises ``KY-E210``. Symbols are matched exactly, case included.
 
     Returns
     -------
     CellExpr[Numeric]
         A numeric expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ResolutionError
+        ``KY-E214`` if ``by`` is not ``'id'`` or ``'symbol'``.
 
     Examples
     --------
@@ -1342,6 +1359,8 @@ def gene_expression(
     gene_expression('CD3E', layer='log1p') > 1.5
     >>> gene_expression("CD3E").dtype
     <class 'kyto.dtypes.Numeric'>
+    >>> gene_expression("CD3E", by="symbol")
+    gene_expression('CD3E', by='symbol')
     """
 
 def cell_profile(

@@ -34,7 +34,7 @@ pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;
 pub use removed_genes::RemovedGenes;
-pub use resolve::{META_PREFIX, Resolver};
+pub use resolve::{META_PREFIX, Resolver, SYMBOL_COLUMN};
 pub use schema::{
     AtlasSchema, Axis, DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, EmbeddingSchema,
     FloatDtype, GraphSchema, LayerDtype, LayerSchema, ModalitySchema, TableSchema, Tiling,

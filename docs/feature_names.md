@@ -44,8 +44,22 @@ A short name has no `:`. It matches:
 - the cell table column of that name, and
 - the gene of that ID, read from the plan's default layer.
 
-A short name never names an embedding (it needs a component). Gene symbols are not
-looked up (`by="symbol"` is task 3.9).
+A short name never names an embedding (it needs a component). A `feature(...)` name
+is never a gene symbol: full names hold gene IDs.
+
+## 3.1 Gene symbols
+
+`gene_expression(symbol, by="symbol")` names a gene by its symbol, the `symbol` column
+of `genes.parquet` (format.md §5.2), matched exactly (case included; nulls match
+nothing). The resolver turns it into the gene's ID once, when the plan is built (R6):
+the stored expression is `gene_expression(<gene_id>, layer=...)`, so its full name is
+`<layer>:<gene_id>`. Symbols need not be unique, so:
+
+| Genes with this symbol | Result |
+| --- | --- |
+| exactly one | that gene's ID |
+| none, or no string `symbol` column | `KY-E210` (kind `gene symbol`) |
+| two or more | `KY-E204`, listing their IDs in table order |
 
 ## 4. One match or an error
 

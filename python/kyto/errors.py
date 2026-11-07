@@ -195,6 +195,7 @@ class ResolutionError(KytoError, ValueError):
     - ``KY-E208``: A feature name cannot name any feature.
     - ``KY-E210``: A name does not match any column, gene, cell, embedding component or feature of the plan.
     - ``KY-E211``: A gene or cell is read from the default layer, but the plan has none.
+    - ``KY-E214``: An argument that picks how a name is looked up is given a value it does not accept.
 
     See `KytoError` for the parameters and attributes.
 
@@ -922,6 +923,18 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("expression", "str"),
             _Field("example", "str"),
+        ),
+    ),
+    "KY-E214": _Entry(
+        class_name="ResolutionError",
+        message="{function}(..., {parameter}={value}) is not accepted",
+        hint="{parameter} takes one of {accepted}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e214",
+        fields=(
+            _Field("function", "str"),
+            _Field("parameter", "str"),
+            _Field("value", "str"),
+            _Field("accepted", "list[str]"),
         ),
     ),
     "KY-E301": _Entry(

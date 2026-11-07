@@ -10,7 +10,7 @@ off here, so each ignore names only the error under test.
 # pyright: reportUnnecessaryTypeIgnoreComment=error
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
-from kyto import cell_column, gene_column
+from kyto import cell_column, gene_column, gene_expression
 from kyto._kyto import Atlas, CellExpr, GeneExpr
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
 
@@ -83,3 +83,12 @@ def lineage(atlas: Atlas, numeric: CellExpr[Numeric], flag: GeneExpr[Boolean]) -
     _ = atlas.filter_genes(numeric > 1)  # pyright: ignore[reportArgumentType]
     _ = atlas.filter_genes(gene_column("highly_variable"))  # Unknown until resolved
     _ = atlas.filter_genes(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
+
+
+def gene_symbols(atlas: Atlas) -> None:
+    """``by`` takes ``'id'`` or ``'symbol'`` only; a symbol read is numeric and resolves
+    to the same axis and kind (task 3.9)."""
+    by_symbol: CellExpr[Numeric] = gene_expression("CD3E", layer="log1p", by="symbol")
+    resolved: CellExpr[Numeric] = atlas.resolve(gene_expression("CD3E", by="id"))
+    _ = (by_symbol, resolved)
+    _ = gene_expression("CD3E", by="name")  # pyright: ignore[reportArgumentType]

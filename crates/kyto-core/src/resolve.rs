@@ -13,8 +13,10 @@
 //! plan (`KY-E203`, task 3.7, R9); refuse a stored derived cell column (one whose
 //! schema records lineage) read after a step that changed the gene axis (`KY-E301`,
 //! task 3.8) unless the read is `.recompute()`d, which needs that lineage (`KY-E302`).
-//! Does not: suggest close matches for unknown names (task 8.2), look genes up by
-//! symbol (task 3.9), or check that a cell ID exists (the plan holds no cell IDs).
+//! It also turns a gene named by symbol (`by='symbol'`, task 3.9) into its gene ID: a
+//! symbol must match exactly one gene (`KY-E204` lists the IDs otherwise).
+//! Does not: suggest close matches for unknown names or symbols (task 8.2), or check
+//! that a cell ID exists (the plan holds no cell IDs).
 
 use kyto_error::KytoError;
 
@@ -27,6 +29,9 @@ use crate::removed_genes::RemovedGenes;
 use crate::schema::{AtlasSchema, Axis, EmbeddingSchema, TableSchema};
 use crate::schema_column::{ColumnDtype, ColumnSchema};
 use crate::{BinaryOp, CellAxis};
+
+/// The gene table column that holds gene symbols (format.md §5.2, task 3.9).
+pub const SYMBOL_COLUMN: &str = "symbol";
 
 /// The prefix of a cell table column in a full feature name: `meta:cluster`.
 pub const META_PREFIX: &str = "meta";
@@ -290,6 +295,40 @@ impl<'a> Resolver<'a> {
             .find(|column| column.name == name)
     }
 
+    /// The ID of the one gene whose symbol is `symbol` (task 3.9): `KY-E204` listing
+    /// the IDs when several genes carry it, `KY-E210` (built by `unknown`) when none
+    /// does or the store has no usable `symbol` column.
+    fn gene_by_symbol(
+        &self,
+        symbol: &str,
+        unknown: &impl Fn(String, &str, String) -> KytoError,
+    ) -> Result<String, KytoError> {
+        if !self.gene_ids.has_symbols() {
+            let problem = match self.column(Axis::Genes, SYMBOL_COLUMN) {
+                Some(column) => format!(
+                    "the gene table's '{SYMBOL_COLUMN}' column is {}, not a string (Enum) column, so genes cannot be looked up by symbol",
+                    column.dtype.name()
+                ),
+                None => format!(
+                    "the gene table has no '{SYMBOL_COLUMN}' column, so genes cannot be looked up by symbol; select the gene by ID with by='id'"
+                ),
+            };
+            return Err(unknown("gene symbol".to_owned(), symbol, problem));
+        }
+        match self.gene_ids.with_symbol(symbol).as_slice() {
+            [] => Err(unknown(
+                "gene symbol".to_owned(),
+                symbol,
+                format!("no gene of the store has this {SYMBOL_COLUMN}"),
+            )),
+            [gene_id] => Ok((*gene_id).to_owned()),
+            gene_ids => Err(KytoError::AmbiguousSymbol {
+                symbol: symbol.to_owned(),
+                gene_ids: gene_ids.iter().map(|&id| id.to_owned()).collect(),
+            }),
+        }
+    }
+
     fn has_layer(&self, name: &str) -> bool {
         self.schema.layers.iter().any(|layer| layer.name == name)
     }
@@ -383,6 +422,18 @@ impl<'a> Resolver<'a> {
                     Source::Expression {
                         layer: Some(layer),
                         gene_id: gene_id.clone(),
+                    },
+                    ExprDtype::Numeric,
+                )
+            }
+            Source::GeneSymbol { layer, symbol } => {
+                let gene_id = self.gene_by_symbol(symbol, &unknown)?;
+                self.check_not_removed(&gene_id)?;
+                let layer = self.layer(layer.as_deref(), &code())?;
+                (
+                    Source::Expression {
+                        layer: Some(layer),
+                        gene_id,
                     },
                     ExprDtype::Numeric,
                 )

@@ -70,7 +70,7 @@ pub use store_version::{FORMAT_VERSION, SUPPORTED_FORMAT_VERSIONS, check_format_
 pub use store_writer::{LayerSpec, StoreWriter};
 pub use table_axis::TableAxis;
 pub use table_columns::{ColumnDtype, ColumnSchema, table_columns};
-pub use table_io::{read_ids, read_table, write_table};
+pub use table_io::{read_ids, read_symbols, read_table, write_table};
 pub use tile_reader::{CellBlocks, LayerReader, SelectedBlock};
 pub use tiling::{DEFAULT_CELL_BLOCK_SIZE, DEFAULT_GENE_BLOCK_SIZE, TileGrid, Tiling};
 pub use value::LayerValue;

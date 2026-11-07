@@ -388,7 +388,17 @@ pub fn scan(py: Python<'_>, store: PathBuf) -> PyResult<Atlas> {
             let schema = kyto_store::open_atlas_schema(&store)?;
             let gene_ids =
                 kyto_store::read_ids(&store, kyto_store::TableAxis::Genes, schema.n_genes)?;
-            Ok::<_, kyto_error::KytoError>((schema, GeneIds::new(gene_ids)))
+            let mut gene_ids = GeneIds::new(gene_ids);
+            // Symbols for `by='symbol'` (task 3.9): read only when the gene table has a
+            // string `symbol` column; otherwise the resolver says why there are none.
+            let has_symbols = schema.genes.columns.iter().any(|column| {
+                column.name == kyto_core::SYMBOL_COLUMN
+                    && matches!(column.dtype, kyto_core::ColumnDtype::Enum { .. })
+            });
+            if has_symbols {
+                gene_ids = gene_ids.with_symbols(kyto_store::read_symbols(&store, schema.n_genes)?);
+            }
+            Ok::<_, kyto_error::KytoError>((schema, gene_ids))
         })
         .map_err(|error| to_py_err(py, &error))?;
     Ok(Atlas {

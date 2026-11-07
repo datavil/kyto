@@ -574,15 +574,28 @@ fn component(constructor: &str, name: &str, value: &Bound<'_, PyAny>) -> Result<
 /// Parameters
 /// ----------
 /// gene_id : str
-///     The gene ID. It is checked against the schema when the plan is built (task 3.5).
+///     The gene ID, or its symbol with ``by='symbol'``. It is checked against the
+///     schema when the plan is built (task 3.5).
 /// layer : str or None, default=None
 ///     The layer to read. ``None`` reads the plan's default layer
 ///     (``Atlas.with_default_layer``).
+/// by : {'id', 'symbol'}, default='id'
+///     How ``gene_id`` names the gene. ``'id'``: it is the gene ID (the ``gene_id``
+///     column). ``'symbol'``: it is a gene symbol (the ``symbol`` column of the gene
+///     table), resolved once to the ID of the one gene that carries it when the plan
+///     is built (R6). A symbol several genes carry raises ``ResolutionError``
+///     (``KY-E204``) listing their IDs; one no gene carries, or a store without
+///     symbols, raises ``KY-E210``. Symbols are matched exactly, case included.
 ///
 /// Returns
 /// -------
 /// CellExpr
 ///     A numeric expression that reads nothing until a plan using it runs.
+///
+/// Raises
+/// ------
+/// ResolutionError
+///     ``KY-E214`` if ``by`` is not ``'id'`` or ``'symbol'``.
 ///
 /// Examples
 /// --------
@@ -590,12 +603,31 @@ fn component(constructor: &str, name: &str, value: &Bound<'_, PyAny>) -> Result<
 /// gene_expression('CD3E', layer='log1p') > 1.5
 /// >>> gene_expression("CD3E").dtype
 /// <class 'kyto.dtypes.Numeric'>
+/// >>> gene_expression("CD3E", by="symbol")
+/// gene_expression('CD3E', by='symbol')
 #[pyfunction]
-#[pyo3(signature = (gene_id, /, *, layer = None))]
-pub fn gene_expression(gene_id: &str, layer: Option<&str>) -> PyCellExpr {
-    PyCellExpr {
-        expr: CellExpr::expression(layer.map(str::to_owned), gene_id),
-    }
+#[pyo3(signature = (gene_id, /, *, layer = None, by = "id"))]
+pub fn gene_expression(
+    py: Python<'_>,
+    gene_id: &str,
+    layer: Option<&str>,
+    by: &str,
+) -> PyResult<PyCellExpr> {
+    let layer = layer.map(str::to_owned);
+    let expr = match by {
+        "id" => CellExpr::expression(layer, gene_id),
+        "symbol" => CellExpr::expression_by_symbol(layer, gene_id),
+        _ => {
+            let error = KytoError::InvalidChoice {
+                function: "gene_expression".to_owned(),
+                parameter: "by".to_owned(),
+                value: PyString::new(py, by).repr()?.to_string(),
+                accepted: vec!["id".to_owned(), "symbol".to_owned()],
+            };
+            return Err(to_py_err(py, &error));
+        }
+    };
+    Ok(PyCellExpr { expr })
 }
 
 /// The values of one cell across genes, as a ``GeneExpr``.

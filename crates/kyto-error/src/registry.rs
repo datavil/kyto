@@ -336,7 +336,7 @@ pub enum KytoError {
     /// KY-E210: A name does not match any column, gene, cell, embedding component or feature of the plan.
     #[error("KY-E210: unknown {kind} '{name}' in {expression}: {problem}")]
     UnknownName {
-        /// What the name should name: `cell column`, `gene column`, `gene`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.
+        /// What the name should name: `cell column`, `gene column`, `gene`, `gene symbol`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.
         kind: String,
         /// The name as written.
         name: String,
@@ -370,6 +370,18 @@ pub enum KytoError {
         expression: String,
         /// A plain column read of the same axis, as code.
         example: String,
+    },
+    /// KY-E214: An argument that picks how a name is looked up is given a value it does not accept.
+    #[error("KY-E214: {function}(..., {parameter}={value}) is not accepted")]
+    InvalidChoice {
+        /// The function or method called.
+        function: String,
+        /// The argument name.
+        parameter: String,
+        /// The value given, as code.
+        value: String,
+        /// The values it accepts.
+        accepted: Vec<String>,
     },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
@@ -417,7 +429,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 43] = [
+    pub const CODES: [&'static str; 44] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -456,6 +468,7 @@ impl KytoError {
         "KY-E211",
         "KY-E212",
         "KY-E213",
+        "KY-E214",
         "KY-E301",
         "KY-E302",
         "KY-E401",
@@ -504,6 +517,7 @@ impl KytoError {
             Self::NoDefaultLayer { .. } => "KY-E211",
             Self::NullComparison { .. } => "KY-E212",
             Self::RecomputeOperand { .. } => "KY-E213",
+            Self::InvalidChoice { .. } => "KY-E214",
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
             Self::MemoryLimit { .. } => "KY-E401",
@@ -553,6 +567,7 @@ impl KytoError {
             Self::NoDefaultLayer { .. } => "ResolutionError",
             Self::NullComparison { .. } => "ExpressionError",
             Self::RecomputeOperand { .. } => "ExpressionError",
+            Self::InvalidChoice { .. } => "ResolutionError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
@@ -677,6 +692,9 @@ impl KytoError {
             }
             Self::RecomputeOperand { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e213"
+            }
+            Self::InvalidChoice { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e214"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -812,6 +830,9 @@ impl KytoError {
             }
             Self::RecomputeOperand { example, .. } => {
                 format!("call .recompute() on the column read itself, then build on the result: write {example} first")
+            }
+            Self::InvalidChoice { parameter, accepted, .. } => {
+                format!("{parameter} takes one of {}", quoted_list(accepted))
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -1015,6 +1036,12 @@ impl KytoError {
             Self::RecomputeOperand { expression, example } => vec![
                 ("expression", FieldValue::Str(expression.clone())),
                 ("example", FieldValue::Str(example.clone())),
+            ],
+            Self::InvalidChoice { function, parameter, value, accepted } => vec![
+                ("function", FieldValue::Str(function.clone())),
+                ("parameter", FieldValue::Str(parameter.clone())),
+                ("value", FieldValue::Str(value.clone())),
+                ("accepted", FieldValue::StrList(accepted.clone())),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1225,6 +1252,12 @@ impl KytoError {
             Self::RecomputeOperand {
                 expression: "cell_column('n_genes') + 1".to_owned(),
                 example: "cell_column('n_genes').recompute()".to_owned(),
+            },
+            Self::InvalidChoice {
+                function: "gene_expression".to_owned(),
+                parameter: "by".to_owned(),
+                value: "'name'".to_owned(),
+                accepted: vec!["id".to_owned(), "symbol".to_owned()],
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

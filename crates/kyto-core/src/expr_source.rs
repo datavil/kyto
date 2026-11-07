@@ -1,9 +1,10 @@
 //! Where the values of an expression come from: the leaves of an expression tree.
 //!
 //! Does: name the four source tags (`Column`, `Expression`, `Profile`, `Embedding`),
-//! plus `Feature`, a name not yet resolved to one of them (task 3.4), and `Recompute`,
-//! a derived column computed again from its lineage (task 3.8); and say whether a
-//! source is metadata (a table column) or reads the matrix or an embedding.
+//! plus `Feature`, a name not yet resolved to one of them (task 3.4), `GeneSymbol`, a
+//! gene named by symbol and not yet resolved to its ID (task 3.9), and `Recompute`, a
+//! derived column computed again from its lineage (task 3.8); and say whether a source
+//! is metadata (a table column) or reads the matrix or an embedding.
 //!
 //! Does not: check that the named column, layer, gene, cell or embedding exists (task
 //! 3.5 resolves names against the schema), or decide which axis a source belongs to
@@ -26,6 +27,16 @@ pub enum Source {
         layer: Option<String>,
         /// The gene ID, as written.
         gene_id: String,
+    },
+    /// The values of the one gene whose symbol is `symbol` across cells, not resolved
+    /// yet: what `gene_expression('CD3E', by='symbol')` builds. The feature resolver
+    /// replaces it with [`Source::Expression`] of that gene's ID when the plan is
+    /// built (R6, task 3.9); a symbol that several genes carry is `KY-E204`.
+    GeneSymbol {
+        /// The layer to read; `None` means the plan's default layer.
+        layer: Option<String>,
+        /// The gene symbol, as written.
+        symbol: String,
     },
     /// The values of one cell across genes: a gene expression.
     Profile {

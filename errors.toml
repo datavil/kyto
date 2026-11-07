@@ -536,7 +536,7 @@ summary = "A name does not match any column, gene, cell, embedding component or 
 message = "unknown {kind} '{name}' in {expression}: {problem}"
 hint = "names are matched exactly, case included; check '{name}' against the store's schema"
 fields = [
-    { name = "kind", type = "str", doc = "What the name should name: `cell column`, `gene column`, `gene`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.", example = "feature" },
+    { name = "kind", type = "str", doc = "What the name should name: `cell column`, `gene column`, `gene`, `gene symbol`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.", example = "feature" },
     { name = "name", type = "str", doc = "The name as written.", example = "CD3" },
     { name = "expression", type = "str", doc = "The expression it was written in, as code.", example = "feature('CD3')" },
     { name = "problem", type = "str", doc = "Why nothing matches.", example = "it is not a cell column or a gene ID" },
@@ -577,6 +577,20 @@ hint = "call .recompute() on the column read itself, then build on the result: w
 fields = [
     { name = "expression", type = "str", doc = "The expression it was called on, as code.", example = "cell_column('n_genes') + 1" },
     { name = "example", type = "str", doc = "A plain column read of the same axis, as code.", example = "cell_column('n_genes').recompute()" },
+]
+
+[[errors]]
+code = "KY-E214"
+variant = "InvalidChoice"
+class = "ResolutionError"
+summary = "An argument that picks how a name is looked up is given a value it does not accept."
+message = "{function}(..., {parameter}={value}) is not accepted"
+hint = "{parameter} takes one of {accepted}"
+fields = [
+    { name = "function", type = "str", doc = "The function or method called.", example = "gene_expression" },
+    { name = "parameter", type = "str", doc = "The argument name.", example = "by" },
+    { name = "value", type = "str", doc = "The value given, as code.", example = "'name'" },
+    { name = "accepted", type = "list[str]", doc = "The values it accepts.", example = ["id", "symbol"] },
 ]
 
 [[errors]]

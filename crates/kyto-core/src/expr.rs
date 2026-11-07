@@ -594,6 +594,21 @@ impl CellExpr {
 }
 
 impl CellExpr {
+    /// The values of the gene whose symbol is `symbol` across cells, from `layer`
+    /// (`None`: the plan's default layer), left unresolved as a
+    /// [`Source::GeneSymbol`] leaf for the feature resolver (task 3.9). Numeric.
+    pub fn expression_by_symbol(layer: Option<String>, symbol: impl Into<String>) -> Self {
+        Self::from_node(
+            ExprNode::Source(Source::GeneSymbol {
+                layer,
+                symbol: symbol.into(),
+            }),
+            ExprDtype::Numeric,
+        )
+    }
+}
+
+impl CellExpr {
     /// The feature `name` (short, such as `CD3E`, or full, such as `log1p:CD3E`), left
     /// unresolved as a [`Source::Feature`] leaf for the feature resolver (task 3.5).
     /// Its dtype is `Unknown` until then.
@@ -752,6 +767,12 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
                 formatter,
                 "gene_expression({}{})",
                 python_string(gene_id),
+                layer_argument(layer.as_ref())
+            ),
+            ExprNode::Source(Source::GeneSymbol { layer, symbol }) => write!(
+                formatter,
+                "gene_expression({}{}, by='symbol')",
+                python_string(symbol),
                 layer_argument(layer.as_ref())
             ),
             ExprNode::Source(Source::Profile { layer, cell_id }) => write!(
