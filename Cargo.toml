@@ -27,3 +27,9 @@ expect_used = "deny"
 undocumented_unsafe_blocks = "deny"
 dbg_macro = "deny"
 todo = "deny"
+
+# Dependencies (polars above all) keep only line tables in debug builds: backtraces still
+# show file:line, but linking the test binaries needs far less memory and disk (the
+# ubuntu-24.04-arm runner was cancelled while linking, memory/polars_debug_link_memory.md).
+[profile.dev.package."*"]
+debug = "line-tables-only"
