@@ -5,7 +5,7 @@
 //! matrix.
 //! Does not: write the rest of a store (`schema.json`, tables, the root and `layers`
 //! group `zarr.json`), write atomically or stream (task 2.5), or read only some tiles
-//! (task 2.4). A failed write can leave a partial layer behind.
+//! (see `tile_reader`). A failed write can leave a partial layer behind.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,21 +14,19 @@ use kyto_error::KytoError;
 use zarrs::array::DataType;
 use zarrs::array_subset::ArraySubset;
 use zarrs::filesystem::FilesystemStore;
-use zarrs::group::{Group, GroupBuilder};
+use zarrs::group::GroupBuilder;
 
 use crate::csr::CsrMatrix;
+use crate::layer_open::{LAYER_KIND, open_layer, read_all};
 use crate::names::{find_case_insensitive, validate_member_name};
-use crate::tile_decode::{check_tile_offsets, decode_cell_block};
+use crate::tile_decode::decode_cell_block;
 use crate::tile_encode::{TiledEntries, encode_cell_block};
 use crate::tiling::{TileGrid, Tiling};
 use crate::value::LayerValue;
 use crate::write_options::LayerWriteOptions;
 use crate::zarr_arrays::{
-    LayerArrays, StoreArray, TILE_OFFSETS_CHUNK, store_1d, store_chunk, store_io, store_metadata,
+    LayerArrays, TILE_OFFSETS_CHUNK, store_1d, store_chunk, store_io, store_metadata,
 };
-
-/// Value of the layer group's `attributes.kyto.kind` (format.md §4.2).
-const LAYER_KIND: &str = "tiled_csr";
 
 fn open_storage(store: &Path) -> Result<Arc<FilesystemStore>, KytoError> {
     FilesystemStore::new(store)
@@ -129,87 +127,16 @@ pub fn read_layer<T: LayerValue>(
 ) -> Result<CsrMatrix<T>, KytoError> {
     validate_member_name("layer", name)?;
     let grid = TileGrid::new(n_cells, n_genes, tiling)?;
-    if !store.join("layers").join(name).join("zarr.json").is_file() {
-        return Err(KytoError::MissingMember {
-            kind: "layer".to_owned(),
-            name: name.to_owned(),
-            store: store.display().to_string(),
-        });
-    }
-    let corrupt = |problem: String| KytoError::CorruptLayer {
-        layer: name.to_owned(),
-        problem,
-    };
     let storage = open_storage(store)?;
-    let group_path = format!("/layers/{name}");
-    let group = Group::open(storage.clone(), &group_path)
-        .map_err(|error| corrupt(format!("cannot open the layer group: {error}")))?;
-    let kind = group
-        .attributes()
-        .get("kyto")
-        .and_then(|kyto| kyto.get("kind"))
-        .and_then(|kind| kind.as_str());
-    if kind != Some(LAYER_KIND) {
-        return Err(corrupt(format!(
-            "attributes.kyto.kind is {kind:?}, not \"{LAYER_KIND}\""
-        )));
-    }
-    let open = |array: &str, data_type: Option<DataType>, shape: Option<Vec<u64>>| {
-        let opened = StoreArray::open(storage.clone(), &format!("{group_path}/{array}"))
-            .map_err(|error| corrupt(format!("cannot open array {array}: {error}")))?;
-        if let Some(expected) = data_type
-            && opened.data_type().to_string() != expected.to_string()
-        {
-            return Err(corrupt(format!(
-                "array {array} has dtype {}, not {expected}",
-                opened.data_type()
-            )));
-        }
-        let found = opened.shape();
-        let shape_ok = match &shape {
-            Some(expected) => found == expected.as_slice(),
-            None => found.len() == 1,
-        };
-        if !shape_ok {
-            return Err(corrupt(format!(
-                "array {array} has shape {found:?}, expected {}",
-                shape.map_or("one dimension".to_owned(), |expected| format!(
-                    "{expected:?}"
-                ))
-            )));
-        }
-        Ok(opened)
-    };
-    let indptr_shape = vec![
-        grid.n_cell_blocks(),
-        grid.n_gene_blocks(),
-        grid.indptr_len(),
-    ];
-    let indptr = open("indptr", Some(DataType::UInt32), Some(indptr_shape))?;
-    let tile_offsets = open(
-        "tile_offsets",
-        Some(DataType::UInt64),
-        Some(vec![grid.n_tiles() + 1]),
-    )?;
-    let indices = open("indices", Some(DataType::UInt32), None)?;
-    let data = open("data", None, Some(indices.shape().to_vec()))?;
-    check_value_dtype::<T>(name, data.data_type())?;
-
-    // Check the entry count before reading entries, so a bad zarr.json cannot make the
-    // reader allocate more than a dense matrix of the given shape.
-    let nnz = indices.shape().first().copied().unwrap_or(0);
-    if u128::from(nnz) > u128::from(n_cells) * u128::from(n_genes) {
-        return Err(corrupt(format!(
-            "indices holds {nnz} entries, more than n_cells * n_genes"
-        )));
-    }
-    let offsets = read_all(&tile_offsets)?;
-    check_tile_offsets(name, &grid, &offsets, nnz)?;
+    let layer = open_layer(&storage, &store.display().to_string(), name, &grid)?;
+    check_value_dtype::<T>(name, layer.data.data_type())?;
+    let nnz = layer.indices.shape().first().copied().unwrap_or(0);
     let entries = TiledEntries {
-        tile_offsets: offsets,
-        indices: read_all(&indices)?,
-        data: read_all(&data)?,
+        tile_offsets: layer.tile_offsets,
+        indices: read_all(&layer.indices)?,
+        data: read_all(&layer.data)?,
     };
+    let indptr = layer.indptr;
 
     let mut out = CsrMatrix {
         n_cells,
@@ -255,10 +182,4 @@ fn check_value_dtype<T: LayerValue>(layer: &str, stored: &DataType) -> Result<()
         layer: layer.to_owned(),
         problem: format!("array data has dtype {stored}; a layer stores float32 or uint32"),
     })
-}
-
-fn read_all<T: zarrs::array::ElementOwned>(array: &StoreArray) -> Result<Vec<T>, KytoError> {
-    array
-        .retrieve_array_subset_elements(&array.subset_all())
-        .map_err(|error| store_io("read", array.path().as_str(), error))
 }

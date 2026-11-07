@@ -19,6 +19,7 @@ __all__ = [
     "DeviceError",
     "DuplicateIdError",
     "FieldValue",
+    "FormatVersionError",
     "KytoError",
     "LayerDtypeError",
     "MemoryLimitError",
@@ -296,7 +297,7 @@ class DeviceError(KytoError, RuntimeError):
 
 
 class StoreInputError(KytoError, ValueError):
-    """Data, names or parameters given to a store writer break the store format (docs/format.md).
+    """Data, names, parameters or selections given to a store writer or reader break the store format (docs/format.md).
 
     Subclasses `KytoError` and `ValueError`. Raised with these codes:
 
@@ -307,6 +308,7 @@ class StoreInputError(KytoError, ValueError):
     - ``KY-E106``: A sparse matrix given to a store writer is not valid CSR of the stated shape.
     - ``KY-E111``: The ID column of a cell or gene table holds null or empty IDs.
     - ``KY-E112``: A column of a cell or gene table breaks format.md section 5 (name, dtype or position).
+    - ``KY-E114``: A cell or gene selection given to the tile reader is out of range, unsorted or repeats a position.
 
     See `KytoError` for the parameters and attributes.
 
@@ -327,6 +329,7 @@ class CorruptStoreError(KytoError, ValueError):
 
     - ``KY-E107``: A stored layer breaks the tiled sparse format (format.md section 4).
     - ``KY-E113``: A stored cell or gene table breaks format.md section 5.
+    - ``KY-E116``: A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3).
 
     See `KytoError` for the parameters and attributes.
 
@@ -335,6 +338,25 @@ class CorruptStoreError(KytoError, ValueError):
     >>> error = CorruptStoreError("KY-E107", layer="counts", problem="tile (0, 2): indptr ends at 5 but tile_offsets gives 7 entries")
     >>> error.code
     'KY-E107'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
+class FormatVersionError(KytoError, ValueError):
+    """A store has a format_version this kyto does not read (format.md section 11).
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E115``: A store has a format_version this kyto does not read (format.md section 11).
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = FormatVersionError("KY-E115", store="pbmc.kyto", found="0.2", supported=["0.1"])
+    >>> error.code
+    'KY-E115'
     >>> isinstance(error, ValueError)
     True
     """
@@ -538,6 +560,38 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e113",
         fields=(
             _Field("path", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E114": _Entry(
+        class_name="StoreInputError",
+        message="invalid {axis} selection: {problem}",
+        hint="select {axis} by sorted, unique table positions below {n_axis}; the plan canonicalises other orders and repeats (format.md section 4.8)",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e114",
+        fields=(
+            _Field("axis", "str"),
+            _Field("problem", "str"),
+            _Field("n_axis", "int"),
+        ),
+    ),
+    "KY-E115": _Entry(
+        class_name="FormatVersionError",
+        message="the store at '{store}' has format_version '{found}', but this kyto reads only {supported}",
+        hint="open the store with the kyto version that wrote it, or rewrite it with this one",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e115",
+        fields=(
+            _Field("store", "str"),
+            _Field("found", "str"),
+            _Field("supported", "list[str]"),
+        ),
+    ),
+    "KY-E116": _Entry(
+        class_name="CorruptStoreError",
+        message="'{store}' is not a kyto store: {problem}",
+        hint="check the path; a kyto store has a root zarr.json with attributes.kyto.format_version, written last, so an interrupted write leaves none",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e116",
+        fields=(
+            _Field("store", "str"),
             _Field("problem", "str"),
         ),
     ),

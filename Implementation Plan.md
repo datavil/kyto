@@ -88,10 +88,11 @@ Goal: a Zarr v3 store where reading a few genes costs about the same as reading 
   - Depends: 2.1
   - Done when: writing duplicate IDs raises `KY-E101`; round trip keeps dtypes.
   - Spec: `docs/format.md` §5 (tables, IDs, dtypes, Enum, nulls, names, Parquet settings), §8 (`schema.json` columns).
-- [ ] **2.4 Tile reader.** Parallel reads that skip tiles outside the selected genes (projection) and cells (predicate); yields a stream of `CellBlock`s (5.1).
+- [x] **2.4 Tile reader.** Parallel reads that skip tiles outside the selected genes (projection) and cells (predicate); yields a stream of `CellBlock`s (5.1).
   - Depends: 2.2
   - Done when: a test counter shows that selecting 3 genes reads one gene block per cell block, nothing more.
   - Spec: `docs/format.md` §4.7 (reading a tile), §4.8 (tiles to CellBlock), §3 and §11 (version check on open).
+  - Done: `kyto_store::LayerReader` (generic over Zarr storage; `tests/tile_reader.rs` counts reads with a wrapping store). Selections are plain canonical positions (`AxisSelection`: all, range, strictly increasing indices); unsorted, repeated or out-of-range positions raise `KY-E114` (the plan canonicalises, §4.8). The minimal `CellBlock` lives in kyto-store (exec depends on store); 5.1 adds pooling and alignment behind its slice accessors. Open checks `format_version` (`KY-E115`, `KY-E116`); `read_layer` (2.2) does not yet.
 - [ ] **2.5 Streaming writer.** Writes `CellBlock`s as they arrive; writes to a temporary path and renames on success, so a failed run leaves no half store.
   - Depends: 2.2, 2.3
   - Done when: killing a write midway leaves the target path absent.

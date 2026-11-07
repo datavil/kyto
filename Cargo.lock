@@ -1295,6 +1295,7 @@ dependencies = [
  "kyto-error",
  "polars",
  "proptest",
+ "rayon",
  "serde_json",
  "tempfile",
  "zarrs",

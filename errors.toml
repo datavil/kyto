@@ -54,11 +54,15 @@ doc = "The requested device cannot run part of the plan."
 
 [classes.StoreInputError]
 base = "ValueError"
-doc = "Data, names or parameters given to a store writer break the store format (docs/format.md)."
+doc = "Data, names, parameters or selections given to a store writer or reader break the store format (docs/format.md)."
 
 [classes.CorruptStoreError]
 base = "ValueError"
 doc = "A store on disk breaks the store format (docs/format.md)."
+
+[classes.FormatVersionError]
+base = "ValueError"
+doc = "A store has a format_version this kyto does not read (format.md section 11)."
 
 [classes.StoreIOError]
 base = "RuntimeError"
@@ -239,6 +243,44 @@ hint = "the store breaks docs/format.md section 5; rewrite the table with kyto, 
 fields = [
     { name = "path", type = "str", doc = "The table file.", example = "pbmc.kyto/cells.parquet" },
     { name = "problem", type = "str", doc = "The invariant that fails.", example = "the first column is 'barcode', not 'cell_id'" },
+]
+
+[[errors]]
+code = "KY-E114"
+variant = "InvalidSelection"
+class = "StoreInputError"
+summary = "A cell or gene selection given to the tile reader is out of range, unsorted or repeats a position."
+message = "invalid {axis} selection: {problem}"
+hint = "select {axis} by sorted, unique table positions below {n_axis}; the plan canonicalises other orders and repeats (format.md section 4.8)"
+fields = [
+    { name = "axis", type = "str", doc = "The axis, `cells` or `genes`.", example = "genes" },
+    { name = "problem", type = "str", doc = "What is wrong and where in the selection.", example = "position 2 is gene 7, which does not follow gene 9" },
+    { name = "n_axis", type = "int", doc = "The axis length of the store.", example = 2000 },
+]
+
+[[errors]]
+code = "KY-E115"
+variant = "UnsupportedFormatVersion"
+class = "FormatVersionError"
+summary = "A store has a format_version this kyto does not read (format.md section 11)."
+message = "the store at '{store}' has format_version '{found}', but this kyto reads only {supported}"
+hint = "open the store with the kyto version that wrote it, or rewrite it with this one"
+fields = [
+    { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+    { name = "found", type = "str", doc = "The store's format_version.", example = "0.2" },
+    { name = "supported", type = "list[str]", doc = "The format versions this kyto reads.", example = ["0.1"] },
+]
+
+[[errors]]
+code = "KY-E116"
+variant = "NotAStore"
+class = "CorruptStoreError"
+summary = "A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3)."
+message = "'{store}' is not a kyto store: {problem}"
+hint = "check the path; a kyto store has a root zarr.json with attributes.kyto.format_version, written last, so an interrupted write leaves none"
+fields = [
+    { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+    { name = "problem", type = "str", doc = "What is missing or wrong.", example = "no root zarr.json" },
 ]
 
 [[errors]]

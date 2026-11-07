@@ -137,6 +137,34 @@ pub enum KytoError {
         /// The invariant that fails.
         problem: String,
     },
+    /// KY-E114: A cell or gene selection given to the tile reader is out of range, unsorted or repeats a position.
+    #[error("KY-E114: invalid {axis} selection: {problem}")]
+    InvalidSelection {
+        /// The axis, `cells` or `genes`.
+        axis: String,
+        /// What is wrong and where in the selection.
+        problem: String,
+        /// The axis length of the store.
+        n_axis: u64,
+    },
+    /// KY-E115: A store has a format_version this kyto does not read (format.md section 11).
+    #[error("KY-E115: the store at '{store}' has format_version '{found}', but this kyto reads only {}", quoted_list(.supported))]
+    UnsupportedFormatVersion {
+        /// The store path.
+        store: String,
+        /// The store's format_version.
+        found: String,
+        /// The format versions this kyto reads.
+        supported: Vec<String>,
+    },
+    /// KY-E116: A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3).
+    #[error("KY-E116: '{store}' is not a kyto store: {problem}")]
+    NotAStore {
+        /// The store path.
+        store: String,
+        /// What is missing or wrong.
+        problem: String,
+    },
     /// KY-E201: A short name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -199,7 +227,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 20] = [
+    pub const CODES: [&'static str; 23] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -213,6 +241,9 @@ impl KytoError {
         "KY-E111",
         "KY-E112",
         "KY-E113",
+        "KY-E114",
+        "KY-E115",
+        "KY-E116",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -238,6 +269,9 @@ impl KytoError {
             Self::InvalidIds { .. } => "KY-E111",
             Self::InvalidTableColumn { .. } => "KY-E112",
             Self::CorruptTable { .. } => "KY-E113",
+            Self::InvalidSelection { .. } => "KY-E114",
+            Self::UnsupportedFormatVersion { .. } => "KY-E115",
+            Self::NotAStore { .. } => "KY-E116",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -264,6 +298,9 @@ impl KytoError {
             Self::InvalidIds { .. } => "StoreInputError",
             Self::InvalidTableColumn { .. } => "StoreInputError",
             Self::CorruptTable { .. } => "CorruptStoreError",
+            Self::InvalidSelection { .. } => "StoreInputError",
+            Self::UnsupportedFormatVersion { .. } => "FormatVersionError",
+            Self::NotAStore { .. } => "CorruptStoreError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -315,6 +352,15 @@ impl KytoError {
             }
             Self::CorruptTable { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e113"
+            }
+            Self::InvalidSelection { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e114"
+            }
+            Self::UnsupportedFormatVersion { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e115"
+            }
+            Self::NotAStore { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e116"
             }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
@@ -381,6 +427,15 @@ impl KytoError {
             }
             Self::CorruptTable { .. } => {
                 String::from("the store breaks docs/format.md section 5; rewrite the table with kyto, or report a bug if kyto wrote it")
+            }
+            Self::InvalidSelection { axis, n_axis, .. } => {
+                format!("select {axis} by sorted, unique table positions below {n_axis}; the plan canonicalises other orders and repeats (format.md section 4.8)")
+            }
+            Self::UnsupportedFormatVersion { .. } => {
+                String::from("open the store with the kyto version that wrote it, or rewrite it with this one")
+            }
+            Self::NotAStore { .. } => {
+                String::from("check the path; a kyto store has a root zarr.json with attributes.kyto.format_version, written last, so an interrupted write leaves none")
             }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass the full name, one of {}", quoted_list(candidates))
@@ -472,6 +527,20 @@ impl KytoError {
             ],
             Self::CorruptTable { path, problem } => vec![
                 ("path", FieldValue::Str(path.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::InvalidSelection { axis, problem, n_axis } => vec![
+                ("axis", FieldValue::Str(axis.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("n_axis", FieldValue::Int(*n_axis)),
+            ],
+            Self::UnsupportedFormatVersion { store, found, supported } => vec![
+                ("store", FieldValue::Str(store.clone())),
+                ("found", FieldValue::Str(found.clone())),
+                ("supported", FieldValue::StrList(supported.clone())),
+            ],
+            Self::NotAStore { store, problem } => vec![
+                ("store", FieldValue::Str(store.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
             ],
             Self::AmbiguousName { name, candidates } => vec![
@@ -574,6 +643,20 @@ impl KytoError {
             Self::CorruptTable {
                 path: "pbmc.kyto/cells.parquet".to_owned(),
                 problem: "the first column is 'barcode', not 'cell_id'".to_owned(),
+            },
+            Self::InvalidSelection {
+                axis: "genes".to_owned(),
+                problem: "position 2 is gene 7, which does not follow gene 9".to_owned(),
+                n_axis: 2000,
+            },
+            Self::UnsupportedFormatVersion {
+                store: "pbmc.kyto".to_owned(),
+                found: "0.2".to_owned(),
+                supported: vec!["0.1".to_owned()],
+            },
+            Self::NotAStore {
+                store: "pbmc.kyto".to_owned(),
+                problem: "no root zarr.json".to_owned(),
             },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),

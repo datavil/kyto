@@ -13,3 +13,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [zarrs sharding is not deterministic in parallel](zarrs_shard_determinism.md): encode shards with concurrent_target(1) or shard bytes vary between runs; zarrs pinned to 0.22 by MSRV.
 - [Polars Parquet for the metadata tables](polars_parquet_tables.md): row_group_size merges the last group, use the batched writer; small int dtypes need features; no MSRV.
 - [Polars debug info vs. link memory on arm](polars_debug_link_memory.md): arm test job died linking polars debug binaries; dependency debug = line-tables-only, verify at next CI run.
+- [Counting tile reads](counting_tile_reads.md): wrap the storage, map byte ranges via the shard index; missing keys and unstored inner chunks read nothing.

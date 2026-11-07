@@ -3,7 +3,7 @@
 //! Does: check `tile_offsets` and each tile's `indptr` and local indices, then append
 //! a cell block's rows, gene blocks in increasing order, with global gene indices.
 //! Pure, in-memory.
-//! Does not: read storage, select genes or cells (task 2.4), or check for stored zeros
+//! Does not: read storage, select genes or cells (see `tile_reader`), or check for stored zeros
 //! (readers MAY assume none, format.md §4.6).
 
 use kyto_error::KytoError;
@@ -123,7 +123,7 @@ pub(crate) fn decode_cell_block<T: Copy>(
 /// Check one tile: `indptr` starts at 0, never decreases, is flat over padding rows
 /// and ends at the tile's nnz; each row's local indices strictly increase below the
 /// gene block's width (format.md §1.2, §4.3).
-fn check_tile(
+pub(crate) fn check_tile(
     layer: &str,
     (block, gene_block): (u64, u64),
     tile_indptr: &[u32],
