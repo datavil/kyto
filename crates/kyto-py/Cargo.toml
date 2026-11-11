@@ -24,5 +24,6 @@ extension-module = ["pyo3/extension-module"]
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
+kyto-exec = { path = "../kyto-exec" }
 kyto-plan = { path = "../kyto-plan" }
 kyto-store = { path = "../kyto-store" }

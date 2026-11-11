@@ -1564,6 +1564,7 @@ version = "0.0.0"
 dependencies = [
  "kyto-core",
  "kyto-error",
+ "kyto-exec",
  "kyto-plan",
  "kyto-store",
  "pyo3",

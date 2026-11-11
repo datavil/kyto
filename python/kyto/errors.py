@@ -31,6 +31,7 @@ __all__ = [
     "PlanError",
     "RemovedFeatureError",
     "ResolutionError",
+    "RunCancelledError",
     "StaleColumnError",
     "StoreIOError",
     "StoreInputError",
@@ -517,6 +518,25 @@ class PlanError(KytoError, ValueError):
     >>> error.code
     'KY-E215'
     >>> isinstance(error, ValueError)
+    True
+    """
+
+
+class RunCancelledError(KytoError, RuntimeError):
+    """A run was cancelled before it finished (Ctrl-C, or its progress callback raised).
+
+    Subclasses `KytoError` and `RuntimeError`. Raised with these codes:
+
+    - ``KY-E503``: A run was cancelled before it finished.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = RunCancelledError("KY-E503", done=4096, total=16384)
+    >>> error.code
+    'KY-E503'
+    >>> isinstance(error, RuntimeError)
     True
     """
 
@@ -1053,6 +1073,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("threads", "int"),
             _Field("problem", "str"),
+        ),
+    ),
+    "KY-E503": _Entry(
+        class_name="RunCancelledError",
+        message="the run was cancelled after {done} of {total} cell rows were streamed",
+        hint="run the plan again to compute it; a cancelled run returns and writes nothing",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e503",
+        fields=(
+            _Field("done", "int"),
+            _Field("total", "int"),
         ),
     ),
     "KY-E601": _Entry(

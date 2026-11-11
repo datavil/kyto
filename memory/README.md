@@ -30,3 +30,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Counting passes over the store](counting_store_passes.md): record tile reads as (key, range) counts and compare with one scan pass times P; an output reading no layer maps nothing.
 - [Peak RSS is not the heap](rss_vs_heap.md): RSS = baseline + heap + 30-95% allocator overhead; memory_limit bounds RSS via (limit - RSS) / 1.5 (user, 5.5); measure in a child process.
 - [Deterministic reductions](deterministic_reductions.md): leaf per store cell block (split parts continue it), binary-counter tree in block order; stable across threads and block sizes, not tilings.
+- [GIL, progress and Ctrl-C](gil_cancel_progress.md): worker thread runs the plan, Python thread polls `check_signals`/progress every 20 ms detached; `Receiver` is not `Sync` (move it through `detach`); `interrupt_main` in tests.

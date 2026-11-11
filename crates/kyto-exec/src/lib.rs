@@ -15,6 +15,8 @@
 //! block size. A memory limit (task 5.5, [`fit_memory_limit`]) bounds the
 //! process's resident memory: the plan's blocks shrink until its estimate, with the
 //! allocator's overhead, fits beside what the process already holds, or `KY-E401`.
+//! A run is cancelled and followed through its [`RunControl`] (task 5.7): it stops at
+//! its next block with `KY-E503`, and counts the cell rows it has computed.
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -28,6 +30,7 @@ mod memory_limit;
 mod pipeline;
 mod pipeline_block;
 mod reduction;
+mod run_control;
 mod statistics;
 
 pub use block_stream::BlockStream;
@@ -38,6 +41,7 @@ pub use memory_limit::{
 };
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
+pub use run_control::{Progress, RunControl};
 pub use statistics::{
     ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, NodeStatistics, Statistics,
 };

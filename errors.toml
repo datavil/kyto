@@ -93,6 +93,10 @@ doc = "An input file given to convert has a format, encoding or value kyto canno
 base = "ValueError"
 doc = "A plan method is given an argument outside what it accepts, or cannot extend this plan."
 
+[classes.RunCancelledError]
+base = "RuntimeError"
+doc = "A run was cancelled before it finished (Ctrl-C, or its progress callback raised)."
+
 [classes.NotImplementedYetError]
 base = "NotImplementedError"
 doc = "A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it."
@@ -707,6 +711,18 @@ hint = "pass fewer threads, or raise the process's limit on threads"
 fields = [
     { name = "threads", type = "int", doc = "The number of threads asked for.", example = 64 },
     { name = "problem", type = "str", doc = "What the operating system said.", example = "Resource temporarily unavailable (os error 35)" },
+]
+
+[[errors]]
+code = "KY-E503"
+variant = "Cancelled"
+class = "RunCancelledError"
+summary = "A run was cancelled before it finished."
+message = "the run was cancelled after {done} of {total} cell rows were streamed"
+hint = "run the plan again to compute it; a cancelled run returns and writes nothing"
+fields = [
+    { name = "done", type = "int", doc = "Cell rows streamed before the cancel, summed over the run's passes.", example = 4096 },
+    { name = "total", type = "int", doc = "Cell rows the whole run streams, summed over its passes.", example = 16384 },
 ]
 
 [[errors]]

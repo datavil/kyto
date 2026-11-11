@@ -34,20 +34,33 @@ use crate::block_stream::{BlockStream, StreamSource};
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::reduction::reduce_pass;
+use crate::run_control::RunControl;
 use crate::statistics::Statistics;
 
 /// How a pipeline runs, apart from the plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ExecuteOptions {
     /// Threads that read and compute blocks (a thread pool of its own per run; the
     /// caller's thread consumes the stream). The output is the same on any number (R11).
     pub threads: NonZeroUsize,
+    /// The run's cancel flag and progress counters (task 5.7); keep a clone to cancel
+    /// the run or read its progress from another thread.
+    pub control: RunControl,
 }
 
 impl ExecuteOptions {
-    /// Run on `threads` threads.
+    /// Run on `threads` threads, with a control of its own (nobody else cancels it).
     pub fn new(threads: NonZeroUsize) -> Self {
-        Self { threads }
+        Self {
+            threads,
+            control: RunControl::new(),
+        }
+    }
+
+    /// The same options, cancelled and followed through `control` (task 5.7).
+    #[must_use]
+    pub fn with_control(self, control: RunControl) -> Self {
+        Self { control, ..self }
     }
 }
 
@@ -232,6 +245,14 @@ impl Pipeline {
                 .map(|layer| LayerReader::open(Arc::clone(&storage), &self.store, layer, self.grid))
                 .collect::<Result<Vec<_>, _>>()?,
         );
+        // Every statistics pass and the output's stream compute every cell once.
+        let control = options.control.clone();
+        let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
+            Stage::Maps(_) => passes,
+            Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
+        });
+        control.set_total(self.grid.n_cells().saturating_mul(passes));
+        control.check()?;
         let thread_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(options.threads.get())
             .thread_name(|index| format!("kyto-exec-{index}"))
@@ -258,6 +279,7 @@ impl Pipeline {
                 window: self.blocks_in_flight,
                 block_cells: self.block_cells,
                 store: self.store.clone(),
+                control: control.clone(),
             }
         };
 

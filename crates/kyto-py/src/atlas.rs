@@ -6,17 +6,19 @@
 //! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
 //! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early);
 //! filter genes (`filter_genes`, 4.1/7.2's gene filter taken early for task 3.8); write the
-//! plan JSON (`to_json`) and read it back (`from_json`, task 4.3).
+//! plan JSON (`to_json`) and read it back (`from_json`, task 4.3); run the plan to
+//! nowhere (`_execute`, task 5.7's private hook: GIL, progress, cancel).
 //! Does not: read other columns or the matrix; hold any state besides the plan (R7); expose
 //! `__getitem__`, `.X`, `obs` or `var` (R4). The public `kyto.scan` and the chain
 //! methods arrive with 7.1/7.2; `scan` is private until then.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use kyto_core::GeneIds;
 use kyto_error::KytoError;
-use kyto_plan::Plan;
+use kyto_plan::{PhysicalOptions, Plan};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use pyo3::{IntoPyObjectExt, PyAny};
@@ -24,6 +26,7 @@ use pyo3::{IntoPyObjectExt, PyAny};
 use crate::errors::to_py_err;
 use crate::expr::{PyCellExpr, PyGeneExpr};
 use crate::handles::{PyEmbedding, PyGraph, PyMatrix, PyModality, PyTable};
+use crate::run::run_plan;
 
 /// A lazy, immutable plan over a kyto store.
 ///
@@ -482,6 +485,95 @@ impl Atlas {
         dict.set_item("peak_memory", estimate.peak_memory())?;
         dict.set_item("device", estimate.device().name())?;
         Ok(dict)
+    }
+
+    /// Run the plan and stream its output to nowhere (private: task 5.7's hook until
+    /// the terminals of 7.2 and 7.3 return the data).
+    ///
+    /// Runs the plan as ``estimate()`` costs it (every optimizer rule, the output read
+    /// whole, 2 cell blocks in flight) on the CPU executor, drops every block it
+    /// streams and returns how many cell rows it streamed. The GIL is released while
+    /// the plan computes, so other Python threads run. Ctrl-C (or any exception a
+    /// signal handler raises) cancels the run: it stops at its next block, its threads
+    /// end, and the exception is raised from here; the process stays usable.
+    ///
+    /// Parameters
+    /// ----------
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     result does not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread whenever the run
+    ///     moved: cell rows computed and in the whole run, both summed over its
+    ///     passes (each statistics pass, then the output's stream, computes every
+    ///     cell). The last call has ``done == total``; a store without cells gets
+    ///     none. An exception it raises cancels the run and is raised from here.
+    ///
+    /// Returns
+    /// -------
+    /// int
+    ///     The cell rows the output streamed (the plan's cells).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``threads`` is below 1, or ``progress`` is not callable.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    /// KeyboardInterrupt
+    ///     Ctrl-C while the plan computes; the run has stopped.
+    ///
+    /// Examples
+    /// --------
+    /// >>> calls = []
+    /// >>> scan(store)._execute(threads=1, progress=lambda done, total: calls.append((done, total)))
+    /// 2
+    /// >>> calls[-1]
+    /// (2, 2)
+    #[pyo3(signature = (*, threads = None, progress = None))]
+    fn _execute(
+        &self,
+        py: Python<'_>,
+        threads: Option<i64>,
+        progress: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<u64> {
+        let invalid = |parameter: &str, value: String, problem: &str, accepted: &str| {
+            let error = KytoError::InvalidArgument {
+                function: "Atlas._execute".to_owned(),
+                parameter: parameter.to_owned(),
+                value,
+                problem: problem.to_owned(),
+                accepted: accepted.to_owned(),
+            };
+            to_py_err(py, &error)
+        };
+        let threads = match threads {
+            None => std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN),
+            Some(threads) => usize::try_from(threads)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .ok_or_else(|| {
+                    invalid(
+                        "threads",
+                        threads.to_string(),
+                        "a run needs at least one thread",
+                        "an int of 1 or more, or None for one per CPU core",
+                    )
+                })?,
+        };
+        if let Some(progress) = &progress
+            && !progress.is_callable()
+        {
+            let value = progress.repr()?.to_string();
+            return Err(invalid(
+                "progress",
+                value,
+                "it is not callable",
+                "a callable taking (done, total), or None",
+            ));
+        }
+        let physical = self.plan.physical(PhysicalOptions::default());
+        run_plan(py, &physical, threads, progress.as_ref())
     }
 
     /// The plan, one node per line, from the last step down to the scan.

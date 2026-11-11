@@ -11,6 +11,7 @@ pub mod convert;
 pub mod errors;
 pub mod expr;
 pub mod handles;
+pub mod run;
 pub mod sink_h5ad;
 
 /// The package version, taken from the workspace `Cargo.toml` (the single source).

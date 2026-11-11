@@ -19,8 +19,13 @@
 //! Blocks hold at most `block_cells` rows of one store cell block: the store's cell
 //! blocks, or parts of them when the physical plan splits them for a memory limit
 //! (task 5.5).
-//! Does not: cancel a window being computed when dropped (it finishes, then stops;
-//! Ctrl-C is 5.7), or choose block sizes (the physical plan does, 5.5).
+//! A cancelled run (task 5.7, the source's [`RunControl`]) stops at its next block:
+//! no block is read or computed after the cancel is seen, the window ends with
+//! `KY-E503` and the stream after it. Each computed block adds its cells to the run's
+//! progress.
+//! Does not: cancel a window being computed when only dropped (it finishes, then
+//! stops), interrupt a tile read or kernel already started, or choose block sizes (the
+//! physical plan does, 5.5).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, NonZeroUsize};
@@ -36,6 +41,7 @@ use zarrs::storage::ReadableStorageTraits;
 use crate::cell_block_pool::CellBlockPool;
 use crate::elementwise::ElementwiseMaps;
 use crate::pipeline_block::PipelineBlock;
+use crate::run_control::RunControl;
 use crate::statistics::Statistics;
 
 type Item = Result<PipelineBlock, KytoError>;
@@ -67,6 +73,8 @@ pub(crate) struct StreamSource<S: ?Sized> {
     /// Cells per block: the store's `C`, or fewer to split its cell blocks (5.5).
     pub(crate) block_cells: NonZeroU64,
     pub(crate) store: String,
+    /// The run's cancel flag and progress counters.
+    pub(crate) control: RunControl,
 }
 
 /// What the producer thread owns.
@@ -248,6 +256,10 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
         let mut inputs = Vec::with_capacity(source.window.get());
         let mut failure = None;
         while inputs.len() < source.window.get() {
+            if let Err(cancelled) = source.control.check() {
+                failure = Some(cancelled);
+                break;
+            }
             match self.read_next() {
                 None => break,
                 Some(Ok(block)) => inputs.push(block),
@@ -267,6 +279,7 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
         let mut outputs: Vec<Item> = inputs
             .into_par_iter()
             .map(|block| {
+                source.control.check()?;
                 let mut block = source.operators.iter().try_fold(block, |block, operator| {
                     operator.apply(block, pool, &source.store)
                 })?;
@@ -282,6 +295,7 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
                         pool.recycle(dropped);
                     }
                 }
+                source.control.add_done(block.cells.len() as u64);
                 Ok(block)
             })
             .collect();

@@ -2,6 +2,7 @@
 
 import builtins
 import os
+from collections.abc import Callable
 from typing import (
     ClassVar,
     Generic,
@@ -240,6 +241,55 @@ class Atlas:
         --------
         >>> scan(store).estimate()
         {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'device': 'cpu'}
+        """
+    def _execute(
+        self,
+        *,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> int:
+        """Run the plan and stream its output to nowhere (private, task 5.7).
+
+        Task 5.7's hook until the terminals of 7.2 and 7.3 return the data. Runs the
+        plan as ``estimate()`` costs it on the CPU executor, drops every block it
+        streams and returns how many cell rows it streamed. The GIL is released while
+        the plan computes, so other Python threads run. Ctrl-C (or any exception a
+        signal handler raises) cancels the run: it stops at its next block, its threads
+        end, and the exception is raised from here; the process stays usable.
+
+        Parameters
+        ----------
+        threads : int or None, default=None
+            Threads that read and compute blocks; ``None`` for one per CPU core. The
+            result does not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread whenever the run
+            moved: cell rows computed and in the whole run, both summed over its passes
+            (each statistics pass, then the output's stream, computes every cell). The
+            last call has ``done == total``; a store without cells gets none. An
+            exception it raises cancels the run and is raised from here.
+
+        Returns
+        -------
+        int
+            The cell rows the output streamed (the plan's cells).
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``threads`` is below 1, or ``progress`` is not callable.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        KeyboardInterrupt
+            Ctrl-C while the plan computes; the run has stopped.
+
+        Examples
+        --------
+        >>> calls = []
+        >>> scan(store)._execute(threads=1, progress=lambda done, total: calls.append((done, total)))
+        2
+        >>> calls[-1]
+        (2, 2)
         """
     def to_json(self) -> str:
         """Write the plan as JSON text, to store it or send it elsewhere.
