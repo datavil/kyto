@@ -18,11 +18,14 @@
 //! an [`OptimizedPlan`] by common sub-plan reuse, projection pushdown, elementwise
 //! fusion and predicate pushdown, each its own `optimize_*.rs` file. The physical plan
 //! (task 4.5): [`PhysicalPlan`] (and [`Plan::physical`], [`Plan::explain`]) says the
-//! device, passes and blocks of each optimized node.
+//! device, passes and blocks of each optimized node. The cost estimate (task 4.6):
+//! [`CostEstimate`] ([`PhysicalPlan::estimate`], [`Plan::estimate`]) gives the passes
+//! over the store, bytes read, peak memory and device without reading anything.
 #![forbid(unsafe_code)]
 
 mod cluster;
 mod cross_cell;
+mod estimate;
 mod filter;
 mod handles;
 mod map_elementwise;
@@ -49,6 +52,7 @@ mod with_default_layer;
 
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
+pub use estimate::{ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES};
 pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};
@@ -58,7 +62,8 @@ pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
 pub use optimize::{OptimizeOptions, Output, optimize};
 pub use optimized_plan::{Operation, OptimizedNode, OptimizedOutput, OptimizedPlan};
 pub use physical_plan::{
-    Blocks, Device, Execution, PCA_POWER_ITERATIONS, PhysicalOptions, PhysicalPlan, physical_plan,
+    Blocks, DEFAULT_BLOCKS_IN_FLIGHT, Device, Execution, PCA_POWER_ITERATIONS, PhysicalOptions,
+    PhysicalPlan, physical_plan,
 };
 pub use plan::{Plan, PlanNodes};
 pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};

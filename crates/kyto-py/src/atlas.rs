@@ -18,6 +18,7 @@ use kyto_core::GeneIds;
 use kyto_error::KytoError;
 use kyto_plan::Plan;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::{IntoPyObjectExt, PyAny};
 
 use crate::errors::to_py_err;
@@ -402,6 +403,39 @@ impl Atlas {
     /// #0 SCAN ... [device=cpu passes=1 blocks=4096 cells]
     fn explain(&self) -> String {
         self.plan.explain()
+    }
+
+    /// What running the plan would cost, from its schema alone (task 4.6).
+    ///
+    /// Estimated for the plan as ``explain()`` shows it (every optimizer rule, a
+    /// terminal reading all of its output, the CPU, 2 cell blocks in flight).
+    /// ``passes`` counts the passes over the store's matrix: each statistics pass
+    /// streams the data again from the store, and one more pass delivers what is read
+    /// from the stream. ``bytes_read`` is the decoded size of the matrix tiles those
+    /// passes read (fewer bytes are on disk, compressed; the cell and gene tables are
+    /// not counted). ``peak_memory`` is the most memory the plan holds at once: the
+    /// blocks in flight in every streamed step (sized for blocks of mean density) plus
+    /// statistics and in-memory results; the store reader's part is within 25% of
+    /// what it allocates on the test fixtures. Nothing is read.
+    ///
+    /// Returns
+    /// -------
+    /// CostEstimate
+    ///     A new dict with ``passes``, ``bytes_read`` and ``peak_memory`` (bytes, as
+    ///     ``int``) and ``device`` (``"cpu"``).
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).estimate()
+    /// {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'device': 'cpu'}
+    fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let estimate = self.plan.estimate();
+        let dict = PyDict::new(py);
+        dict.set_item("passes", estimate.passes())?;
+        dict.set_item("bytes_read", estimate.bytes_read())?;
+        dict.set_item("peak_memory", estimate.peak_memory())?;
+        dict.set_item("device", estimate.device().name())?;
+        Ok(dict)
     }
 
     /// The plan, one node per line, from the last step down to the scan.

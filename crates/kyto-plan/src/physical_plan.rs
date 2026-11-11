@@ -21,11 +21,13 @@
 //! Blocks hold the store's cell block size (`C`, `schema.json` `tiling`) rows and
 //! every gene read.
 //! Does not: execute (5.x), shrink blocks under a memory limit (5.5), count the
-//! passes over the store for the whole plan or estimate bytes and memory (4.6), pick
+//! passes over the store for the whole plan or estimate bytes and memory (4.6,
+//! `estimate.rs`), pick
 //! among several devices (9.1: [`Device`] has only the CPU), or print the logical
 //! tree or JSON (4.7).
 
 use std::fmt;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::cross_cell::{CrossCellOp, HvgFlavor};
@@ -66,11 +68,26 @@ impl fmt::Display for Device {
     }
 }
 
+/// Cell blocks a stream reads at once by default (as `kyto_store::sink_h5ad`).
+pub const DEFAULT_BLOCKS_IN_FLIGHT: NonZeroU64 = NonZeroU64::new(2).expect("2 is not zero");
+
 /// The choices the physical plan is built with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalOptions {
     /// The device every node runs on.
     pub device: Device,
+    /// Cell blocks a stream reads and holds at once (memory grows with it; task 4.6's
+    /// estimate counts it, 5.2's executor uses it).
+    pub blocks_in_flight: NonZeroU64,
+}
+
+impl Default for PhysicalOptions {
+    fn default() -> Self {
+        Self {
+            device: Device::default(),
+            blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
+        }
+    }
 }
 
 /// How a node meets the data.
@@ -145,6 +162,7 @@ impl fmt::Display for Execution {
 pub struct PhysicalPlan {
     optimized: OptimizedPlan,
     executions: Vec<Execution>,
+    options: PhysicalOptions,
 }
 
 impl PhysicalPlan {
@@ -166,12 +184,18 @@ impl PhysicalPlan {
         Self {
             optimized,
             executions,
+            options,
         }
     }
 
     /// The optimized plan it runs.
     pub fn optimized(&self) -> &OptimizedPlan {
         &self.optimized
+    }
+
+    /// The choices it was built with.
+    pub fn options(&self) -> PhysicalOptions {
+        self.options
     }
 
     /// How each node runs, one per [`OptimizedPlan::nodes`], in the same order.
