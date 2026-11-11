@@ -285,10 +285,13 @@ uv run --no-project python scripts/agents_commands.py
 ```bash
 uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references
 uv run cargo test --release -p kyto-exec --test thread_scaling -- --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
+uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (criterion, timings)
+uv run cargo test --release -p kyto-exec --test kernels -- --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
 ```
 
-- **Bench:** no commands yet. `criterion` and `pytest-benchmark` arrive with task 10.3,
-  which adds them to `Run by CI` (or here, if too slow for every task).
+- **Bench:** only 5.3's kernel bench above (criterion, in `crates/kyto-exec/benches`). The
+  suites against scanpy (`criterion`, `pytest-benchmark`) arrive with task 10.3, which adds
+  them to `Run by CI` (or here, if too slow for every task).
 - **Linux:** the Rust test binary links libpython, so `cargo test` needs it on the
   loader path once per shell:
   `export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"`.

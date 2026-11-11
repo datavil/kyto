@@ -4,13 +4,14 @@
 //! Does: apply the maps in order to each block, each writing a `float32` layer (its
 //! logical dtype, so a fused pass gives the bits the same maps give one by one, task
 //! 4.4 Open (2)), and drop the layers a fused pass does not keep. Output buffers come
-//! from the [`CellBlockPool`]; replaced and dropped blocks go back to it. Scalar code:
-//! `normalize_total` sums each row in `f64` and multiplies by `target_sum / total`
-//! (a cell whose total is 0 stays as it is, as scanpy's `counts += counts == 0`),
-//! `log1p` is `f32::ln_1p`; both keep zeros at zero, so a block keeps its structure.
-//! Does not: SIMD (task 5.3), the median `normalize_total` (cross-cell, a statistics
-//! pass first: 5.4), or scanpy's other parameters and its exact float steps (6.2 owns
-//! parity).
+//! from the [`CellBlockPool`]; replaced and dropped blocks go back to it. On the 5.3
+//! [`Kernels`]: `normalize_total` sums each row in `f64` ([`Kernels::row_sums`], lane
+//! order) and multiplies by `target_sum / total` ([`Kernels::scale_rows`]; a cell whose
+//! total is 0 stays as it is, as scanpy's `counts += counts == 0`), `log1p` is kyto's
+//! [`crate::log1p`] ([`Kernels::log1p`]); both keep zeros at zero, so a block keeps its
+//! structure.
+//! Does not: the median `normalize_total` (cross-cell, a statistics pass first: 5.4), or
+//! scanpy's other parameters and its exact float steps (6.2 owns parity).
 
 use std::collections::BTreeSet;
 
@@ -19,6 +20,7 @@ use kyto_plan::{ElementwiseOp, MapElementwise};
 use kyto_store::{CellBlock, CellData, CellValues, ValueDtype};
 
 use crate::cell_block_pool::CellBlockPool;
+use crate::kernels::{KernelValue, Kernels};
 use crate::pipeline_block::PipelineBlock;
 
 /// Maps run in one pass over each block, then the layers to drop.
@@ -89,50 +91,42 @@ fn map_block(
     parts.indptr.extend_from_slice(input.indptr());
     parts.indices.extend_from_slice(input.indices());
     if let CellData::F32(data) = &mut parts.data {
-        data.reserve(input.indices().len());
+        // AlignedBuffer has no `resize`: zeros first, then the kernel writes over them.
+        let len = input.indices().len();
+        data.reserve(len);
+        while data.len() < len {
+            data.extend_from_slice(&ZEROS[..(len - data.len()).min(ZEROS.len())]);
+        }
         match input.data() {
-            CellValues::F32(values) => map_rows(op, input.indptr(), values, |data_value| {
-                data.push(data_value);
-            }),
-            CellValues::U32(values) => map_rows(op, input.indptr(), values, |data_value| {
-                data.push(data_value);
-            }),
+            CellValues::F32(values) => map_values(op, input.indptr(), values, data.as_mut_slice()),
+            CellValues::U32(values) => map_values(op, input.indptr(), values, data.as_mut_slice()),
         }
     }
     CellBlock::from_parts(parts, input.n_genes())
 }
 
-/// Call `write` with `op` of each value, row by row.
-fn map_rows<T: Copy + Into<f64>>(
-    op: ElementwiseOp,
-    indptr: &[u64],
-    values: &[T],
-    mut write: impl FnMut(f32),
-) {
-    for row in indptr.windows(2) {
-        // indptr comes from a checked CellBlock: increasing, ending at values.len().
-        let row = &values[row[0] as usize..row[1] as usize];
-        match op {
-            ElementwiseOp::NormalizeTotal { target_sum } => {
-                let total: f64 = row.iter().map(|&value| value.into()).sum();
+/// Zeros to grow an output buffer by.
+static ZEROS: [f32; 1024] = [0.0; 1024];
+
+/// `op` of each value of the rows `indptr` cuts from `values`, written to `out`.
+fn map_values<T: KernelValue>(op: ElementwiseOp, indptr: &[u64], values: &[T], out: &mut [f32]) {
+    let kernels = Kernels::detected();
+    match op {
+        ElementwiseOp::NormalizeTotal { target_sum } => {
+            let mut factors = Vec::new();
+            kernels.row_sums(indptr, values, &mut factors);
+            for total in &mut factors {
                 // A zero total leaves the cell as it is (scanpy: counts += counts == 0).
                 // A median target never reaches here (cross-cell, rejected when lowered).
-                let factor = match target_sum {
-                    Some(target_sum) if total != 0.0 => target_sum / total,
+                *total = match target_sum {
+                    Some(target_sum) if *total != 0.0 => target_sum / *total,
                     _ => 1.0,
                 };
-                for &value in row {
-                    write((value.into() * factor) as f32);
-                }
             }
-            ElementwiseOp::Log1p => {
-                for &value in row {
-                    // Rounded to f32 first: the input layer as stored (a u32 count is
-                    // exact in f64; an f32 value is already f32).
-                    write((value.into() as f32).ln_1p());
-                }
-            }
+            kernels.scale_rows(indptr, values, &factors, out);
         }
+        // A u32 count is rounded to f32 first: the input layer as stored.
+        ElementwiseOp::Log1p => kernels.log1p(values, out),
     }
 }
 
@@ -184,12 +178,28 @@ mod tests {
     }
 
     #[test]
-    fn log1p_is_f32_ln_1p() {
+    fn log1p_is_kyto_log1p() {
         let pool = CellBlockPool::new(2);
         let block = map_block(ElementwiseOp::Log1p, &counts(), &pool).unwrap();
         assert_eq!(
             values(&block),
-            [1.0_f32.ln_1p(), 3.0_f32.ln_1p(), 2.0_f32.ln_1p()]
+            [crate::log1p(1.0), crate::log1p(3.0), crate::log1p(2.0)]
         );
+    }
+
+    #[test]
+    fn a_block_longer_than_the_zeros_is_mapped_whole() {
+        let pool = CellBlockPool::new(2);
+        let n = ZEROS.len() * 2 + 3;
+        let block = CellBlock::from_u32(
+            vec![0, n as u64],
+            (0..n as u32).collect(),
+            (0..n as u32).collect(),
+            n as u64,
+        )
+        .unwrap();
+        let output = map_block(ElementwiseOp::Log1p, &block, &pool).unwrap();
+        let expected: Vec<f32> = (0..n).map(|value| crate::log1p(value as f32)).collect();
+        assert_eq!(values(&output), expected);
     }
 }

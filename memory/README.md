@@ -26,3 +26,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Measuring peak memory](measuring_peak_memory.md): `peak_alloc` global allocator in its own test binary; the reader's Vec doubling, zarrs whole-chunk decodes and the 1 MiB `tile_offsets` open are real and modelled.
 - [Counting allocations](counting_allocations.md): `stats_alloc` global allocator, one test per binary (it sees every thread), macOS lock allocates once, assert a bounded count with a flat tail.
 - [Executor threads](executor_threads.md): one rayon pool per run via `install` (reader, zarrs and operators share it), rendezvous channel, drop unread layers, thread scaling only in release as an ignored test.
+- [SIMD kernels with the same bits everywhere](simd_kernels_same_bits.md): plain Rust inside pulp dispatch, fixed `f64` lanes and tree, own `log1p`; pulp `Scalar` is NEON on aarch64; `any::<f32>()` has no NaN.

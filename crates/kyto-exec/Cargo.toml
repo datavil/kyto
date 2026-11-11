@@ -20,6 +20,9 @@ rayon = "1.12.0"
 # Opens the scan's store (filesystem) and names the storage trait the tile reader reads
 # through; same version and features as kyto-store.
 zarrs = { version = "0.22.10", default-features = false, features = ["filesystem", "sharding", "zstd", "crc32c"] }
+# SIMD kernels (task 5.3): runtime dispatch to AVX-512 (`x86-v4`), AVX2 (`x86-v3`, on by
+# default) or NEON, with a scalar fallback.
+pulp = { version = "0.22.3", features = ["x86-v4"] }
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).
@@ -28,3 +31,9 @@ kyto-core = { path = "../kyto-core" }
 polars = { version = "0.55.2", default-features = false }
 proptest = "1.11.0"
 tempfile = "3.27.0"
+# Kernel benches (task 5.3): `cargo bench -p kyto-exec --bench kernels`.
+criterion = { version = "0.8.2", default-features = false }
+
+[[bench]]
+name = "kernels"
+harness = false

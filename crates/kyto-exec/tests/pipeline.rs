@@ -181,7 +181,7 @@ fn expected_rows() -> Vec<Row> {
             row.iter()
                 .map(|&(gene, count)| {
                     let normalized = (f64::from(count) * factor) as f32;
-                    (gene, normalized.ln_1p().to_bits())
+                    (gene, kyto_exec::log1p(normalized).to_bits())
                 })
                 .collect()
         })
