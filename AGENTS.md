@@ -50,6 +50,10 @@ decision recorded in the plan.
   tasks stay, struck through.
 - **One task = one commit on `main`.** No task branches or PRs. Commit messages
   start with the ID: `[3.4] feature resolver`.
+- **Push after every commit.** As soon as a task commit (or a maintenance or decision
+  commit) is on `main`, run `git push origin main`, so no finished work sits only on
+  one machine (decided by the user, Nov 11, 2026). Never force-push. If the push is
+  rejected, stop and tell the user instead of rebasing or merging on your own.
 - A task is done when its **Done when** check and the local gate pass, not before. The
   local gate is "Run the whole list" below. CI (GitHub Actions) runs only on demand
   (`gh workflow run ci.yml`) and on `v*` release tags, not on every push (decided by
@@ -210,8 +214,8 @@ requires editing many unrelated files, the foundation is wrong: stop and tell th
 
 Tokens are a budget. Spend them on design and verification, not on re-reading or noise.
 
-- **End the session at the end of a task.** After the task is committed to `main` and the
-  plan is ticked, stop. Tell the user the task is done and the next one should start in a
+- **End the session at the end of a task.** After the task is committed to `main`, pushed, and
+  the plan is ticked, stop. Tell the user the task is done and the next one should start in a
   fresh session.
 - **Read narrowly.** Search before reading. Read the line range you need, not whole
   files. Do not re-read a file you just edited.
@@ -237,8 +241,8 @@ Tokens are a budget. Spend them on design and verification, not on re-reading or
    reference looks wrong, follow "Parity with scanpy" above (note, check, ask).
 5. Spin bug-hunting sub agents. Fix confirmed bugs surgically.
 6. Benchmark if the task touches a hot path (time and peak memory).
-7. Format, run all checks, tick the task in the plan, and commit to `main` with the
-   task ID.
+7. Format, run all checks, tick the task in the plan, commit to `main` with the
+   task ID, and push (`git push origin main`).
 
 ## Commands
 
