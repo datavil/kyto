@@ -12,11 +12,16 @@
 //! have (pandas raises the same); refuse a gene read of a gene removed earlier in the
 //! plan (`KY-E203`, task 3.7, R9); refuse a stored derived cell column (one whose
 //! schema records lineage) read after a step that changed the gene axis (`KY-E301`,
-//! task 3.8) unless the read is `.recompute()`d, which needs that lineage (`KY-E302`).
-//! It also turns a gene named by symbol (`by='symbol'`, task 3.9) into its gene ID: a
-//! symbol must match exactly one gene (`KY-E204` lists the IDs otherwise).
+//! task 3.8), and likewise a stored derived gene column after a step that changed the
+//! cell axis, or any stored derived column after a step that wrote its lineage layer
+//! again (task 4.1), unless the read is `.recompute()`d, which needs that lineage
+//! (`KY-E302`). It also turns a gene named by symbol (`by='symbol'`, task 3.9) into
+//! its gene ID: a symbol must match exactly one gene not removed upstream (`KY-E204`
+//! lists the IDs otherwise).
 //! Does not: suggest close matches for unknown names or symbols (task 8.2), or check
 //! that a cell ID exists (the plan holds no cell IDs).
+
+use std::collections::BTreeMap;
 
 use kyto_error::KytoError;
 
@@ -45,6 +50,8 @@ pub struct Resolver<'a> {
     gene_ids: &'a GeneIds,
     removed_genes: Option<&'a RemovedGenes>,
     gene_axis_changed_by: Option<&'a str>,
+    cell_axis_changed_by: Option<&'a str>,
+    rewritten_layers: Option<&'a BTreeMap<String, String>>,
     default_layer: Option<&'a str>,
     store: &'a str,
 }
@@ -142,6 +149,8 @@ impl<'a> Resolver<'a> {
             gene_ids,
             removed_genes: None,
             gene_axis_changed_by: None,
+            cell_axis_changed_by: None,
+            rewritten_layers: None,
             default_layer,
             store,
         }
@@ -169,17 +178,50 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// `KY-E301` if `column`, read on axis `axis`, is a stored derived cell column and
-    /// the gene axis changed upstream.
+    /// This resolver, refusing reads of stored derived gene columns (per-gene
+    /// statistics over cells, such as `n_cells` or HVG flags, whose schema records
+    /// lineage) as stale (`KY-E301`): `changed_by` (`filter_cells`) changed the cell
+    /// axis after they were computed. The mirror of
+    /// [`Resolver::with_gene_axis_changed_by`] (task 4.1).
+    pub fn with_cell_axis_changed_by(self, changed_by: &'a str) -> Self {
+        Self {
+            cell_axis_changed_by: Some(changed_by),
+            ..self
+        }
+    }
+
+    /// This resolver, refusing reads of stored derived columns of either table whose
+    /// lineage names a layer in `rewritten_layers` as stale (`KY-E301`): the plan node
+    /// mapped to it (`log1p`, as messages name it) wrote that layer again after they
+    /// were computed (task 4.1).
+    pub fn with_rewritten_layers(self, rewritten_layers: &'a BTreeMap<String, String>) -> Self {
+        Self {
+            rewritten_layers: Some(rewritten_layers),
+            ..self
+        }
+    }
+
+    /// `KY-E301` if `column`, read on axis `axis`, is a stored derived column (its
+    /// schema records lineage) and, upstream, the other axis changed or the layer it
+    /// was computed from was written again.
     fn check_not_stale(&self, axis: Axis, column: &ColumnSchema) -> Result<(), KytoError> {
-        match self.gene_axis_changed_by {
-            Some(changed_by) if axis == Axis::Cells && column.lineage.is_some() => {
-                Err(KytoError::StaleColumn {
-                    column: column.name.clone(),
-                    changed_by: changed_by.to_owned(),
-                })
-            }
-            _ => Ok(()),
+        let Some(lineage) = &column.lineage else {
+            return Ok(());
+        };
+        let other_axis_changed_by = match axis {
+            Axis::Cells => self.gene_axis_changed_by,
+            Axis::Genes => self.cell_axis_changed_by,
+        };
+        let layer_rewritten_by = self
+            .rewritten_layers
+            .and_then(|layers| layers.get(&lineage.layer))
+            .map(String::as_str);
+        match other_axis_changed_by.or(layer_rewritten_by) {
+            Some(changed_by) => Err(KytoError::StaleColumn {
+                column: column.name.clone(),
+                changed_by: changed_by.to_owned(),
+            }),
+            None => Ok(()),
         }
     }
 
@@ -315,14 +357,28 @@ impl<'a> Resolver<'a> {
             };
             return Err(unknown("gene symbol".to_owned(), symbol, problem));
         }
-        match self.gene_ids.with_symbol(symbol).as_slice() {
-            [] => Err(unknown(
+        let carriers = self.gene_ids.with_symbol(symbol);
+        // Genes removed upstream are not candidates (task 4.1): after
+        // `select_genes`, a symbol shared with a removed gene names the kept one, as
+        // anndata's `var_names` hold only the kept genes. If every carrier was removed,
+        // the first one is returned so the caller raises `KY-E203` for it.
+        let kept: Vec<&str> = carriers
+            .iter()
+            .copied()
+            .filter(|gene_id| {
+                self.removed_genes
+                    .is_none_or(|removed| removed.removed_by(gene_id).is_none())
+            })
+            .collect();
+        match (kept.as_slice(), carriers.first()) {
+            ([], None) => Err(unknown(
                 "gene symbol".to_owned(),
                 symbol,
                 format!("no gene of the store has this {SYMBOL_COLUMN}"),
             )),
-            [gene_id] => Ok((*gene_id).to_owned()),
-            gene_ids => Err(KytoError::AmbiguousSymbol {
+            ([], Some(removed)) => Ok((*removed).to_owned()),
+            ([gene_id], _) => Ok((*gene_id).to_owned()),
+            (gene_ids, _) => Err(KytoError::AmbiguousSymbol {
                 symbol: symbol.to_owned(),
                 gene_ids: gene_ids.iter().map(|&id| id.to_owned()).collect(),
             }),

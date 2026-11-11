@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
+# Node parameters and output schemas derive serde for the plan JSON of task 4.3.
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 
 [dev-dependencies]
 serde_json = "1.0.154"

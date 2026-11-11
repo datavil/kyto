@@ -312,7 +312,9 @@ impl PyMatrix {
     /// Returns
     /// -------
     /// list of str
-    ///     A new list, read from the gene table when the plan was built.
+    ///     A new list, read from the gene table when the plan was built. After
+    ///     ``filter_genes``, the genes that may remain: which ones is known only
+    ///     when the plan runs, and ``estimate()`` gives ``n_columns`` as ``None``.
     ///
     /// Examples
     /// --------

@@ -1,46 +1,244 @@
 //! The logical plan: an immutable chain of nodes, each holding its input by `Arc`.
 //!
-//! Does: build plans by wrapping an existing `Arc<Plan>` in a new node (the input is
-//! shared, never copied or changed: R2), walk a plan from a node to its scan, and
-//! answer what the plan's schema and default layer are.
-//! Does not: execute, optimize or serialize plans (tasks 4.x).
+//! Does: list the logical nodes (task 4.1: one variant each, one file each), build
+//! plans by wrapping an existing `Arc<Plan>` in a new node (the input is shared, never
+//! copied or changed: R2), walk a plan from a node to its scan, and answer what a
+//! node's output schema, default layer and removed genes are from the state cached
+//! when it was built (so these answers do not walk the chain).
+//! Does not: validate across the whole DAG (4.2), serialize (4.3), optimize (4.4) or
+//! execute plans.
 //!
 //! The shape follows Polars' `DslPlan`: one enum variant per node, each node owning its
-//! inputs as `Arc<Plan>`, so building `b` from `a` costs one allocation and leaves `a`
-//! untouched and still usable. Equality, `Debug`, `Display` and `Drop` walk the chain
-//! with a loop, not recursion, so a long chain cannot overflow the stack.
+//! input as `Arc<Plan>`, so building `b` from `a` costs one allocation and leaves `a`
+//! untouched and still usable. Like Polars' `IR::schema()`, each node's output schema
+//! is computed from its input's and its parameters ([`Transform::output_schema`]), once.
+//! Equality, `Debug`, `Display` and `Drop` walk the chain with a loop, not recursion,
+//! so a long chain cannot overflow the stack.
+//!
+//! Adding a node: a file with its parameters, their [`LogicalNode`] and [`Transform`]
+//! impls and its builder (`impl Plan`), then one variant here and one arm in each of
+//! `parts`, `input_mut` and `same_node`.
 
 use std::fmt;
 use std::sync::Arc;
 
-use kyto_core::{
-    AtlasSchema, Expr, ExprAxis, ExprDtype, GeneExpr, GeneIds, RemovedGenes, Resolver,
-};
+use kyto_core::{Axis, Expr, ExprAxis, LayerSchema, RemovedGenes, Resolver};
 use kyto_error::KytoError;
 
-use crate::filter_genes::FilterGenes;
+use crate::cluster::Cluster;
+use crate::cross_cell::CrossCell;
+use crate::filter::Filter;
+use crate::map_elementwise::MapElementwise;
+use crate::neighbors::Neighbors;
+use crate::node::{CellScope, Input, LogicalNode, Node, NodeId, NodeState, Transform};
+use crate::plan_schema::PlanSchema;
 use crate::scan::Scan;
+use crate::select_genes::SelectGenes;
+use crate::sink::Sink;
+use crate::take_cells::TakeCells;
+use crate::with_columns::WithColumns;
 use crate::with_default_layer::WithDefaultLayer;
 
-/// A logical plan node and, through its inputs, the plan below it.
+/// A logical plan node and, through its input, the plan below it.
 ///
 /// Plans are immutable: methods that extend a plan take `&Arc<Plan>` and return a new
 /// `Arc<Plan>` whose input is the old one.
 #[derive(Clone)]
 pub enum Plan {
     /// Read a store (the root of every plan).
-    Scan(Scan),
+    Scan(Node<Scan>),
     /// Set the default layer of everything downstream.
-    WithDefaultLayer(WithDefaultLayer),
-    /// Keep the genes where a gene predicate is true (4.1's `Filter`, gene axis only).
-    FilterGenes(FilterGenes),
+    WithDefaultLayer(Node<WithDefaultLayer>),
+    /// Keep the cells or the genes where a predicate is true.
+    Filter(Node<Filter>),
+    /// Keep the genes named by ID.
+    SelectGenes(Node<SelectGenes>),
+    /// Keep the cells named by ID.
+    TakeCells(Node<TakeCells>),
+    /// Map a layer value by value (`normalize_total`, `log1p`).
+    MapElementwise(Node<MapElementwise>),
+    /// A step over all cells (`scale`, `highly_variable_genes`, `pca`).
+    CrossCell(Node<CrossCell>),
+    /// Add or replace table columns from expressions.
+    WithColumns(Node<WithColumns>),
+    /// Build the neighbour graphs of an embedding.
+    Neighbors(Node<Neighbors>),
+    /// Cluster cells on a graph.
+    Cluster(Node<Cluster>),
+    /// Write the plan (the last node).
+    Sink(Node<Sink>),
 }
 
 impl Plan {
     /// A plan that scans the store at `source`, whose schema is `schema` and whose
     /// genes are `gene_ids`.
-    pub fn scan(source: impl Into<String>, schema: AtlasSchema, gene_ids: GeneIds) -> Arc<Self> {
-        Arc::new(Self::Scan(Scan::new(source, schema, gene_ids)))
+    pub fn scan(
+        source: impl Into<String>,
+        schema: kyto_core::AtlasSchema,
+        gene_ids: kyto_core::GeneIds,
+    ) -> Arc<Self> {
+        let scan = Scan::new(source, schema, gene_ids);
+        let state = NodeState::root(
+            scan.shared_source(),
+            scan.output_schema(),
+            Arc::clone(scan.gene_ids()),
+        );
+        Arc::new(Self::Scan(Node::new(Input::none(), scan, state)))
+    }
+
+    /// This node's declarations and cached state.
+    fn parts(&self) -> (&dyn LogicalNode, &NodeState, &Input) {
+        fn of<P: LogicalNode>(node: &Node<P>) -> (&dyn LogicalNode, &NodeState, &Input) {
+            (node.params(), &node.state, &node.input)
+        }
+        match self {
+            Self::Scan(node) => of(node),
+            Self::WithDefaultLayer(node) => of(node),
+            Self::Filter(node) => of(node),
+            Self::SelectGenes(node) => of(node),
+            Self::TakeCells(node) => of(node),
+            Self::MapElementwise(node) => of(node),
+            Self::CrossCell(node) => of(node),
+            Self::WithColumns(node) => of(node),
+            Self::Neighbors(node) => of(node),
+            Self::Cluster(node) => of(node),
+            Self::Sink(node) => of(node),
+        }
+    }
+
+    fn input_mut(&mut self) -> &mut Input {
+        match self {
+            Self::Scan(node) => &mut node.input,
+            Self::WithDefaultLayer(node) => &mut node.input,
+            Self::Filter(node) => &mut node.input,
+            Self::SelectGenes(node) => &mut node.input,
+            Self::TakeCells(node) => &mut node.input,
+            Self::MapElementwise(node) => &mut node.input,
+            Self::CrossCell(node) => &mut node.input,
+            Self::WithColumns(node) => &mut node.input,
+            Self::Neighbors(node) => &mut node.input,
+            Self::Cluster(node) => &mut node.input,
+            Self::Sink(node) => &mut node.input,
+        }
+    }
+
+    /// Whether the two nodes have equal parameters, ignoring their inputs.
+    fn same_node(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Scan(left), Self::Scan(right)) => left.params() == right.params(),
+            (Self::WithDefaultLayer(left), Self::WithDefaultLayer(right)) => {
+                left.params() == right.params()
+            }
+            (Self::Filter(left), Self::Filter(right)) => left.params() == right.params(),
+            (Self::SelectGenes(left), Self::SelectGenes(right)) => left.params() == right.params(),
+            (Self::TakeCells(left), Self::TakeCells(right)) => left.params() == right.params(),
+            (Self::MapElementwise(left), Self::MapElementwise(right)) => {
+                left.params() == right.params()
+            }
+            (Self::CrossCell(left), Self::CrossCell(right)) => left.params() == right.params(),
+            (Self::WithColumns(left), Self::WithColumns(right)) => left.params() == right.params(),
+            (Self::Neighbors(left), Self::Neighbors(right)) => left.params() == right.params(),
+            (Self::Cluster(left), Self::Cluster(right)) => left.params() == right.params(),
+            (Self::Sink(left), Self::Sink(right)) => left.params() == right.params(),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn state(&self) -> &NodeState {
+        self.parts().1
+    }
+
+    /// The node's declarations: name, axis changed, per-cell or cross-cell.
+    pub fn node(&self) -> &dyn LogicalNode {
+        self.parts().0
+    }
+
+    /// The node's stable ID: its position from the scan (0).
+    pub fn id(&self) -> NodeId {
+        self.state().id
+    }
+
+    /// The node's name, as `explain` shows it.
+    pub fn name(&self) -> &'static str {
+        self.node().name()
+    }
+
+    /// The axis this node changes, if any.
+    pub fn changes_axis(&self) -> Option<Axis> {
+        self.node().changes_axis()
+    }
+
+    /// Whether this node works per cell or across cells.
+    pub fn cell_scope(&self) -> CellScope {
+        self.node().cell_scope()
+    }
+
+    /// The node's input, or `None` for a scan.
+    pub fn input(&self) -> Option<&Arc<Self>> {
+        self.parts().2.get()
+    }
+
+    /// This node, then its input, and so on down to the scan.
+    pub fn nodes(&self) -> PlanNodes<'_> {
+        PlanNodes { next: Some(self) }
+    }
+
+    /// The plan's output schema: members, columns and sizes (cached, no walk).
+    pub fn output_schema(&self) -> &PlanSchema {
+        &self.state().schema
+    }
+
+    /// The plan's members and columns. Its `n_cells`, `n_genes` and `nnz` are upper
+    /// bounds; [`Plan::output_schema`] says which are exact.
+    pub fn schema(&self) -> &kyto_core::AtlasSchema {
+        self.output_schema().atlas()
+    }
+
+    /// The genes that may remain, in order: the store's, or a selection's
+    /// ([`Plan::select_genes`]). Exactly these when the gene count is known; after a
+    /// filter on data, an upper bound.
+    pub fn genes(&self) -> &[String] {
+        self.state().genes()
+    }
+
+    /// The default layer set nearest to this node, or `None` if no node sets one.
+    pub fn default_layer(&self) -> Option<&str> {
+        self.state().default_layer.as_deref()
+    }
+
+    /// The scan at the root of the plan (walks the chain).
+    pub fn root(&self) -> &Scan {
+        let mut node = self;
+        loop {
+            if let Self::Scan(scan) = node {
+                return scan.params();
+            }
+            match node.input() {
+                Some(input) => node = input,
+                // Only a plan being dropped has no input; it is never reachable.
+                None => unreachable!("plan node without input"),
+            }
+        }
+    }
+
+    /// The first node from the scan that changes the gene axis, as messages name it
+    /// (`filter_genes`, `select_genes`), or `None` if no node does. Stored derived
+    /// cell columns read after it are stale (`KY-E301`, task 3.8).
+    pub fn gene_axis_changed_by(&self) -> Option<&'static str> {
+        self.state().gene_axis_changed_by
+    }
+
+    /// The first node from the scan that changes the cell axis (`filter_cells`,
+    /// `take_cells`), or `None`. Stored derived gene columns read after it are stale.
+    pub fn cell_axis_changed_by(&self) -> Option<&'static str> {
+        self.state().cell_axis_changed_by
+    }
+
+    /// The genes removed by nodes of this plan, each with the first node that removed
+    /// it, as known when the plan is built (R9): those a [`Plan::select_genes`] left
+    /// out. A filter on data removes genes known only when the plan runs.
+    pub fn removed_genes(&self) -> &RemovedGenes {
+        &self.state().removed_genes
     }
 
     /// `expr` with every name resolved against this plan (R6): its schema, its store's
@@ -49,199 +247,144 @@ impl Plan {
     /// `gene_expression('CD3E', layer='log1p')`), so it means the same thing whatever is
     /// added to the store or the plan later. See [`Resolver::resolve`].
     ///
-    /// A gene removed upstream ([`Plan::removed_genes`]) is refused with `KY-E203`; a
-    /// stored derived cell column read after a node that changed the gene axis
-    /// ([`Plan::gene_axis_changed_by`]) with `KY-E301`, unless it is `.recompute()`d.
+    /// A gene removed upstream ([`Plan::removed_genes`]) is refused with `KY-E203`. A
+    /// stored derived column (lineage in `schema.json`) is refused with `KY-E301`,
+    /// unless it is `.recompute()`d, when read after a node that changed the other
+    /// axis ([`Plan::gene_axis_changed_by`], [`Plan::cell_axis_changed_by`]) or wrote
+    /// its lineage layer again.
     ///
     /// # Errors
-    /// `KY-E201`, `KY-E203`, `KY-E205`, `KY-E210`, `KY-E211`, `KY-E109`, `KY-E301` or
-    /// `KY-E302`, as [`Resolver::resolve`] lists them.
+    /// `KY-E201`, `KY-E203`, `KY-E204`, `KY-E205`, `KY-E210`, `KY-E211`, `KY-E109`,
+    /// `KY-E301` or `KY-E302`, as [`Resolver::resolve`] lists them.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
-        let root = self.root();
-        let removed_genes = self.removed_genes();
-        let resolver = Resolver::new(
-            self.schema(),
-            root.gene_ids(),
-            self.default_layer(),
-            root.source(),
+        let state = self.state();
+        let mut resolver = Resolver::new(
+            state.schema.atlas(),
+            &state.gene_ids,
+            state.default_layer.as_deref(),
+            &state.source,
         )
-        .with_removed_genes(&removed_genes);
-        match self.gene_axis_changed_by() {
-            Some(changed_by) => resolver.with_gene_axis_changed_by(changed_by),
-            None => resolver,
+        .with_removed_genes(&state.removed_genes)
+        .with_rewritten_layers(&state.rewritten_layers);
+        if let Some(changed_by) = state.gene_axis_changed_by {
+            resolver = resolver.with_gene_axis_changed_by(changed_by);
         }
-        .resolve(expr)
+        if let Some(changed_by) = state.cell_axis_changed_by {
+            resolver = resolver.with_cell_axis_changed_by(changed_by);
+        }
+        resolver.resolve(expr)
     }
 
-    /// The first node from the scan downward that changes the gene axis, as messages
-    /// name it (`filter_genes`), or `None` if no node does. Stored derived cell columns
-    /// read after it are stale (`KY-E301`, task 3.8). 4.1's `SelectGenes` belongs here
-    /// too.
-    pub fn gene_axis_changed_by(&self) -> Option<&'static str> {
-        let mut changed_by = None;
-        for node in self.nodes() {
-            match node {
-                Self::FilterGenes(_) => changed_by = Some("filter_genes"),
-                Self::Scan(_) | Self::WithDefaultLayer(_) => {}
-            }
-        }
-        changed_by
+    /// The new plan of node `params` over this one, wrapped by `wrap` (the variant).
+    /// The caller has checked the parameters.
+    pub(crate) fn extend<P: Transform>(
+        self: &Arc<Self>,
+        params: P,
+        wrap: fn(Node<P>) -> Self,
+    ) -> Arc<Self> {
+        let state = NodeState::child(self.state(), &params);
+        Arc::new(wrap(Node::new(Input::new(Arc::clone(self)), params, state)))
     }
 
-    /// The genes removed by nodes of this plan, each with the node that removed it, as
-    /// known when the plan is built (R9). No node removes genes yet, so this is empty;
-    /// task 4.1's `SelectGenes` adds its genes here (walking from the scan downward, see
-    /// [`RemovedGenes::insert`]), and a filter on data leaves its check to the executor.
-    pub fn removed_genes(&self) -> RemovedGenes {
-        let removed = RemovedGenes::new();
-        for node in self.nodes() {
-            match node {
-                // Which genes a filter on data keeps is known only when the plan runs.
-                Self::Scan(_) | Self::WithDefaultLayer(_) | Self::FilterGenes(_) => {}
-            }
-        }
-        removed
-    }
-
-    /// This plan with its default layer set to `layer` (a new plan; `self` is unchanged).
-    ///
-    /// # Errors
-    /// `KY-E109` if the schema has no layer named `layer` (names are case-sensitive).
-    pub fn with_default_layer(self: &Arc<Self>, layer: &str) -> Result<Arc<Self>, KytoError> {
-        if !self
-            .schema()
-            .layers
-            .iter()
-            .any(|stored| stored.name == layer)
-        {
-            return Err(KytoError::MissingMember {
-                kind: "layer".to_owned(),
-                name: layer.to_owned(),
-                store: self.root().source().to_owned(),
-            });
-        }
-        Ok(Arc::new(Self::WithDefaultLayer(WithDefaultLayer::new(
-            Arc::clone(self),
-            layer.to_owned(),
-        ))))
-    }
-
-    /// This plan keeping only the genes where `predicate` is true (a new plan; `self`
-    /// is unchanged). The predicate is resolved against this plan now (R6) and must be
-    /// boolean. Which genes it keeps is known only when the plan runs, but every
-    /// stored derived cell column read downstream is stale from here on (`KY-E301`).
-    ///
-    /// # Errors
-    /// Any error of [`Plan::resolve`] for `predicate`; `KY-E205` if the resolved
-    /// predicate is not boolean.
-    pub fn filter_genes(self: &Arc<Self>, predicate: &GeneExpr) -> Result<Arc<Self>, KytoError> {
-        let predicate = self.resolve(predicate)?;
-        if predicate.dtype() != ExprDtype::Boolean {
-            return Err(KytoError::ExpressionOperand {
-                operation: "filter_genes".to_owned(),
-                accepted: "a boolean gene expression".to_owned(),
-                got: format!("a {} expression", predicate.dtype().name()),
-                operand: predicate.to_string(),
-            });
-        }
-        Ok(Arc::new(Self::FilterGenes(FilterGenes::new(
-            Arc::clone(self),
-            predicate,
-        ))))
-    }
-
-    /// The node's name, as `explain` will show it.
-    pub fn name(&self) -> &'static str {
+    /// `KY-E216` if this plan ends in a sink, so `method` cannot extend it.
+    pub(crate) fn check_open(&self, method: &str) -> Result<(), KytoError> {
         match self {
-            Self::Scan(_) => "SCAN",
-            Self::WithDefaultLayer(_) => "WITH_DEFAULT_LAYER",
-            Self::FilterGenes(_) => "FILTER_GENES",
+            Self::Sink(sink) => Err(KytoError::PlanEnded {
+                method: method.to_owned(),
+                sink: sink.params().method().to_owned(),
+            }),
+            _ => Ok(()),
         }
     }
 
-    /// The node's input, or `None` for a scan.
-    pub fn input(&self) -> Option<&Arc<Self>> {
-        match self {
-            Self::Scan(_) => None,
-            Self::WithDefaultLayer(node) => node.input.get(),
-            Self::FilterGenes(node) => node.input.get(),
+    /// `KY-E109` for a member of kind `kind` named `name` that the plan does not have.
+    pub(crate) fn missing_member(&self, kind: &str, name: &str) -> KytoError {
+        KytoError::MissingMember {
+            kind: kind.to_owned(),
+            name: name.to_owned(),
+            store: self.state().source.to_string(),
         }
     }
 
-    /// This node, then its input, and so on down to the scan.
-    pub fn nodes(&self) -> PlanNodes<'_> {
-        PlanNodes { next: Some(self) }
+    /// The layer `name` of the plan, or `KY-E109`.
+    pub(crate) fn layer_named(&self, name: &str) -> Result<&LayerSchema, KytoError> {
+        self.output_schema()
+            .layer(name)
+            .ok_or_else(|| self.missing_member("layer", name))
     }
 
-    /// The plan's output schema. Each node keeps its own (shared, not copied), so this
-    /// does not walk the chain. No node changes the schema yet (4.1 adds those; a gene
-    /// filter keeps its input's schema, see [`FilterGenes`]).
-    pub fn schema(&self) -> &Arc<AtlasSchema> {
-        match self {
-            Self::Scan(scan) => scan.schema(),
-            Self::WithDefaultLayer(node) => node.schema(),
-            Self::FilterGenes(node) => node.schema(),
-        }
-    }
-
-    /// The default layer set nearest to this node, or `None` if no node sets one.
-    pub fn default_layer(&self) -> Option<&str> {
-        self.nodes().find_map(|node| match node {
-            Self::WithDefaultLayer(node) => Some(node.layer()),
-            Self::Scan(_) | Self::FilterGenes(_) => None,
-        })
-    }
-
-    /// The scan at the root of the plan (walks the chain).
-    pub fn root(&self) -> &Scan {
-        let mut node = self;
-        loop {
-            match node {
-                Self::Scan(scan) => return scan,
-                Self::WithDefaultLayer(_) | Self::FilterGenes(_) => match node.input() {
-                    Some(input) => node = input,
-                    // Only a plan being dropped has no input; it is never reachable.
-                    None => unreachable!("plan node without input"),
-                },
+    /// The layer a step `method` reads: `layer`, checked (`KY-E109`), or the default
+    /// layer written in full (R6; `KY-E211` without one).
+    pub(crate) fn input_layer(
+        &self,
+        method: &str,
+        layer: Option<&str>,
+    ) -> Result<String, KytoError> {
+        match layer {
+            Some(layer) => Ok(self.layer_named(layer)?.name.clone()),
+            None => {
+                self.default_layer()
+                    .map(str::to_owned)
+                    .ok_or_else(|| KytoError::NoDefaultLayer {
+                        expression: format!("{method}(layer=None)"),
+                        layers: self
+                            .schema()
+                            .layers
+                            .iter()
+                            .map(|layer| layer.name.clone())
+                            .collect(),
+                    })
             }
         }
     }
 
-    /// Whether the two nodes are equal, ignoring their inputs.
-    fn same_node(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Scan(left), Self::Scan(right)) => left == right,
-            (Self::WithDefaultLayer(left), Self::WithDefaultLayer(right)) => {
-                left.layer() == right.layer()
-            }
-            (Self::FilterGenes(left), Self::FilterGenes(right)) => {
-                left.predicate() == right.predicate()
-            }
-            _ => false,
+    /// `KY-E215` for argument `parameter` of `method`.
+    pub(crate) fn invalid_argument(
+        method: &str,
+        parameter: &str,
+        value: &str,
+        problem: &str,
+        accepted: &str,
+    ) -> KytoError {
+        KytoError::InvalidArgument {
+            function: method.to_owned(),
+            parameter: parameter.to_owned(),
+            value: value.to_owned(),
+            problem: problem.to_owned(),
+            accepted: accepted.to_owned(),
         }
     }
 
-    /// One line describing this node alone.
-    fn describe(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Scan(scan) => {
-                let schema = scan.schema();
-                write!(
-                    formatter,
-                    "{} {:?} ({} cells x {} genes)",
-                    self.name(),
-                    scan.source(),
-                    schema.n_cells,
-                    schema.n_genes
-                )
-            }
-            Self::WithDefaultLayer(node) => {
-                write!(formatter, "{} {:?}", self.name(), node.layer())
-            }
-            Self::FilterGenes(node) => {
-                write!(formatter, "{} {}", self.name(), node.predicate())
-            }
+    /// `KY-E215` unless `value` is positive and finite.
+    pub(crate) fn check_positive(
+        method: &str,
+        parameter: &str,
+        value: f64,
+    ) -> Result<(), KytoError> {
+        if value.is_finite() && value > 0.0 {
+            return Ok(());
         }
+        Err(Self::invalid_argument(
+            method,
+            parameter,
+            &value.to_string(),
+            "it is not a positive finite number",
+            "a positive finite float",
+        ))
+    }
+
+    /// `KY-E215` if the name `value` of `parameter` is empty.
+    pub(crate) fn check_name(method: &str, parameter: &str, value: &str) -> Result<(), KytoError> {
+        if !value.is_empty() {
+            return Ok(());
+        }
+        Err(Self::invalid_argument(
+            method,
+            parameter,
+            "''",
+            "names are never empty",
+            "a non-empty name",
+        ))
     }
 }
 
@@ -267,13 +410,15 @@ impl PartialEq for Plan {
     }
 }
 
-/// One line per node, from this node down to the scan.
+/// One line per node, from this node down to the scan: its name and parameters.
 impl fmt::Display for Plan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (position, node) in self.nodes().enumerate() {
             if position > 0 {
                 formatter.write_str("\n")?;
             }
+            let node = node.node();
+            write!(formatter, "{} ", node.name())?;
             node.describe(formatter)?;
         }
         Ok(())
@@ -289,22 +434,12 @@ impl fmt::Debug for Plan {
 /// Drop the chain with a loop: a recursive drop of a long chain overflows the stack.
 impl Drop for Plan {
     fn drop(&mut self) {
-        let mut next = self.take_input();
+        let mut next = self.input_mut().take();
         while let Some(input) = next {
             // Shared inputs stay alive for their other owners; stop there. `into_inner`
             // (not `try_unwrap`) hands the node to exactly one of two threads dropping a
             // shared tail at once, so neither falls back to a recursive drop.
-            next = Arc::into_inner(input).and_then(|mut plan| plan.take_input());
-        }
-    }
-}
-
-impl Plan {
-    fn take_input(&mut self) -> Option<Arc<Self>> {
-        match self {
-            Self::Scan(_) => None,
-            Self::WithDefaultLayer(node) => node.input.take(),
-            Self::FilterGenes(node) => node.input.take(),
+            next = Arc::into_inner(input).and_then(|mut plan| plan.input_mut().take());
         }
     }
 }
@@ -322,30 +457,5 @@ impl<'a> Iterator for PlanNodes<'a> {
         let node = self.next?;
         self.next = node.input().map(|input| &**input);
         Some(node)
-    }
-}
-
-/// A node's input. Always set, except while the node is being dropped (see `Drop`).
-#[derive(Clone)]
-pub(crate) struct Input(Option<Arc<Plan>>);
-
-impl Input {
-    pub(crate) fn new(plan: Arc<Plan>) -> Self {
-        Self(Some(plan))
-    }
-
-    pub(crate) fn get(&self) -> Option<&Arc<Plan>> {
-        self.0.as_ref()
-    }
-
-    fn take(&mut self) -> Option<Arc<Plan>> {
-        self.0.take()
-    }
-}
-
-/// The input is shown by the plan's own `Debug`, one line per node; not here.
-impl fmt::Debug for Input {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Input(..)")
     }
 }

@@ -28,6 +28,7 @@ __all__ = [
     "MemoryLimitError",
     "MissingMemberError",
     "NotImplementedYetError",
+    "PlanError",
     "RemovedFeatureError",
     "ResolutionError",
     "StaleColumnError",
@@ -497,6 +498,26 @@ class InputFileError(KytoError, ValueError):
     """
 
 
+class PlanError(KytoError, ValueError):
+    """A plan method is given an argument outside what it accepts, or cannot extend this plan.
+
+    Subclasses `KytoError` and `ValueError`. Raised with these codes:
+
+    - ``KY-E215``: A plan method is given an argument value outside what it accepts.
+    - ``KY-E216``: A plan that ends in a sink is extended with another step.
+
+    See `KytoError` for the parameters and attributes.
+
+    Examples
+    --------
+    >>> error = PlanError("KY-E215", function="pca", parameter="n_components", value="0", problem="a PCA needs at least one component", accepted="an int from 1 to 2000")
+    >>> error.code
+    'KY-E215'
+    >>> isinstance(error, ValueError)
+    True
+    """
+
+
 class NotImplementedYetError(KytoError, NotImplementedError):
     """A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it.
 
@@ -935,6 +956,29 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("parameter", "str"),
             _Field("value", "str"),
             _Field("accepted", "list[str]"),
+        ),
+    ),
+    "KY-E215": _Entry(
+        class_name="PlanError",
+        message="{function}(..., {parameter}={value}) is invalid: {problem}",
+        hint="pass {accepted} as {parameter}",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e215",
+        fields=(
+            _Field("function", "str"),
+            _Field("parameter", "str"),
+            _Field("value", "str"),
+            _Field("problem", "str"),
+            _Field("accepted", "str"),
+        ),
+    ),
+    "KY-E216": _Entry(
+        class_name="PlanError",
+        message="'{method}' cannot follow '{sink}': a plan ends at its sink",
+        hint="add '{method}' before '{sink}', or build a new plan from the store that '{sink}' writes",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e216",
+        fields=(
+            _Field("method", "str"),
+            _Field("sink", "str"),
         ),
     ),
     "KY-E301": _Entry(

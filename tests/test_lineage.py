@@ -142,3 +142,20 @@ def test_docstring_examples_run() -> None:
     runner.run(parser.get_doctest(docstring, globs, "CellExpr.recompute", None, 0))
     assert runner.failures == 0
     assert runner.tries == 1
+
+
+def test_handles_after_filter_genes_report_unknown_sizes(store: Path) -> None:
+    """Task 4.1: a gene filter makes the gene count and every nnz unknown until the
+    plan runs; the cell count stays exact and the names list the genes that may remain.
+    """
+    atlas = _kyto.scan(store)
+    filtered = atlas.filter_genes(gene_column("highly_variable"))
+    layer = "counts"
+    estimate = filtered.layer(layer).estimate()
+    assert estimate["n_rows"] == 3
+    assert estimate["n_columns"] is None
+    assert estimate["nnz"] is None
+    assert estimate["dense_bytes"] is None
+    assert filtered.layer(layer).names() == atlas.layer(layer).names()
+    assert filtered.genes.estimate()["n_rows"] is None
+    assert filtered.cells.estimate()["n_rows"] == 3

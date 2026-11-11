@@ -89,6 +89,10 @@ doc = "An expression is given an operand, or used in a context, that it does not
 base = "ValueError"
 doc = "An input file given to convert has a format, encoding or value kyto cannot import."
 
+[classes.PlanError]
+base = "ValueError"
+doc = "A plan method is given an argument outside what it accepts, or cannot extend this plan."
+
 [classes.NotImplementedYetError]
 base = "NotImplementedError"
 doc = "A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it."
@@ -591,6 +595,33 @@ fields = [
     { name = "parameter", type = "str", doc = "The argument name.", example = "by" },
     { name = "value", type = "str", doc = "The value given, as code.", example = "'name'" },
     { name = "accepted", type = "list[str]", doc = "The values it accepts.", example = ["id", "symbol"] },
+]
+
+[[errors]]
+code = "KY-E215"
+variant = "InvalidArgument"
+class = "PlanError"
+summary = "A plan method is given an argument value outside what it accepts."
+message = "{function}(..., {parameter}={value}) is invalid: {problem}"
+hint = "pass {accepted} as {parameter}"
+fields = [
+    { name = "function", type = "str", doc = "The plan method called.", example = "pca" },
+    { name = "parameter", type = "str", doc = "The argument name.", example = "n_components" },
+    { name = "value", type = "str", doc = "The value given, as code.", example = "0" },
+    { name = "problem", type = "str", doc = "What is wrong with it.", example = "a PCA needs at least one component" },
+    { name = "accepted", type = "str", doc = "What the argument accepts.", example = "an int from 1 to 2000" },
+]
+
+[[errors]]
+code = "KY-E216"
+variant = "PlanEnded"
+class = "PlanError"
+summary = "A plan that ends in a sink is extended with another step."
+message = "'{method}' cannot follow '{sink}': a plan ends at its sink"
+hint = "add '{method}' before '{sink}', or build a new plan from the store that '{sink}' writes"
+fields = [
+    { name = "method", type = "str", doc = "The plan method called.", example = "log1p" },
+    { name = "sink", type = "str", doc = "The sink that ends the plan.", example = "sink_zarr" },
 ]
 
 [[errors]]

@@ -179,8 +179,11 @@ fn filter_genes_resolves_its_predicate_and_needs_a_boolean() {
         )
         .unwrap();
     assert_ne!(*filtered, *other);
-    // The schema is shared, not changed; no gene is known to be removed.
-    assert!(Arc::ptr_eq(filtered.schema(), scan.schema()));
+    // Members and columns are kept, the gene count becomes a bound (task 4.1); no
+    // gene is known to be removed.
+    assert_eq!(filtered.schema().genes, scan.schema().genes);
+    assert_eq!(filtered.schema().n_genes, scan.schema().n_genes);
+    assert_eq!(filtered.output_schema().n_genes(), None);
     assert!(filtered.removed_genes().is_empty());
     assert_eq!(filtered.root().source(), "pbmc.kyto");
 

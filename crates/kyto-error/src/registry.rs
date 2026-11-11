@@ -383,6 +383,28 @@ pub enum KytoError {
         /// The values it accepts.
         accepted: Vec<String>,
     },
+    /// KY-E215: A plan method is given an argument value outside what it accepts.
+    #[error("KY-E215: {function}(..., {parameter}={value}) is invalid: {problem}")]
+    InvalidArgument {
+        /// The plan method called.
+        function: String,
+        /// The argument name.
+        parameter: String,
+        /// The value given, as code.
+        value: String,
+        /// What is wrong with it.
+        problem: String,
+        /// What the argument accepts.
+        accepted: String,
+    },
+    /// KY-E216: A plan that ends in a sink is extended with another step.
+    #[error("KY-E216: '{method}' cannot follow '{sink}': a plan ends at its sink")]
+    PlanEnded {
+        /// The plan method called.
+        method: String,
+        /// The sink that ends the plan.
+        sink: String,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -429,7 +451,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 44] = [
+    pub const CODES: [&'static str; 46] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -469,6 +491,8 @@ impl KytoError {
         "KY-E212",
         "KY-E213",
         "KY-E214",
+        "KY-E215",
+        "KY-E216",
         "KY-E301",
         "KY-E302",
         "KY-E401",
@@ -518,6 +542,8 @@ impl KytoError {
             Self::NullComparison { .. } => "KY-E212",
             Self::RecomputeOperand { .. } => "KY-E213",
             Self::InvalidChoice { .. } => "KY-E214",
+            Self::InvalidArgument { .. } => "KY-E215",
+            Self::PlanEnded { .. } => "KY-E216",
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
             Self::MemoryLimit { .. } => "KY-E401",
@@ -568,6 +594,8 @@ impl KytoError {
             Self::NullComparison { .. } => "ExpressionError",
             Self::RecomputeOperand { .. } => "ExpressionError",
             Self::InvalidChoice { .. } => "ResolutionError",
+            Self::InvalidArgument { .. } => "PlanError",
+            Self::PlanEnded { .. } => "PlanError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
@@ -695,6 +723,12 @@ impl KytoError {
             }
             Self::InvalidChoice { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e214"
+            }
+            Self::InvalidArgument { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e215"
+            }
+            Self::PlanEnded { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e216"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -833,6 +867,12 @@ impl KytoError {
             }
             Self::InvalidChoice { parameter, accepted, .. } => {
                 format!("{parameter} takes one of {}", quoted_list(accepted))
+            }
+            Self::InvalidArgument { parameter, accepted, .. } => {
+                format!("pass {accepted} as {parameter}")
+            }
+            Self::PlanEnded { method, sink } => {
+                format!("add '{method}' before '{sink}', or build a new plan from the store that '{sink}' writes")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -1042,6 +1082,17 @@ impl KytoError {
                 ("parameter", FieldValue::Str(parameter.clone())),
                 ("value", FieldValue::Str(value.clone())),
                 ("accepted", FieldValue::StrList(accepted.clone())),
+            ],
+            Self::InvalidArgument { function, parameter, value, problem, accepted } => vec![
+                ("function", FieldValue::Str(function.clone())),
+                ("parameter", FieldValue::Str(parameter.clone())),
+                ("value", FieldValue::Str(value.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("accepted", FieldValue::Str(accepted.clone())),
+            ],
+            Self::PlanEnded { method, sink } => vec![
+                ("method", FieldValue::Str(method.clone())),
+                ("sink", FieldValue::Str(sink.clone())),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1258,6 +1309,17 @@ impl KytoError {
                 parameter: "by".to_owned(),
                 value: "'name'".to_owned(),
                 accepted: vec!["id".to_owned(), "symbol".to_owned()],
+            },
+            Self::InvalidArgument {
+                function: "pca".to_owned(),
+                parameter: "n_components".to_owned(),
+                value: "0".to_owned(),
+                problem: "a PCA needs at least one component".to_owned(),
+                accepted: "an int from 1 to 2000".to_owned(),
+            },
+            Self::PlanEnded {
+                method: "log1p".to_owned(),
+                sink: "sink_zarr".to_owned(),
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

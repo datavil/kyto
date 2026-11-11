@@ -21,14 +21,16 @@ use kyto_core::{
 use kyto_error::KytoError;
 
 use crate::plan::Plan;
+use crate::plan_schema::SparseMember;
 
 /// The column names of a graph's edge list (`Graph.names()`, `to_edges`).
 pub const EDGE_COLUMNS: [&str; 3] = ["source", "target", "weight"];
 
 /// What a handle's data looks like, from metadata alone (task 3.6).
 ///
-/// `None` means the value is not known without running the plan (for example the
-/// number of cells after a filter, task 4.x) or has no meaning for the handle. The
+/// `None` means the value is not known without running the plan (the number of cells
+/// after a cell filter, any `nnz` after a filter or selection, task 4.1) or has no
+/// meaning for the handle. The
 /// cost estimate (bytes read, peak memory, passes, device) is task 4.6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Estimate {
@@ -59,21 +61,20 @@ fn float_bytes(dtype: FloatDtype) -> u64 {
     }
 }
 
-/// The length of `axis` in `plan`.
-fn axis_length(plan: &Plan, axis: Axis) -> u64 {
-    match axis {
-        Axis::Cells => plan.schema().n_cells,
-        Axis::Genes => plan.schema().n_genes,
-    }
+/// The length of `axis` in `plan`, if known without running it (task 4.1: `None`
+/// after a filter on that axis).
+fn axis_length(plan: &Plan, axis: Axis) -> Option<u64> {
+    plan.output_schema().axis_len(axis)
+}
+
+/// Bytes of a dense `rows x columns` array, when both are known.
+fn known_dense_bytes(rows: Option<u64>, columns: Option<u64>, item_bytes: u64) -> Option<u128> {
+    Some(dense_bytes(rows?, columns?, item_bytes))
 }
 
 /// `KY-E109` for a member of kind `kind` named `name` that `plan` does not have.
 fn missing(plan: &Plan, kind: &str, name: &str) -> KytoError {
-    KytoError::MissingMember {
-        kind: kind.to_owned(),
-        name: name.to_owned(),
-        store: plan.root().source().to_owned(),
-    }
+    plan.missing_member(kind, name)
 }
 
 /// The cell or the gene table of a plan.
@@ -123,7 +124,7 @@ impl Table {
     /// and `Enum` column sizes are not in the schema.
     pub fn estimate(&self) -> Estimate {
         Estimate {
-            n_rows: Some(axis_length(&self.plan, self.axis)),
+            n_rows: axis_length(&self.plan, self.axis),
             n_columns: Some(self.schema().columns.len() as u64),
             nnz: None,
             dense_bytes: None,
@@ -167,22 +168,25 @@ impl Matrix {
         &self.layer
     }
 
-    /// The column names: the gene IDs, in gene table order.
+    /// The column names: the gene IDs, in order ([`Plan::genes`]: the store's, or a
+    /// `select_genes` selection's). After a filter on gene data, the genes that may
+    /// remain.
     pub fn names(&self) -> &[String] {
-        self.plan.root().gene_ids().ordered()
+        self.plan.genes()
     }
 
-    /// `n_cells x n_genes`, the stored entries, and the bytes of the dense array.
+    /// `n_cells x n_genes`, the stored entries, and the bytes of the dense array, each
+    /// `None` when a filter makes it unknown until the plan runs.
     pub fn estimate(&self) -> Estimate {
-        let schema = self.plan.schema();
+        let schema = self.plan.output_schema();
         let item_bytes = match self.layer.dtype {
             LayerDtype::Float32 | LayerDtype::Uint32 => 4,
         };
         Estimate {
-            n_rows: Some(schema.n_cells),
-            n_columns: Some(schema.n_genes),
-            nnz: Some(self.layer.nnz),
-            dense_bytes: Some(dense_bytes(schema.n_cells, schema.n_genes, item_bytes)),
+            n_rows: schema.n_cells(),
+            n_columns: schema.n_genes(),
+            nnz: schema.nnz(&SparseMember::Layer(self.layer.name.clone())),
+            dense_bytes: known_dense_bytes(schema.n_cells(), schema.n_genes(), item_bytes),
         }
     }
 }
@@ -236,10 +240,10 @@ impl Embedding {
         let rows = axis_length(&self.plan, self.embedding.axis);
         let width = self.embedding.width;
         Estimate {
-            n_rows: Some(rows),
+            n_rows: rows,
             n_columns: Some(width),
             nnz: None,
-            dense_bytes: Some(dense_bytes(rows, width, float_bytes(self.embedding.dtype))),
+            dense_bytes: known_dense_bytes(rows, Some(width), float_bytes(self.embedding.dtype)),
         }
     }
 }
@@ -289,10 +293,13 @@ impl Graph {
     pub fn estimate(&self) -> Estimate {
         let n = axis_length(&self.plan, self.graph.axis);
         Estimate {
-            n_rows: Some(n),
-            n_columns: Some(n),
-            nnz: Some(self.graph.nnz),
-            dense_bytes: Some(dense_bytes(n, n, float_bytes(self.graph.dtype))),
+            n_rows: n,
+            n_columns: n,
+            nnz: self
+                .plan
+                .output_schema()
+                .nnz(&SparseMember::Graph(self.graph.name.clone())),
+            dense_bytes: known_dense_bytes(n, n, float_bytes(self.graph.dtype)),
         }
     }
 }
@@ -348,7 +355,7 @@ impl Modality {
     /// One row per cell, one column per feature.
     pub fn estimate(&self) -> Estimate {
         Estimate {
-            n_rows: Some(self.plan.schema().n_cells),
+            n_rows: self.plan.output_schema().n_cells(),
             n_columns: Some(self.modality.n_features),
             nnz: None,
             dense_bytes: None,
