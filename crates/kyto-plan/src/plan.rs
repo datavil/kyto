@@ -5,9 +5,10 @@
 //! copied or changed: R2), walk a plan from a node to its scan, and answer what a
 //! node's output schema, default layer and removed genes are from the state cached
 //! when it was built (so these answers do not walk the chain).
-//! Does not: serialize (`plan_json.rs`, 4.3), optimize (4.4) or execute plans. Build-time validation
-//! (4.2) happens in each step's builder as the plan grows: names resolved, kinds
-//! checked, arguments and new names checked (`names.rs`), so a built plan is valid.
+//! Does not: serialize (`plan_json.rs`, 4.3), optimize (`optimize.rs`, 4.4) or execute
+//! plans. Build-time validation (4.2) happens in each step's builder as the plan grows:
+//! names resolved, kinds checked, arguments and new names checked (`names.rs`), so a
+//! built plan is valid.
 //!
 //! The shape follows Polars' `DslPlan`: one enum variant per node, each node owning its
 //! input as `Arc<Plan>`, so building `b` from `a` costs one allocation and leaves `a`
@@ -18,8 +19,9 @@
 //!
 //! Adding a node: a file with its parameters, their [`LogicalNode`] and [`Transform`]
 //! impls and its builder (`impl Plan`), then one variant here and one arm in each of
-//! `parts`, `input_mut` and `same_node`, and its `Step` in `plan_json.rs` (written from
-//! the parameters, read back through the builder).
+//! `parts`, `input_mut` and `same_node`, its `Step` in `plan_json.rs` (written from
+//! the parameters, read back through the builder), and what it reads and writes in
+//! `members.rs` (the optimizer's rules move and leave out nodes by it, 4.4).
 
 use std::fmt;
 use std::sync::Arc;
@@ -125,7 +127,7 @@ impl Plan {
     }
 
     /// Whether the two nodes have equal parameters, ignoring their inputs.
-    fn same_node(&self, other: &Self) -> bool {
+    pub(crate) fn same_node(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Scan(left), Self::Scan(right)) => left.params() == right.params(),
             (Self::WithDefaultLayer(left), Self::WithDefaultLayer(right)) => {

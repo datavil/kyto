@@ -13,7 +13,10 @@
 //! output [`PlanSchema`] from its input's ([`Transform`]). `Plan::resolve` resolves an
 //! expression's names against the plan (task 3.5, R6). The read-only handles [`Table`],
 //! [`Matrix`], [`Embedding`], [`Graph`] and [`Modality`] (task 3.6). The plan JSON
-//! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`].
+//! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`]. The optimizer (task 4.4):
+//! [`optimize`] (and [`Plan::optimize`]) turns the plans of one or more [`Output`]s into
+//! an [`OptimizedPlan`] by common sub-plan reuse, projection pushdown, elementwise
+//! fusion and predicate pushdown, each its own `optimize_*.rs` file.
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -21,9 +24,16 @@ mod cross_cell;
 mod filter;
 mod handles;
 mod map_elementwise;
+mod members;
 mod names;
 mod neighbors;
 mod node;
+mod optimize;
+mod optimize_fusion;
+mod optimize_predicate;
+mod optimize_projection;
+mod optimize_reuse;
+mod optimized_plan;
 mod plan;
 mod plan_json;
 mod plan_schema;
@@ -39,8 +49,11 @@ pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_na
 pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};
+pub use members::{Member, Members, all_members};
 pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
+pub use optimize::{OptimizeOptions, Output, optimize};
+pub use optimized_plan::{Operation, OptimizedNode, OptimizedOutput, OptimizedPlan};
 pub use plan::{Plan, PlanNodes};
 pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};
 pub use plan_schema::{PlanSchema, SparseMember};
