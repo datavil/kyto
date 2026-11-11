@@ -4,8 +4,9 @@
 //! blocks), one `uint32` layer of 2 000 000 entries. Checks the scan's bytes and memory
 //! by hand, the passes over the store (statistics passes re-stream from the scan, a
 //! shared sub-plan once, a final pass only for what is read from the stream), what
-//! nodes keep in memory, blocks in flight, saturation and the text form. The fixture
-//! check against measured memory is `estimate_fixtures.rs`.
+//! nodes keep in memory, blocks in flight and blocks split to fewer cells (task 5.5), the
+//! executor's held block and pool (5.5), saturation and the text form. The fixture
+//! check against measured memory is `crates/kyto-exec/tests/estimate_fixtures.rs`.
 #![allow(clippy::unwrap_used)]
 
 use std::num::NonZeroU64;
@@ -67,6 +68,10 @@ const PASS_BYTES: u64 = 2_000_000 * 8 + 6 * 4_097 * 4 + 7 * 8;
 /// (tiles + `2 x 2 x 65 536 x 4`).
 const SCAN_BLOCK: u64 = (2 * 4_097 * 4 + 819_200 * 8) + 4_096 * 4 + 4_097 * 8 + 1_048_576 * 10;
 
+/// A joined block of `counts` (or one mapped from it) as the consumer holds it and the
+/// pool keeps it: `indices` and values at the capacity pushing reaches, and `indptr`.
+const HELD_BLOCK: u64 = 1_048_576 * 8 + 4_097 * 8;
+
 #[test]
 fn a_scan_read_whole() {
     let estimate = estimate_all(&scan());
@@ -96,11 +101,45 @@ fn blocks_in_flight_scale_the_blocks_up_to_the_cell_blocks() {
         };
         plan.physical(options).estimate()
     };
-    assert_eq!(with(1).block_memory(), SCAN_BLOCK);
+    // One block in flight over 3: while the last is read, the consumer holds the one
+    // before and the pool keeps the first.
+    assert_eq!(with(1).block_memory(), SCAN_BLOCK + 2 * HELD_BLOCK);
     assert_eq!(with(3).block_memory(), 3 * SCAN_BLOCK);
     // Only 3 cell blocks exist.
     assert_eq!(with(8).block_memory(), 3 * SCAN_BLOCK);
     assert_eq!(with(8).bytes_read(), PASS_BYTES);
+}
+
+#[test]
+fn split_blocks_hold_fewer_cells() {
+    let plan = scan();
+    let with = |cells: u64| {
+        let options = PhysicalOptions {
+            blocks_in_flight: NonZeroU64::new(1).unwrap(),
+            max_block_cells: NonZeroU64::new(cells),
+            ..PhysicalOptions::default()
+        };
+        plan.physical(options).estimate()
+    };
+    // More than C cells is C.
+    assert_eq!(with(10_000), with(4_096));
+    // 1 024 cells: 204 800 entries a block (2 000 000 x 1 024 / 10 000), its 2 tiles
+    // with their whole `indptr`, joined into 262 144 entries (more than reading them,
+    // decoding a 65 536-entry chunk of `indices` and `data` per tile).
+    let tiles = 2 * 4_097 * 4 + 204_800 * 8;
+    let joining = tiles + 1_024 * 4 + 1_025 * 8 + 262_144 * 10;
+    let reading = tiles + 2 * 2 * 65_536 * 4;
+    assert!(joining > reading);
+    let held = 262_144 * 8 + 1_025 * 8;
+    let small = with(1_024);
+    // 12 blocks (3 cell blocks of 4 parts): the consumer's block and the pool's one.
+    assert_eq!(small.block_memory(), joining + 2 * held);
+    // Each block reads its tiles' whole `indptr`: 4 x the indptr bytes of whole blocks.
+    assert_eq!(
+        small.bytes_read(),
+        2_000_000 * 8 + 4 * 6 * 4_097 * 4 + 7 * 8
+    );
+    assert_eq!(small.resident_memory(), with(4_096).resident_memory());
 }
 
 #[test]
@@ -188,14 +227,24 @@ fn a_column_computed_in_the_stream_needs_a_final_pass() {
 #[test]
 fn nodes_writing_layers_hold_an_output_block() {
     let base = estimate_all(&scan()).block_memory();
+    assert_eq!(base, 2 * SCAN_BLOCK);
     let log1p = estimate_all(&scan().log1p(Some("counts"), "log1p").unwrap()).block_memory();
-    // `float32` values and `u32` indices of a mean block, and its `indptr`, x 2 in flight.
-    assert_eq!(log1p - base, 2 * (819_200 * 8 + 4_097 * 8));
-    // Centred `scale` is dense: every gene of every row.
+    // The output block (`float32` values and `u32` indices of a mean block and its
+    // `indptr`) is held with the joined block, less than reading it; but while the last
+    // block is read the consumer holds a block of both layers and the pool keeps the
+    // buffers of the two layers of the block before.
+    const { assert!(HELD_BLOCK + 819_200 * 8 + 4_097 * 8 < SCAN_BLOCK) };
+    assert_eq!(log1p, SCAN_BLOCK + 4 * HELD_BLOCK);
+    // Centred `scale` is dense: every gene of every row, with the joined block.
     let scaled = estimate_all(&scan().scale(Some("counts"), "scaled", true, None).unwrap());
+    let dense = 4_096 * N_GENES * 8 + 4_097 * 8;
+    assert!(HELD_BLOCK + dense > SCAN_BLOCK);
+    // While the last block is computed: one block's work, the consumer's block of both
+    // layers (the dense one at its capacity, 2^23 entries, is `dense`) and the pool's
+    // 2 dense buffers.
     assert_eq!(
-        scaled.block_memory() - base,
-        2 * (4_096 * N_GENES * 8 + 4_097 * 8)
+        scaled.block_memory(),
+        (HELD_BLOCK + dense) + (HELD_BLOCK + dense) + 2 * dense
     );
     // Its statistics: a mean and a variance per gene.
     assert_eq!(scaled.resident_memory() - 56, N_GENES * 16);
@@ -254,8 +303,10 @@ fn sinks_hold_their_buffers() {
             path: "out.h5ad".to_owned(),
         })
         .unwrap();
-    // Positions widened to 8 bytes, per block in flight.
-    assert_eq!(estimate_all(&h5ad).block_memory() - base, 2 * 819_200 * 8);
+    // Positions widened to 8 bytes, per block in flight, held with the joined block:
+    // less than reading it.
+    const { assert!(HELD_BLOCK + 819_200 * 8 < SCAN_BLOCK) };
+    assert_eq!(estimate_all(&h5ad).block_memory(), base);
 }
 
 #[test]

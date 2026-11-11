@@ -22,7 +22,9 @@
 //! [`CostEstimate`] ([`PhysicalPlan::estimate`], [`Plan::estimate`]) gives the passes
 //! over the store, bytes read, peak memory and device without reading anything.
 //! Explain (task 4.7): [`Explain`] ([`Plan::explanation`], [`Plan::explain`], [`Plan::explain_json`]) shows
-//! the logical and optimized trees with resolved names, as text or JSON.
+//! the logical and optimized trees with resolved names, as text or JSON. The memory
+//! limit (task 5.5): [`MemoryLimit`] and [`PhysicalPlan::within_memory_limit`] shrink
+//! the streamed blocks until the estimate fits, or give `KY-E401`.
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -33,6 +35,7 @@ mod filter;
 mod handles;
 mod map_elementwise;
 mod members;
+mod memory_limit;
 mod names;
 mod neighbors;
 mod node;
@@ -61,6 +64,7 @@ pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};
 pub use members::{Member, Members, all_members};
+pub use memory_limit::MemoryLimit;
 pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
 pub use optimize::{OptimizeOptions, Output, optimize};

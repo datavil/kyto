@@ -17,7 +17,7 @@
 mod backends;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -174,7 +174,8 @@ fn join(blocks: &[SelectedBlock], n_genes: u64) -> (Vec<u64>, Vec<u64>, Vec<u32>
         block,
     } in blocks
     {
-        assert!(last_block < Some(*cell_block), "blocks out of cell order");
+        // Blocks split from one cell block (task 5.5) share its number.
+        assert!(last_block <= Some(*cell_block), "blocks out of cell order");
         last_block = Some(*cell_block);
         assert_eq!(block.n_genes(), n_genes);
         assert_eq!(block.n_rows(), block_cells.len());
@@ -675,6 +676,25 @@ fn corrupt_tile_is_reported_and_ends_the_stream() {
             error.to_string().contains("tile (1, 0)"),
             "{backend:?}: {error}"
         );
+        // Blocks of one row (task 5.5) still check the whole tile's indptr.
+        let rows = TILING.cell_block_size as usize;
+        let stream: Vec<_> = reader
+            .cell_blocks_of_rows(
+                &AxisSelection::All,
+                &AxisSelection::Indices(vec![0]),
+                NonZeroU64::MIN,
+                NonZeroUsize::new(3).unwrap(),
+            )
+            .unwrap()
+            .collect();
+        assert_eq!(
+            stream.len(),
+            rows + 1,
+            "{backend:?}: one row per block until the error"
+        );
+        let error = stream[rows].as_ref().unwrap_err();
+        assert_eq!(error.code(), "KY-E107");
+        assert!(error.to_string().contains("tile (1, 0)"), "{error}");
     }
 }
 
@@ -730,6 +750,7 @@ proptest! {
         gene_mask in proptest::collection::vec(any::<bool>(), 1..9),
         as_range in any::<bool>(),
         in_flight in 1_usize..5,
+        max_rows in 1_u64..9,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let tiling = Tiling { cell_block_size, gene_block_size };
@@ -748,8 +769,23 @@ proptest! {
         let expected = reference(&whole, &cell_list, &genes);
         for backend in backends() {
             let reader = open(storage(backend, dir.path()), n_cells, n_genes, tiling);
-            let blocks = collect(&reader, &cell_selection, &AxisSelection::Indices(genes.clone()), in_flight);
+            let gene_selection = AxisSelection::Indices(genes.clone());
+            let blocks = collect(&reader, &cell_selection, &gene_selection, in_flight);
             prop_assert_eq!(join(&blocks, genes.len() as u64), expected.clone(), "{:?}", backend);
+            // Blocks of at most max_rows rows (task 5.5) give the same rows, in order.
+            let split = reader
+                .cell_blocks_of_rows(
+                    &cell_selection,
+                    &gene_selection,
+                    NonZeroU64::new(max_rows).unwrap(),
+                    NonZeroUsize::new(in_flight).unwrap(),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            prop_assert!(split.iter().all(|block| block.cells.len() as u64 <= max_rows));
+            prop_assert!(split.len() >= blocks.len());
+            prop_assert_eq!(join(&split, genes.len() as u64), expected.clone(), "{:?}", backend);
         }
     }
 }

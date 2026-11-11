@@ -5,7 +5,8 @@
 `reset_peak_usage()`, run, then `peak_usage() - before`. Its realloc allocates, copies
 and frees, so a growing `Vec` counts old plus new while it moves; that is real memory
 and the estimate models it. One `#[global_allocator]` per test binary: keep such tests
-in their own file (`crates/kyto-plan/tests/estimate_fixtures.rs`).
+in their own file (`crates/kyto-exec/tests/estimate_fixtures.rs`, moved there by 5.5 to
+measure the executor).
 
 **What the reader (`LayerReader`, task 2.4) really holds** (pbmc3k, one cell block:
 60.8 MB measured for 18.3 MB of entries):
@@ -23,3 +24,9 @@ count; `estimate()` assumes every tile of a block at once (an upper bound, far t
 for tiny gene blocks on few threads). Pre-sizing the joined arrays from the tiles' nnz
 (5.1's pooled buffers) would remove the doubling; then `estimate.rs` must change too,
 and `estimate_fixtures.rs` will say so.
+
+**The executor (task 5.5):** reading a window and mapping it do not overlap (count
+the larger, not the sum); a stream longer than its window adds the consumer's held
+block and the pool's recycled buffers, which only exist after the first window. The
+pool keeps the reader's buffers although the reader never takes from it (until the
+reader pre-sizes from the pool).

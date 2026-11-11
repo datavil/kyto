@@ -10,7 +10,9 @@
 //! (runtime dispatch through `pulp`, the same bits on every instruction set).
 //! Cross-cell nodes (task 5.4) run their statistics passes before the output's stream
 //! (exactly the passes the physical plan gives them) and hand their results over as
-//! [`Statistics`].
+//! [`Statistics`]. A memory limit (task 5.5, [`fit_memory_limit`]) bounds the
+//! process's resident memory: the plan's blocks shrink until its estimate, with the
+//! allocator's overhead, fits beside what the process already holds, or `KY-E401`.
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -20,6 +22,7 @@ mod cell_block_pool;
 mod cross_cell;
 mod elementwise;
 mod kernels;
+mod memory_limit;
 mod pipeline;
 mod pipeline_block;
 mod statistics;
@@ -27,6 +30,9 @@ mod statistics;
 pub use block_stream::BlockStream;
 pub use cell_block_pool::CellBlockPool;
 pub use kernels::{KernelValue, Kernels, SUM_LANES, combine_lanes, log1p};
+pub use memory_limit::{
+    ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
+};
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
 pub use statistics::{

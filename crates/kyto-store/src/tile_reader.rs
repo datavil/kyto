@@ -6,11 +6,15 @@
 //! gene blocks (projection and predicate), check each tile, filter unselected rows and
 //! genes in memory, and yield one [`SelectedBlock`] per selected cell block, in cell
 //! order, whatever the thread count (R11).
-//! Does not: resolve names, evaluate predicates, plan or shrink blocks to a memory limit
-//! (tasks 3.x, 4.x, 5.5); it takes plain, canonical position selections. Never writes.
+//! [`LayerReader::cell_blocks_of_rows`] splits each cell block into blocks of at most a
+//! given number of selected rows, reading only those rows' entries of each tile (task
+//! 5.5's smaller blocks).
+//! Does not: resolve names, evaluate predicates, plan or choose a block size for a
+//! memory limit (tasks 3.x, 4.x, 5.5); it takes plain, canonical position selections.
+//! Never writes.
 
 use std::collections::VecDeque;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 
 use kyto_error::KytoError;
@@ -25,7 +29,7 @@ use crate::layer_open::{OpenedLayer, ValueDtype, open_layer};
 use crate::selection::{AxisSelection, BlockPick, block_picks};
 use crate::store_version::check_format_version;
 use crate::table_axis::TableAxis;
-use crate::tile_decode::check_tile;
+use crate::tile_decode::{check_tile_indptr, check_tile_rows};
 use crate::tiling::TileGrid;
 use crate::value::LayerValue;
 use crate::zarr_arrays::store_io;
@@ -40,7 +44,8 @@ pub struct LayerReader<S: ?Sized> {
     layer: OpenedLayer<S>,
 }
 
-/// One cell block's selected rows, as yielded by [`LayerReader::cell_blocks`].
+/// One cell block's selected rows (or, from [`LayerReader::cell_blocks_of_rows`], a
+/// run of them), as yielded by [`LayerReader::cell_blocks`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedBlock {
     /// The cell block `b` the rows come from (format.md §4.1).
@@ -51,9 +56,11 @@ pub struct SelectedBlock {
     pub block: CellBlock,
 }
 
-/// One read tile: its `indptr` row and its entries (format.md §4.3).
+/// One read tile: its `indptr` row and the entries of the rows read (format.md §4.3).
 struct Tile<T> {
     indptr: Vec<u32>,
+    /// `indptr` of the first row read: `indices[0]` is the tile's entry `first_entry`.
+    first_entry: u32,
     indices: Vec<u32>,
     data: Vec<T>,
 }
@@ -118,13 +125,43 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         genes: &AxisSelection,
         blocks_in_flight: NonZeroUsize,
     ) -> Result<CellBlocks<'_, S>, KytoError> {
+        // A cell block never holds more than C selected rows: nothing is split.
+        let max_rows = NonZeroU64::new(self.grid.cell_block_size()).unwrap_or(NonZeroU64::MIN);
+        self.cell_blocks_of_rows(cells, genes, max_rows, blocks_in_flight)
+    }
+
+    /// As [`LayerReader::cell_blocks`], but each cell block's selected rows come as
+    /// blocks of at most `max_rows` rows, in cell order (task 5.5: smaller blocks for a
+    /// memory limit); a block's [`SelectedBlock::cell_block`] is the cell block its
+    /// rows come from. A cell block with more selected rows than `max_rows` is split,
+    /// and each part reads, per tile, the tile's `indptr` (checked whole) and only the
+    /// entries of the local rows from its first to its last selected row (checked).
+    /// A cell block that is not split is read as by [`LayerReader::cell_blocks`]: its
+    /// whole tiles, every row checked.
+    ///
+    /// # Errors
+    /// As [`LayerReader::cell_blocks`].
+    pub fn cell_blocks_of_rows(
+        &self,
+        cells: &AxisSelection,
+        genes: &AxisSelection,
+        max_rows: NonZeroU64,
+        blocks_in_flight: NonZeroUsize,
+    ) -> Result<CellBlocks<'_, S>, KytoError> {
         let grid = &self.grid;
         let cell_picks = block_picks(
             cells,
             TableAxis::Cells,
             grid.n_cells(),
             grid.cell_block_size(),
-        )?;
+        )?
+        .iter()
+        .flat_map(|pick| {
+            let parts = pick.split(max_rows.get());
+            let split = parts.len() > 1;
+            parts.into_iter().map(move |part| (part, split))
+        })
+        .collect();
         let gene_picks = block_picks(
             genes,
             TableAxis::Genes,
@@ -146,17 +183,19 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
     /// Read the selected rows of one cell block over every selected gene block.
     fn read_block(
         &self,
-        cell_pick: &BlockPick,
+        (cell_pick, split): &(BlockPick, bool),
         gene_picks: &[BlockPick],
         n_genes: u64,
     ) -> Result<SelectedBlock, KytoError> {
         let block = match self.layer.dtype {
             ValueDtype::F32 => {
-                let (indptr, indices, data) = self.read_rows::<f32>(cell_pick, gene_picks)?;
+                let (indptr, indices, data) =
+                    self.read_rows::<f32>(cell_pick, *split, gene_picks)?;
                 CellBlock::new(indptr, indices, CellData::F32(data), n_genes)
             }
             ValueDtype::U32 => {
-                let (indptr, indices, data) = self.read_rows::<u32>(cell_pick, gene_picks)?;
+                let (indptr, indices, data) =
+                    self.read_rows::<u32>(cell_pick, *split, gene_picks)?;
                 CellBlock::new(indptr, indices, CellData::U32(data), n_genes)
             }
         };
@@ -178,13 +217,14 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
     fn read_rows<T: LayerValue>(
         &self,
         cell_pick: &BlockPick,
+        split: bool,
         gene_picks: &[BlockPick],
     ) -> Result<(AlignedBuffer<u64>, AlignedBuffer<u32>, AlignedBuffer<T>), KytoError> {
         // Collect every result in gene block order, then take the first error, so the
         // error reported does not depend on the thread count (R11).
         let tiles = gene_picks
             .par_iter()
-            .map(|gene_pick| self.read_tile::<T>(cell_pick.block, gene_pick.block))
+            .map(|gene_pick| self.read_tile::<T>(cell_pick, split, gene_pick.block))
             .collect::<Vec<_>>()
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
@@ -198,8 +238,9 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
             let row = row as usize;
             for (gene_pick, tile) in gene_picks.iter().zip(&tiles) {
                 let Some(tile) = tile else { continue };
-                let from = tile.indptr[row] as usize;
-                let to = tile.indptr[row + 1] as usize;
+                // Rows of this pick lie in the span read: indptr[row] >= first_entry.
+                let from = (tile.indptr[row] - tile.first_entry) as usize;
+                let to = (tile.indptr[row + 1] - tile.first_entry) as usize;
                 for (&local, &value) in tile.indices[from..to].iter().zip(&tile.data[from..to]) {
                     if let Some(position) = gene_pick.position(local) {
                         // position < selection length <= n_genes <= 2^32 - 1.
@@ -213,12 +254,16 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         Ok((indptr, indices, data))
     }
 
-    /// Read and check tile `(block, gene_block)` (format.md §4.7); `None` if empty.
+    /// Read and check tile `(block, gene_block)` (format.md §4.7), with `block` the
+    /// cell pick's: its `indptr` and its entries, only those of the local rows the pick
+    /// spans if it is `split` from its cell block; `None` if the tile is empty.
     fn read_tile<T: LayerValue>(
         &self,
-        block: u64,
+        cell_pick: &BlockPick,
+        split: bool,
         gene_block: u64,
     ) -> Result<Option<Tile<T>>, KytoError> {
+        let block = cell_pick.block;
         let grid = &self.grid;
         let layer = &self.layer;
         let tile = block * grid.n_gene_blocks() + gene_block;
@@ -248,21 +293,38 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
                 0..grid.indptr_len(),
             ],
         )?;
-        let entry_range = start..end;
-        let entries = std::slice::from_ref(&entry_range);
-        let indices: Vec<u32> = read_subset(&layer.indices, entries)?;
-        let data: Vec<T> = read_subset(&layer.data, entries)?;
-        check_tile(
+        let tile_id = (block, gene_block);
+        check_tile_indptr(&layer.name, tile_id, &indptr, rows as usize, end - start)?;
+        // The pick's local rows lie below rows(b) (block_picks' bound), so the checked
+        // indptr gives first_entry <= last_entry <= the tile's nnz.
+        let (first_row, last_row) = if split {
+            cell_pick.span()
+        } else {
+            (0, rows as u32)
+        };
+        let (first_row, last_row) = (first_row as usize, last_row as usize);
+        let first_entry = indptr[first_row];
+        let last_entry = indptr[last_row];
+        let (indices, data) = if first_entry == last_entry {
+            (Vec::new(), Vec::new())
+        } else {
+            let entry_range = start + u64::from(first_entry)..start + u64::from(last_entry);
+            let entries = std::slice::from_ref(&entry_range);
+            let indices: Vec<u32> = read_subset(&layer.indices, entries)?;
+            let data: Vec<T> = read_subset(&layer.data, entries)?;
+            (indices, data)
+        };
+        check_tile_rows(
             &layer.name,
-            (block, gene_block),
+            tile_id,
             &indptr,
-            rows as usize,
-            end - start,
+            first_row..last_row,
             width,
             &indices,
         )?;
         Ok(Some(Tile {
             indptr,
+            first_entry,
             indices,
             data,
         }))
@@ -284,7 +346,8 @@ where
 /// Each item is a `Result`; after the first error the stream ends.
 pub struct CellBlocks<'a, S: ?Sized> {
     reader: &'a LayerReader<S>,
-    cell_picks: Vec<BlockPick>,
+    /// Each cell pick, and whether it is a part split from its cell block.
+    cell_picks: Vec<(BlockPick, bool)>,
     gene_picks: Vec<BlockPick>,
     n_genes: u64,
     next: usize,

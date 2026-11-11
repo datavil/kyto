@@ -28,3 +28,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Executor threads](executor_threads.md): one rayon pool per run via `install` (reader, zarrs and operators share it), rendezvous channel, drop unread layers, thread scaling only in release as an ignored test.
 - [SIMD kernels with the same bits everywhere](simd_kernels_same_bits.md): plain Rust inside pulp dispatch, fixed `f64` lanes and tree, own `log1p`; pulp `Scalar` is NEON on aarch64; `any::<f32>()` has no NaN.
 - [Counting passes over the store](counting_store_passes.md): record tile reads as (key, range) counts and compare with one scan pass times P; an output reading no layer maps nothing.
+- [Peak RSS is not the heap](rss_vs_heap.md): RSS = baseline + heap + 30-95% allocator overhead; memory_limit bounds RSS via (limit - RSS) / 1.5 (user, 5.5); measure in a child process.

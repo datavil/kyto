@@ -18,9 +18,9 @@
 //!
 //! A pass counts one read of the node's input stream for one read of its output: a
 //! node's work in its apply pass shares that pass with the per-cell nodes around it.
-//! Blocks hold the store's cell block size (`C`, `schema.json` `tiling`) rows and
-//! every gene read.
-//! Does not: execute (5.x), shrink blocks under a memory limit (5.5), count the
+//! Blocks hold the store's cell block size (`C`, `schema.json` `tiling`) rows, or
+//! fewer with [`PhysicalOptions::max_block_cells`] (task 5.5), and every gene read.
+//! Does not: execute (5.x), choose blocks for a memory limit (`memory_limit.rs`), count the
 //! passes over the store for the whole plan or estimate bytes and memory (4.6,
 //! `estimate.rs`), pick
 //! among several devices (9.1: [`Device`] has only the CPU), or print the logical
@@ -79,6 +79,10 @@ pub struct PhysicalOptions {
     /// Cell blocks a stream reads and holds at once (memory grows with it; task 4.6's
     /// estimate counts it, 5.2's executor uses it).
     pub blocks_in_flight: NonZeroU64,
+    /// At most this many cells per streamed block; `None` streams the store's cell
+    /// blocks of `C` cells whole. Smaller blocks split each of the store's cell blocks
+    /// (task 5.5: [`PhysicalPlan::within_memory_limit`] picks it for a memory limit).
+    pub max_block_cells: Option<NonZeroU64>,
 }
 
 impl Default for PhysicalOptions {
@@ -86,6 +90,7 @@ impl Default for PhysicalOptions {
         Self {
             device: Device::default(),
             blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
+            max_block_cells: None,
         }
     }
 }
@@ -173,7 +178,12 @@ impl PhysicalPlan {
         for node in optimized.nodes() {
             // Inputs come first, so the input's block size is known.
             let cells = match (node.operation(), node.input()) {
-                (Operation::Scan { plan, .. }, _) => plan.root().schema().tiling.cell_block_size,
+                (Operation::Scan { plan, .. }, _) => {
+                    let store_cells = plan.root().schema().tiling.cell_block_size;
+                    options
+                        .max_block_cells
+                        .map_or(store_cells, |cells| store_cells.min(cells.get()))
+                }
                 (_, Some(input)) => block_sizes[input],
                 // Only a scan has no input (the arena's invariant, as `Plan::root`).
                 (_, None) => unreachable!("optimized node without input"),

@@ -4,7 +4,7 @@ From Python, the plans that can be built are scans, ``with_default_layer`` and
 ``filter_genes``. Nothing is read: the store is deleted before ``estimate()`` runs.
 The model and every node kind are covered by the Rust tests
 (``crates/kyto-plan/tests/estimate.rs``), and the check against measured memory on
-the fixtures by ``crates/kyto-plan/tests/estimate_fixtures.rs``.
+the fixtures by ``crates/kyto-exec/tests/estimate_fixtures.rs`` (the executor, task 5.5).
 """
 
 import gzip

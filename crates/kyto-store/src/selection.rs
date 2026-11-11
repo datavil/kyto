@@ -81,6 +81,55 @@ impl BlockPick {
             Picks::List(locals) => locals.clone(),
         }
     }
+
+    /// The local rows `first..last + 1` a read of the selected positions spans
+    /// (`0..0` when none is selected).
+    pub(crate) fn span(&self) -> (u32, u32) {
+        match &self.picks {
+            Picks::Range { start, end } => (*start, *end),
+            Picks::List(locals) => match (locals.first(), locals.last()) {
+                (Some(&first), Some(&last)) => (first, last + 1),
+                _ => (0, 0),
+            },
+        }
+    }
+
+    /// Split into picks of at most `max_len` selected positions each, in order, on
+    /// the same block (task 5.5: blocks smaller than the store's). `max_len` is at
+    /// least 1.
+    pub(crate) fn split(&self, max_len: u64) -> Vec<BlockPick> {
+        let max_len = max_len.max(1);
+        if self.len() <= max_len {
+            return vec![self.clone()];
+        }
+        // max_len < len <= block size <= 2^32 - 1.
+        let step = max_len as u32;
+        let part = |offset: u64, picks: Picks| BlockPick {
+            block: self.block,
+            first_position: self.first_position + offset,
+            picks,
+        };
+        match &self.picks {
+            Picks::Range { start, end } => (*start..*end)
+                .step_by(step as usize)
+                .map(|from| {
+                    let to = from.saturating_add(step).min(*end);
+                    part(
+                        u64::from(from - start),
+                        Picks::Range {
+                            start: from,
+                            end: to,
+                        },
+                    )
+                })
+                .collect(),
+            Picks::List(locals) => locals
+                .chunks(step as usize)
+                .enumerate()
+                .map(|(index, chunk)| part(index as u64 * max_len, Picks::List(chunk.to_vec())))
+                .collect(),
+        }
+    }
 }
 
 /// Check `selection` against an axis of length `n` and split it into blocks of
@@ -254,6 +303,31 @@ mod tests {
         assert_eq!(ranged[0].position(1), Some(0));
         assert_eq!(ranged[1].position(1), Some(3));
         assert_eq!(ranged[1].position(2), None);
+    }
+
+    #[test]
+    fn picks_split_into_parts_of_at_most_max_len() {
+        let ranged = range(4, 9, 1, 8);
+        assert_eq!(ranged.split(7), vec![ranged.clone()]);
+        assert_eq!(ranged.split(100), vec![ranged.clone()]);
+        assert_eq!(
+            ranged.split(3),
+            vec![range(4, 9, 1, 4), range(4, 12, 4, 7), range(4, 15, 7, 8)]
+        );
+        assert_eq!(ranged.span(), (1, 8));
+        let listed = BlockPick {
+            block: 2,
+            first_position: 5,
+            picks: Picks::List(vec![0, 3, 4, 9, 11]),
+        };
+        let parts = listed.split(2);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].picks, Picks::List(vec![0, 3]));
+        assert_eq!((parts[1].first_position, parts[1].span()), (7, (4, 10)));
+        assert_eq!((parts[2].first_position, parts[2].span()), (9, (11, 12)));
+        assert!(parts.iter().all(|part| part.block == 2));
+        // Zero is treated as 1.
+        assert_eq!(range(0, 0, 0, 2).split(0).len(), 2);
     }
 
     fn problem(selection: AxisSelection, n: u64) -> String {

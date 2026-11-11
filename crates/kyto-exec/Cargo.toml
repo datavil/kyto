@@ -23,10 +23,15 @@ zarrs = { version = "0.22.10", default-features = false, features = ["filesystem
 # SIMD kernels (task 5.3): runtime dispatch to AVX-512 (`x86-v4`), AVX2 (`x86-v3`, on by
 # default) or NEON, with a scalar fallback.
 pulp = { version = "0.22.3", features = ["x86-v4"] }
+# The process's resident memory for the memory limit (task 5.5); the version and
+# features polars already builds (`polars-utils`).
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).
 stats_alloc = "0.1.10"
+# Peak heap bytes for the 5.5 memory-limit check, against the estimate (as kyto-plan's 4.6 check).
+peak_alloc = "0.3.0"
 kyto-core = { path = "../kyto-core" }
 polars = { version = "0.55.2", default-features = false }
 proptest = "1.11.0"

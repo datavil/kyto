@@ -1,5 +1,5 @@
-//! One step of the executor's stream: the rows of one cell block, in every layer the
-//! plan carries at that point.
+//! One step of the executor's stream: the rows of one cell block (or of a part of it,
+//! under a memory limit, task 5.5), in every layer the plan carries at that point.
 //!
 //! Does: hold the cell block's number, the table position of each row and one
 //! [`CellBlock`] per layer, all with the same rows (task 5.2).
@@ -13,7 +13,8 @@ use kyto_store::CellBlock;
 /// The rows of one cell block in each layer carried by the stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipelineBlock {
-    /// The store's cell block `b` the rows come from (format.md §4.1).
+    /// The store's cell block `b` the rows come from (format.md §4.1); blocks split
+    /// from one cell block under a memory limit share it (task 5.5).
     pub cell_block: u64,
     /// Table position of the cell of each row, increasing.
     pub cells: Vec<u64>,

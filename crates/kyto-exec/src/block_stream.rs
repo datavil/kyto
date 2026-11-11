@@ -15,11 +15,14 @@
 //! (the statistics passes of task 5.4, then the output's stream) is a stream of its
 //! own over the same opened readers and thread pool ([`StreamSource`]); the output's
 //! stream carries the run's [`Statistics`].
+//! Blocks hold at most `block_cells` rows of one store cell block: the store's cell
+//! blocks, or parts of them when the physical plan splits them for a memory limit
+//! (task 5.5).
 //! Does not: cancel a window being computed when dropped (it finishes, then stops;
-//! Ctrl-C is 5.7), or limit bytes (5.5).
+//! Ctrl-C is 5.7), or choose block sizes (the physical plan does, 5.5).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::JoinHandle;
@@ -60,6 +63,8 @@ pub(crate) struct StreamSource<S: ?Sized> {
     /// The layers each block keeps at the stream's end.
     pub(crate) output_layers: BTreeSet<String>,
     pub(crate) window: NonZeroUsize,
+    /// Cells per block: the store's `C`, or fewer to split its cell blocks (5.5).
+    pub(crate) block_cells: NonZeroU64,
     pub(crate) store: String,
 }
 
@@ -176,7 +181,12 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
             .readers
             .iter()
             .map(|reader| {
-                reader.cell_blocks(&AxisSelection::All, &AxisSelection::All, source.window)
+                reader.cell_blocks_of_rows(
+                    &AxisSelection::All,
+                    &AxisSelection::All,
+                    source.block_cells,
+                    source.window,
+                )
             })
             .collect::<Result<Vec<_>, _>>();
         let mut streams = match streams {
@@ -186,7 +196,8 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
                 return;
             }
         };
-        let mut next_cell_block = 0;
+        // The next block of rows without layers: (cell block, its first row).
+        let mut next_cell_block = (0, 0);
         loop {
             let mut inputs = Vec::with_capacity(source.window.get());
             let mut failure = None;
@@ -240,19 +251,27 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
     fn read_next(
         &self,
         streams: &mut [CellBlocks<'_, S>],
-        next_cell_block: &mut u64,
+        next_cell_block: &mut (u64, u64),
     ) -> Option<Item> {
         if streams.is_empty() {
-            let block = *next_cell_block;
+            // The same blocks the readers would give: each cell block's rows, at most
+            // block_cells at a time.
+            let (block, row) = *next_cell_block;
             let grid = self.source.grid;
             if block >= grid.n_cell_blocks() {
                 return None;
             }
-            *next_cell_block += 1;
+            let rows = grid.rows(block);
+            let end = rows.min(row.saturating_add(self.source.block_cells.get()));
+            *next_cell_block = if end >= rows {
+                (block + 1, 0)
+            } else {
+                (block, end)
+            };
             let first = block * grid.cell_block_size();
             return Some(Ok(PipelineBlock {
                 cell_block: block,
-                cells: (first..first + grid.rows(block)).collect(),
+                cells: (first + row..first + end).collect(),
                 layers: BTreeMap::new(),
             }));
         }

@@ -1530,11 +1530,13 @@ dependencies = [
  "kyto-error",
  "kyto-plan",
  "kyto-store",
+ "peak_alloc",
  "polars",
  "proptest",
  "pulp",
  "rayon",
  "stats_alloc",
+ "sysinfo",
  "tempfile",
  "zarrs",
 ]
@@ -1550,13 +1552,10 @@ dependencies = [
  "kyto-core",
  "kyto-error",
  "kyto-store",
- "peak_alloc",
  "polars",
  "proptest",
  "serde",
  "serde_json",
- "tempfile",
- "zarrs",
 ]
 
 [[package]]

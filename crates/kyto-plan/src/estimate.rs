@@ -21,14 +21,26 @@
 //! known from `tile_offsets`). The compressed bytes on disk are fewer (zstd), and the
 //! Parquet tables are not counted.
 //!
-//! **Peak memory** is the stream's working set plus what stays in memory, assuming all
-//! of it is alive at once. Per block in flight (`min(blocks_in_flight, cell blocks)`),
-//! with `e` the mean entries of a block (`nnz x rows / n_cells`, rows = `min(C,
-//! n_cells)`), each streamed node holds:
+//! **Peak memory** is the stream's working set plus what stays in memory, as the
+//! executor (task 5.2) holds them (measured in `crates/kyto-exec/tests/estimate_fixtures.rs`,
+//! task 5.5). Blocks hold `rows = min(B, n_cells)` cells, `B` the execution's cells per
+//! block (the store's `C`, or fewer when the plan splits blocks under a memory limit,
+//! 5.5); the stream has `cell blocks x ceil(min(C, n_cells) / B)` blocks and reads
+//! `window = min(blocks_in_flight, blocks)` at once. With `e` the mean entries of a
+//! block (`nnz x rows / n_cells`), a block in flight holds the larger of reading the
+//! scan's tiles (the scan's row below) and, once they are joined, the joined layers
+//! plus every layer the streamed nodes write (the rows below the scan's), not both:
+//! the executor reads a window, then maps it. A stream longer than its window adds,
+//! while a later window (`min(window, blocks - window)` blocks) is computed, the block
+//! its consumer holds (each output's layers) and the buffers the block pool keeps (one
+//! entry per scanned layer and per node writing layers, for at most `window + 1`
+//! blocks, never more than the window before held), each at most the largest layer
+//! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) + (rows +
+//! 1) x 8`. Per node:
 //!
 //! | Node | Bytes per block in flight |
 //! | --- | --- |
-//! | scan, per layer read | the larger of reading its tiles (`tiles` + `gene blocks x 2 x K x 4`: zarrs decodes whole inner chunks of `K` entries, [`ASSUMED_NNZ_CHUNK_SIZE`], of `indices` and `data`, every tile of a block at once at most) and joining them (`tiles` + `rows x 12 + 8` + the joined `indices` and `data`, which grow by doubling to `capacity(e)`, the last one twice while it moves: `capacity(e) x (4 + 1.5 x value bytes)`), with `tiles = gene blocks x (C + 1) x 4 + e x (4 + value bytes)` |
+//! | scan, per layer read (reading) | the larger of reading its tiles (`tiles` + `gene blocks x 2 x K x 4`: zarrs decodes whole inner chunks of `K` entries, [`ASSUMED_NNZ_CHUNK_SIZE`], of `indices` and `data`, every tile of a block at once at most) and joining them (`tiles` + `rows x 12 + 8` + the joined `indices` and `data`, which grow by doubling to `capacity(e)`, the last one twice while it moves: `capacity(e) x (4 + 1.5 x value bytes)`), with `tiles = gene blocks x (C + 1) x 4 + e x (4 + value bytes)` |
 //! | a node writing layers in its pass (`normalize_total`, `log1p`, a fused pass, `scale`) | per layer written: `e x 8 + (rows + 1) x 8` (`float32` values; `scale` with centring is dense: `e = rows x n_genes`) |
 //! | sink `zarr` | per layer, once: `S x (4 + value bytes)` ([`ASSUMED_NNZ_SHARD_SIZE`]) and one `indptr` shard, `gene blocks x (C + 1) x 4` |
 //! | sink `h5ad` | per layer: `e x 8` (positions widened for HDF5) |
@@ -43,13 +55,18 @@
 //! `n_genes x 16`, a `filter_genes` reading the matrix `n_genes x 8`, `pca` the streamed
 //! Halko blocks `(2 x n_cells + n_genes) x (n_components + `[`PCA_OVERSAMPLES`]`) x 8`.
 //!
-//! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today,
-//! checked within 25% on the fixtures (`tests/estimate_fixtures.rs`). The other rows
-//! are promises to the executor (5.x) and the algorithms (6.x), which must check their
-//! own row when they land.
+//! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today;
+//! with the per-cell maps, the held block and the pool they are checked within 25% of
+//! the executor on the fixtures (`crates/kyto-exec/tests/estimate_fixtures.rs`). A
+//! block split from a store cell block reads every tile's whole `indptr` (counted per
+//! stream block in the bytes read) and decodes whole inner chunks: with many gene
+//! blocks that decode term (every tile at once) is far above what few threads hold. The
+//! other rows are promises to the executor (5.x) and the algorithms (6.x), which must
+//! check their own row when they land.
 //! Does not: read `tile_offsets` (exact per-block `nnz`) or the tables, count Polars
-//! tables, threads' scratch or the output a terminal returns, or shrink blocks to a
-//! memory limit (5.5 uses this estimate to do that).
+//! tables, threads' scratch, the allocator's own overhead or the output a terminal
+//! returns, or choose blocks for a memory limit (`memory_limit.rs` uses this estimate
+//! to do that).
 
 use std::fmt;
 
@@ -155,10 +172,21 @@ impl PhysicalPlan {
 
         let mut statistics_passes = 0_u32;
         let mut pass_bytes = 0_u128;
-        let mut block = 0_u128;
         let mut opening = 0_u128;
         let mut resident = 0_u128;
         let mut streamed_writes = Vec::new();
+        // Per block in flight: the scan's reading of its tiles, then the joined
+        // layers with every layer the streamed nodes write (task 5.5: not at once).
+        let mut scan_reading = 0_u128;
+        let mut joined_and_written = 0_u128;
+        let mut once = 0_u128;
+        // The stream (task 5.2): its window, its blocks, and its block pool's entries
+        // (one per scanned layer and per streamed node writing layers, each at most
+        // the largest layer block).
+        let mut window = 0_u128;
+        let mut n_blocks = 0_u128;
+        let mut pool_entries = 0_u128;
+        let mut largest_layer_block = 0_u128;
         for (index, ((node, execution), schema)) in
             nodes.iter().zip(executions).zip(&schemas).enumerate()
         {
@@ -172,24 +200,61 @@ impl PhysicalPlan {
                 streamed_writes.extend(node.writes());
             }
             let sizes = BlockSizes::new(schema, input, cell_block_size);
-            let (node_block, node_once) = match node.operation() {
+            window = window.max(in_flight.min(sizes.n_blocks.max(1)));
+            n_blocks = n_blocks.max(sizes.n_blocks);
+            match node.operation() {
                 Operation::Scan { plan, reads } => {
                     let store = plan.root().schema();
-                    let mut scan_block = 0;
                     for layer in scanned_layers(&store.layers, reads) {
                         let scan = ScanLayer::new(&sizes, layer);
-                        scan_block += scan.block_bytes();
+                        let joined = held_block_bytes(&sizes, layer.nnz, layer.dtype);
+                        scan_reading += scan.block_bytes();
+                        joined_and_written += joined;
+                        pool_entries += 1;
+                        largest_layer_block = largest_layer_block.max(joined);
                         pass_bytes += scan.pass_bytes();
                         resident += scan.tile_offsets_bytes();
                         opening = OPEN_LAYER_BYTES;
                     }
-                    (scan_block, 0)
                 }
-                _ => written_block_bytes(node, schema, input, &sizes),
-            };
-            block += node_block * in_flight.min(sizes.n_cell_blocks.max(1)) + node_once;
+                _ => {
+                    let written = written_layers(node, schema);
+                    if !written.is_empty() {
+                        pool_entries += 1;
+                    }
+                    for layer in written {
+                        largest_layer_block = largest_layer_block.max(held_block_bytes(
+                            &sizes,
+                            layer.nnz,
+                            layer.dtype,
+                        ));
+                    }
+                    let (per_block, node_once) = written_block_bytes(node, schema, input, &sizes);
+                    joined_and_written += per_block;
+                    once += node_once;
+                }
+            }
             resident += node_resident(node, schema, input);
         }
+        let per_block = scan_reading.max(joined_and_written);
+        let mut block = window * per_block;
+        // A stream longer than its window: while a later window (`later` blocks) is
+        // computed, the consumer holds a block and the pool keeps the buffers of the
+        // blocks before (the layers the stream drops and the blocks the consumer gave
+        // back): at most `(window + 1) x entries` buffers (task 5.2's pool), and no more
+        // than the window before held (the pool hands buffers out before the stream
+        // allocates new ones).
+        if n_blocks > window {
+            let later = window.min(n_blocks - window);
+            let (held, held_layers) = self.held_blocks(&schemas);
+            // Every buffer of the blocks before, but the consumer's.
+            let recycled = ((n_blocks - later) * pool_entries)
+                .saturating_sub(held_layers)
+                .min((window + 1) * pool_entries);
+            let pool = (recycled * largest_layer_block).min(window * joined_and_written);
+            block = block.max(later * per_block + held + pool);
+        }
+        block += once;
 
         let reads_stream = self.optimized().outputs().iter().any(|output| {
             output.reads().iter().any(|member| {
@@ -209,6 +274,51 @@ impl PhysicalPlan {
             device: self.options().device,
         }
     }
+}
+
+impl PhysicalPlan {
+    /// Bytes of one block of each output's streamed layers, the block a consumer of
+    /// the stream holds while the next window is computed, and its layers.
+    fn held_blocks(&self, schemas: &[PlanSchema]) -> (u128, u128) {
+        let nodes = self.optimized().nodes();
+        let mut bytes = 0;
+        let mut layers = 0;
+        for output in self.optimized().outputs() {
+            let index = output.node();
+            let Blocks::Cells(block_cells) = self.executions()[index].blocks() else {
+                continue;
+            };
+            let schema = &schemas[index];
+            let input = nodes[index].input().map(|input| &schemas[input]);
+            let sizes = BlockSizes::new(schema, input, block_cells);
+            for member in output.reads() {
+                if let Member::Layer(name) = member
+                    && let Some(layer) = schema.layer(name)
+                {
+                    bytes += held_block_bytes(&sizes, layer.nnz, layer.dtype);
+                    layers += 1;
+                }
+            }
+        }
+        (bytes, layers)
+    }
+}
+
+/// Bytes of one joined or mapped block of a layer with `nnz` entries: `indices` and
+/// values at the capacity pushing reaches, and the `u64` row pointer.
+fn held_block_bytes(sizes: &BlockSizes, nnz: u64, dtype: LayerDtype) -> u128 {
+    vec_capacity(sizes.entries(nnz)) * (4 + layer_value_bytes(dtype)) + (sizes.rows + 1) * 8
+}
+
+/// The layers `node` writes in its pass, with their output schemas.
+fn written_layers(node: &OptimizedNode, schema: &PlanSchema) -> Vec<LayerSchema> {
+    node.writes()
+        .into_iter()
+        .filter_map(|member| match member {
+            Member::Layer(name) => schema.layer(&name).cloned(),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Plan {
@@ -263,7 +373,7 @@ fn scanned_layers<'a>(
 }
 
 /// The block geometry of a streamed node, from its input's bounds (its own for a
-/// scan) and the cell block size.
+/// scan), the store's tiling and the cells per streamed block.
 struct BlockSizes {
     /// Cells, an upper bound.
     n_cells: u128,
@@ -271,25 +381,33 @@ struct BlockSizes {
     cell_block_size: u128,
     /// The store's gene blocks.
     n_gene_blocks: u128,
-    /// Cell blocks of the stream.
+    /// The store's cell blocks.
     n_cell_blocks: u128,
-    /// Rows of a full block: `min(C, n_cells)`.
+    /// Blocks of the stream: each cell block split into blocks of `block_cells` (an
+    /// upper bound, task 5.5).
+    n_blocks: u128,
+    /// Rows of a full block: `min(block_cells, n_cells)`.
     rows: u128,
 }
 
 impl BlockSizes {
-    fn new(schema: &PlanSchema, input: Option<&PlanSchema>, cell_block_size: u64) -> Self {
+    /// `block_cells` is the execution's block size: the store's `C`, or fewer cells
+    /// when the plan splits its blocks (task 5.5).
+    fn new(schema: &PlanSchema, input: Option<&PlanSchema>, block_cells: u64) -> Self {
         let sizes = input.unwrap_or(schema).atlas();
         let n_cells = u128::from(sizes.n_cells);
-        let cell_block_size = u128::from(cell_block_size.max(1));
+        let cell_block_size = u128::from(sizes.tiling.cell_block_size.max(1));
+        let block_cells = u128::from(block_cells.max(1)).min(cell_block_size);
         let gene_block_size = u128::from(sizes.tiling.gene_block_size.max(1));
         let n_genes = u128::from(sizes.n_genes);
+        let n_cell_blocks = n_cells.div_ceil(cell_block_size);
         Self {
             n_cells,
             cell_block_size,
             n_gene_blocks: n_genes.div_ceil(gene_block_size),
-            n_cell_blocks: n_cells.div_ceil(cell_block_size),
-            rows: cell_block_size.min(n_cells),
+            n_cell_blocks,
+            n_blocks: n_cell_blocks * cell_block_size.min(n_cells).div_ceil(block_cells),
+            rows: block_cells.min(n_cells),
         }
     }
 
@@ -315,6 +433,8 @@ struct ScanLayer {
     rows: u128,
     n_gene_blocks: u128,
     n_tiles: u128,
+    /// Blocks of the stream: each reads every tile's `indptr` of its cell block.
+    n_blocks: u128,
     tile_indptr_bytes: u128,
 }
 
@@ -327,6 +447,7 @@ impl ScanLayer {
             rows: sizes.rows,
             n_gene_blocks: sizes.n_gene_blocks,
             n_tiles: sizes.n_cell_blocks * sizes.n_gene_blocks,
+            n_blocks: sizes.n_blocks,
             tile_indptr_bytes: sizes.tile_indptr_bytes(),
         }
     }
@@ -359,7 +480,7 @@ impl ScanLayer {
         let indptr = if self.nnz == 0 {
             0
         } else {
-            self.n_tiles * self.tile_indptr_bytes
+            self.n_blocks * self.n_gene_blocks * self.tile_indptr_bytes
         };
         entries + indptr + self.tile_offsets_bytes()
     }

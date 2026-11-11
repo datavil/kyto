@@ -19,12 +19,12 @@
 //! HVG batches, sinks (see the error each one gives), or memory limits (5.5).
 
 use std::collections::BTreeSet;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
 use kyto_error::KytoError;
-use kyto_plan::{CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan};
+use kyto_plan::{Blocks, CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan};
 use kyto_store::{LayerReader, TileGrid};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::ReadableStorageTraits;
@@ -69,6 +69,9 @@ pub struct Pipeline {
     /// The layers the output reads; the stream drops the others at its end.
     pub(crate) output_layers: BTreeSet<String>,
     pub(crate) blocks_in_flight: NonZeroUsize,
+    /// Cells per streamed block: the scan's execution's (the store's `C`, or fewer
+    /// under a memory limit, task 5.5).
+    pub(crate) block_cells: NonZeroU64,
 }
 
 impl Pipeline {
@@ -96,12 +99,16 @@ impl Pipeline {
         let mut stages = Vec::new();
         let mut next = Some(output_entry.node());
         let mut scan = None;
+        let mut block_cells = None;
         while let Some(index) = next {
             let node = &nodes[index];
             let passes = executions[index].statistics_passes();
             match node.operation() {
                 Operation::Scan { plan, reads } => {
                     scan = Some((Arc::clone(plan), layer_names(reads).collect()));
+                    if let Blocks::Cells(cells) = executions[index].blocks() {
+                        block_cells = NonZeroU64::new(cells);
+                    }
                 }
                 Operation::Fused { maps, writes } => {
                     if starts_with_median(maps) {
@@ -136,13 +143,17 @@ impl Pipeline {
         let root = scan.root();
         let schema = root.schema();
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
-        // At most one window of every cell block (as 4.6's estimate counts them), so a
-        // huge blocks_in_flight sizes nothing beyond the store; at least 1.
-        let blocks_in_flight = plan
-            .options()
-            .blocks_in_flight
-            .get()
-            .min(grid.n_cell_blocks());
+        // A scan streams in blocks of at most C cells (physical_plan.rs).
+        let store_cells = NonZeroU64::new(grid.cell_block_size()).unwrap_or(NonZeroU64::MIN);
+        let block_cells = block_cells.map_or(store_cells, |cells| cells.min(store_cells));
+        // At most one window of every block (as 4.6's estimate counts them), so a huge
+        // blocks_in_flight sizes nothing beyond the store; at least 1.
+        let n_blocks = grid.n_cell_blocks().saturating_mul(
+            grid.cell_block_size()
+                .min(grid.n_cells())
+                .div_ceil(block_cells.get()),
+        );
+        let blocks_in_flight = plan.options().blocks_in_flight.get().min(n_blocks);
         let blocks_in_flight = usize::try_from(blocks_in_flight)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -155,6 +166,7 @@ impl Pipeline {
             stages,
             output_layers,
             blocks_in_flight,
+            block_cells,
         })
     }
 
@@ -172,6 +184,12 @@ impl Pipeline {
     /// the store's cell blocks (at least 1).
     pub fn blocks_in_flight(&self) -> NonZeroUsize {
         self.blocks_in_flight
+    }
+
+    /// Cells per streamed block: the store's `C`, or fewer when the physical plan
+    /// splits blocks (task 5.5, [`kyto_plan::PhysicalOptions::max_block_cells`]).
+    pub fn block_cells(&self) -> NonZeroU64 {
+        self.block_cells
     }
 
     /// Run on the store at the scan's source, a local directory.
@@ -236,6 +254,7 @@ impl Pipeline {
                 operators: operators.to_vec(),
                 output_layers,
                 window: self.blocks_in_flight,
+                block_cells: self.block_cells,
                 store: self.store.clone(),
             }
         };

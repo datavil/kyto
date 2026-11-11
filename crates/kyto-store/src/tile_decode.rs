@@ -6,6 +6,8 @@
 //! Does not: read storage, select genes or cells (see `tile_reader`), or check for stored zeros
 //! (readers MAY assume none, format.md §4.6).
 
+use std::ops::Range;
+
 use kyto_error::KytoError;
 
 use crate::csr::CsrMatrix;
@@ -90,12 +92,13 @@ pub(crate) fn decode_cell_block<T: Copy>(
         let tile = first_tile + gene_block;
         let start = tile_offsets[tile];
         let tile_nnz = tile_offsets[tile + 1] - start;
-        check_tile(
+        let tile_id = (block, gene_block as u64);
+        check_tile_indptr(layer, tile_id, tile_indptr, rows, tile_nnz)?;
+        check_tile_rows(
             layer,
-            (block, gene_block as u64),
+            tile_id,
             tile_indptr,
-            rows,
-            tile_nnz,
+            0..rows,
             grid.width(gene_block as u64),
             &indices[start as usize..(start + tile_nnz) as usize],
         )?;
@@ -120,17 +123,15 @@ pub(crate) fn decode_cell_block<T: Copy>(
     Ok(())
 }
 
-/// Check one tile: `indptr` starts at 0, never decreases, is flat over padding rows
-/// and ends at the tile's nnz; each row's local indices strictly increase below the
-/// gene block's width (format.md §1.2, §4.3).
-pub(crate) fn check_tile(
+/// Check one tile's `indptr`: it starts at 0, never decreases, is flat over padding
+/// rows and ends at the tile's nnz (format.md §1.2, §4.3). Run before reading entries
+/// by its rows, so a corrupt `indptr` never sizes a read.
+pub(crate) fn check_tile_indptr(
     layer: &str,
     (block, gene_block): (u64, u64),
     tile_indptr: &[u32],
     rows: usize,
     tile_nnz: u64,
-    width: u64,
-    tile_indices: &[u32],
 ) -> Result<(), KytoError> {
     let fail = |what: String| {
         Err(corrupt(
@@ -156,8 +157,30 @@ pub(crate) fn check_tile(
     {
         return fail(format!("indptr is not flat after the last row {rows}"));
     }
-    for row in 0..rows {
-        let row_indices = &tile_indices[tile_indptr[row] as usize..tile_indptr[row + 1] as usize];
+    Ok(())
+}
+
+/// Check the local rows `rows` of a tile whose `indptr` passed [`check_tile_indptr`]:
+/// each row's local indices strictly increase below the gene block's width.
+/// `row_indices` holds the tile's entries `indptr[rows.start]..indptr[rows.end]`.
+pub(crate) fn check_tile_rows(
+    layer: &str,
+    (block, gene_block): (u64, u64),
+    tile_indptr: &[u32],
+    rows: Range<usize>,
+    width: u64,
+    row_indices: &[u32],
+) -> Result<(), KytoError> {
+    let fail = |what: String| {
+        Err(corrupt(
+            layer,
+            format!("tile ({block}, {gene_block}): {what}"),
+        ))
+    };
+    let base = tile_indptr[rows.start] as usize;
+    for row in rows {
+        let entries = tile_indptr[row] as usize - base..tile_indptr[row + 1] as usize - base;
+        let row_indices = &row_indices[entries];
         if let Some(&local) = row_indices.iter().find(|&&local| u64::from(local) >= width) {
             return fail(format!(
                 "row {row}: local gene index {local} is not below the block width {width}"
