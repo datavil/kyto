@@ -196,6 +196,7 @@ def qc(name: FixtureName) -> tuple[Parameters, Arrays]:
 def normalize_log1p(name: FixtureName) -> tuple[Parameters, Arrays]:
     """``normalize_total`` (fixed target and median target), then ``log1p`` (6.2)."""
     import scanpy as sc
+    from scipy.sparse import csr_matrix
 
     full = name == "synthetic"
     parameters: Parameters = {
@@ -208,7 +209,8 @@ def normalize_log1p(name: FixtureName) -> tuple[Parameters, Arrays]:
     for label, target_sum in (("target", _TARGET_SUM), ("median", None)):
         adata = _counts(name)
         sc.pp.normalize_total(adata, target_sum=target_sum)
-        normalized = adata.X
+        # A copy: `log1p` below changes `adata.X` in place.
+        normalized = csr_matrix(adata.X, copy=True)
         sc.pp.log1p(adata)
         for step, matrix in (("normalized", normalized), ("log1p", adata.X)):
             prefix = f"{label}/{step}"

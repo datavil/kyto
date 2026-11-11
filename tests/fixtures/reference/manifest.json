@@ -229,14 +229,14 @@
      ]
     },
     "median/normalized/cell_sum": {
-     "digest": "0ad25fc06dc8c335edac76b64c84a1825c030d01943ccb89cd3305e96953613a",
+     "digest": "5c9bc4bbb7f9f96e6b7ffacf2b6b937b5b5f1cf27e2f04de8e55a07cd0c4cf71",
      "dtype": "<f8",
      "shape": [
       2700
      ]
     },
     "median/normalized/gene_sum": {
-     "digest": "d349c0c6d6b111fde0f932b5299deef90459f574ee629882831b4e24243839a6",
+     "digest": "6f5ba8b0b061c4bf9c1ff336dbad07a47638d06ec0b5d3b564346da2efee6ac3",
      "dtype": "<f8",
      "shape": [
       32738
@@ -271,14 +271,14 @@
      ]
     },
     "target/normalized/cell_sum": {
-     "digest": "f1f3eaae759a8ea6ef5f1e77b341ad3358ada1d0224a7f345ed71ba7db05ac57",
+     "digest": "9b2714c3b0cfb258a5a178671a42162ad1f8565bd5b1dd5d27f941cc4599d9c9",
      "dtype": "<f8",
      "shape": [
       2700
      ]
     },
     "target/normalized/gene_sum": {
-     "digest": "9b840c0b65efc929a6a6bafa71a3ded0a2b9fdea93bba2418817ef19683e983d",
+     "digest": "8850d3e4add017fe765c01533186a05b885d3524a9bbd2247725f6e0d1aa6c99",
      "dtype": "<f8",
      "shape": [
       32738
@@ -905,21 +905,21 @@
      ]
     },
     "median/normalized/cell_sum": {
-     "digest": "a8ed9b51249904f747082f474d5612fc9c9a8b51002eefcdd64ee87c2db80625",
+     "digest": "5853113b613b1d4ba8a9e0eff96fba1316eac80ce8d68e50f6696fe94bdbf638",
      "dtype": "<f8",
      "shape": [
       500
      ]
     },
     "median/normalized/data": {
-     "digest": "216bb7a8eecd2526096a09a6c6144b8231c42367a692338fe2d333437a465679",
+     "digest": "8ea75b0fec3e9bafe7c34631f6528504d0647b015474f56663762bdcab240f37",
      "dtype": "<f4",
      "shape": [
       30277
      ]
     },
     "median/normalized/gene_sum": {
-     "digest": "d04511cff14d3f651159a26685d5ee9537c2f55817959975954da723e3b9bb14",
+     "digest": "a629474e9ee0e4fc5615879d4b81760f7e50e55e8fdf9ca615f6c37ccfb81d18",
      "dtype": "<f8",
      "shape": [
       400
@@ -1003,21 +1003,21 @@
      ]
     },
     "target/normalized/cell_sum": {
-     "digest": "bb3bcd62627d7275510d6a8716d58cd290803465e1ca492390bc65d02d95c7d7",
+     "digest": "25d44a8603ad9d863b91fc163ad25bddab3d6d8bde3b59db79a6e16101f56627",
      "dtype": "<f8",
      "shape": [
       500
      ]
     },
     "target/normalized/data": {
-     "digest": "d7f397c162b8441aae38b4a198ea696a3f5c5128e102297e47cc746a3ad53b04",
+     "digest": "2cf5096e85927b3982bbc503f873b451f1da2b85633d24f02ab2dd6a8b3ba8d3",
      "dtype": "<f4",
      "shape": [
       30277
      ]
     },
     "target/normalized/gene_sum": {
-     "digest": "b23414699a3e9a9730bc6f13da40786ce0b88935ffb24c400c18d83fcb1d5585",
+     "digest": "0e8d736c8c3444fcf6c9f7cf106d5a43097d4903e0ccb2bda581f68a1f0b4417",
      "dtype": "<f8",
      "shape": [
       400

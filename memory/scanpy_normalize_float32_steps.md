@@ -15,8 +15,8 @@ reciprocal. Integer counts are cast to `float32` by scanpy first.
 which does not copy a CSR) aliases the matrix that `log1p` then changes in place: the
 1.5 reference `normalize_log1p` stores `log1p` values under `*/normalized/*` (plan 6.2
 Open). Copy (`adata.X.copy()`, `csr_matrix(x, copy=True)`) or use `inplace=False`
-before a later in-place step. The 6.2 parity test computes `normalized` with scanpy
-live until the reference is regenerated.
+before a later in-place step. Fixed (Nov 12, 2026): the
+reference copies and was regenerated; the 6.2 parity test reads it again.
 
 **numpy's `float32` `log1p`** is 1 ulp off kyto's correctly rounded one on 620 of 2.29M
 pbmc3k values (macOS arm64, numpy 2.5.4): compare `log1p` within 1e-6, not by bits

@@ -26,52 +26,28 @@ use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{CellValues, ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
-/// Writes `load_fixture(name)` as `.h5ad`, the reference's target and its `log1p`
-/// arrays, and scanpy's `normalize_total` computed here (the stored `normalized`
-/// arrays are the `log1p` ones: `make_reference.py` keeps `adata.X`, which
-/// `sc.pp.log1p` then changes in place; plan 6.2 Open), as raw little-endian files
-/// (`f64` sums and target, `i64` nnz and CSR structure, `f32` CSR values), or exits 77
-/// without scanpy.
+/// Writes `load_fixture(name)` as `.h5ad` and the reference's target and arrays as
+/// raw little-endian files (`f64` sums and target, `i64` nnz and CSR structure, `f32`
+/// CSR values), or exits 77 without anndata.
 const WRITE_FIXTURE: &str = "\
 import sys
 try:
-    import scanpy as sc
     from fixtures.interop import to_anndata
 except ImportError:
     sys.exit(77)
 import json
-import warnings
 import numpy as np
-from scipy.sparse import csr_matrix
 from fixtures.reference import load_reference
 from fixtures.registry import load_fixture
 name, h5ad, out = sys.argv[1:4]
-adata = to_anndata(load_fixture(name))
-adata.write_h5ad(h5ad)
+to_anndata(load_fixture(name)).write_h5ad(h5ad)
 manifest = json.load(open('fixtures/reference/manifest.json'))
 target = manifest['references'][name + '/normalize_log1p']['parameters']['target_sum']
 np.asarray([target], dtype='<f8').tofile(f'{out}/target_sum')
-def write(key, array):
+for key, array in load_reference(name, 'normalize_log1p').items():
     kind = array.dtype.kind
     dtype = '<f4' if array.dtype == np.float32 else ('<f8' if kind == 'f' else '<i8')
     np.asarray(array, dtype=dtype).tofile(f\"{out}/{key.replace('/', '.')}\")
-for key, array in load_reference(name, 'normalize_log1p').items():
-    if '/log1p/' in key:
-        write(key, array)
-for label, target_sum in (('target', target), ('median', None)):
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        normalized = sc.pp.normalize_total(adata, target_sum=target_sum, inplace=False)['X']
-    csr = csr_matrix(normalized)
-    csr.sort_indices()
-    prefix = label + '/normalized/'
-    write(prefix + 'data', csr.data)
-    write(prefix + 'indices', csr.indices.astype(np.int64))
-    write(prefix + 'indptr', csr.indptr.astype(np.int64))
-    wide = csr_matrix(csr, dtype=np.float64)
-    write(prefix + 'cell_sum', np.asarray(wide.sum(axis=1)).ravel())
-    write(prefix + 'gene_sum', np.asarray(wide.sum(axis=0)).ravel())
-    write(prefix + 'nnz', np.asarray([csr.nnz], dtype=np.int64))
 ";
 
 /// Write fixture `name` to `h5ad` and its reference to `out`; `false` without anndata.
@@ -240,7 +216,7 @@ fn normalize_and_log1p_match_scanpy_on_fixtures() {
         let reference = work.path().join(format!("{name}-reference"));
         std::fs::create_dir(&reference).unwrap();
         if !write_fixture(name, &h5ad, &reference) {
-            eprintln!("skipped: scanpy is not installed on this platform");
+            eprintln!("skipped: anndata is not installed on this platform");
             return;
         }
         let store = work.path().join(format!("{name}.kyto"));
