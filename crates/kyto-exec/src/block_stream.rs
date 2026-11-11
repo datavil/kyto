@@ -11,7 +11,10 @@
 //! values do not depend on the thread count (R11): each block is computed alone, and an
 //! indexed parallel collect keeps cell order. After an error the stream ends; blocks
 //! before it in cell order come first. Blocks the caller is done with go back to the
-//! stream's [`CellBlockPool`] through [`BlockStream::recycle`].
+//! stream's [`CellBlockPool`] through [`BlockStream::recycle`]. Every pass of one run
+//! (the statistics passes of task 5.4, then the output's stream) is a stream of its
+//! own over the same opened readers and thread pool ([`StreamSource`]); the output's
+//! stream carries the run's [`Statistics`].
 //! Does not: cancel a window being computed when dropped (it finishes, then stops;
 //! Ctrl-C is 5.7), or limit bytes (5.5).
 
@@ -28,8 +31,8 @@ use zarrs::storage::ReadableStorageTraits;
 
 use crate::cell_block_pool::CellBlockPool;
 use crate::elementwise::ElementwiseMaps;
-use crate::pipeline::Pipeline;
 use crate::pipeline_block::PipelineBlock;
+use crate::statistics::Statistics;
 
 type Item = Result<PipelineBlock, KytoError>;
 
@@ -42,71 +45,77 @@ pub struct BlockStream {
     receiver: Option<Receiver<Item>>,
     producer: Option<JoinHandle<()>>,
     pool: Arc<CellBlockPool>,
+    statistics: Statistics,
+}
+
+/// What one stream reads and runs: the scanned layers (shared by every pass of a
+/// run), the per-cell operators over them and the layers its blocks keep.
+pub(crate) struct StreamSource<S: ?Sized> {
+    /// One opened reader per scanned layer; none streams the cells' rows only.
+    pub(crate) readers: Arc<Vec<LayerReader<S>>>,
+    /// The name of each reader's layer.
+    pub(crate) layers: Vec<String>,
+    pub(crate) grid: TileGrid,
+    pub(crate) operators: Vec<ElementwiseMaps>,
+    /// The layers each block keeps at the stream's end.
+    pub(crate) output_layers: BTreeSet<String>,
+    pub(crate) window: NonZeroUsize,
+    pub(crate) store: String,
 }
 
 /// What the producer thread owns.
 struct Producer<S: ?Sized> {
-    readers: Vec<LayerReader<S>>,
-    layers: Vec<String>,
-    grid: TileGrid,
-    operators: Vec<ElementwiseMaps>,
-    output_layers: BTreeSet<String>,
-    window: NonZeroUsize,
+    source: StreamSource<S>,
     pool: Arc<CellBlockPool>,
-    store: String,
     sender: SyncSender<Item>,
 }
 
 impl BlockStream {
-    /// Start the producer thread on a pool of `threads` threads.
+    /// Start the producer thread of `source` on `thread_pool`.
     ///
     /// # Errors
-    /// `KY-E502` if the threads cannot be started.
+    /// `KY-E502` if the producer thread cannot be started.
     pub(crate) fn start<S>(
-        pipeline: &Pipeline,
-        readers: Vec<LayerReader<S>>,
-        threads: NonZeroUsize,
+        source: StreamSource<S>,
+        thread_pool: Arc<rayon::ThreadPool>,
+        statistics: Statistics,
     ) -> Result<Self, KytoError>
     where
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
     {
-        let thread_start = |problem: String| KytoError::ThreadStart {
-            threads: threads.get() as u64,
-            problem,
-        };
-        let thread_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads.get())
-            .thread_name(|index| format!("kyto-exec-{index}"))
-            .build()
-            .map_err(|error| thread_start(error.to_string()))?;
         // Each block in flight holds at most the scanned layers and one output per
         // operator; keep that many blocks' buffers for the window and the caller's block.
-        let window = pipeline.blocks_in_flight;
-        let layers_per_block = pipeline.layers.len() + pipeline.operators.len();
+        let window = source.window;
+        let layers_per_block = source.layers.len() + source.operators.len();
         let pool = Arc::new(CellBlockPool::new(
             (window.get().saturating_add(1)).saturating_mul(layers_per_block),
         ));
         let (sender, receiver) = sync_channel(0);
         let producer = Producer {
-            readers,
-            layers: pipeline.layers.clone(),
-            grid: pipeline.grid,
-            operators: pipeline.operators.clone(),
-            output_layers: pipeline.output_layers.clone(),
-            window,
+            source,
             pool: Arc::clone(&pool),
-            store: pipeline.store.clone(),
             sender,
         };
+        let threads = thread_pool.current_num_threads();
         let handle = std::thread::Builder::new()
             .name("kyto-exec-producer".to_owned())
             .spawn(move || thread_pool.install(|| producer.run()))
-            .map_err(|error| thread_start(error.to_string()))?;
+            .map_err(|error| KytoError::ThreadStart {
+                threads: threads as u64,
+                problem: error.to_string(),
+            })?;
         Ok(Self {
             receiver: Some(receiver),
             producer: Some(handle),
             pool,
+            statistics,
         })
+    }
+
+    /// The statistics the cross-cell nodes below the output computed in their
+    /// statistics passes, before this stream started (task 5.4).
+    pub fn statistics(&self) -> &Statistics {
+        &self.statistics
     }
 
     /// Give a block the caller is done with back, so its buffers serve later blocks.
@@ -162,10 +171,13 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
     /// Read, compute and send windows of blocks until the end, an error, or a caller
     /// that hung up.
     fn run(self) {
-        let streams = self
+        let source = &self.source;
+        let streams = source
             .readers
             .iter()
-            .map(|reader| reader.cell_blocks(&AxisSelection::All, &AxisSelection::All, self.window))
+            .map(|reader| {
+                reader.cell_blocks(&AxisSelection::All, &AxisSelection::All, source.window)
+            })
             .collect::<Result<Vec<_>, _>>();
         let mut streams = match streams {
             Ok(streams) => streams,
@@ -176,9 +188,9 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
         };
         let mut next_cell_block = 0;
         loop {
-            let mut inputs = Vec::with_capacity(self.window.get());
+            let mut inputs = Vec::with_capacity(source.window.get());
             let mut failure = None;
-            while inputs.len() < self.window.get() {
+            while inputs.len() < source.window.get() {
                 match self.read_next(&mut streams, &mut next_cell_block) {
                     None => break,
                     Some(Ok(block)) => inputs.push(block),
@@ -195,14 +207,15 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
             let outputs: Vec<Item> = inputs
                 .into_par_iter()
                 .map(|block| {
-                    let mut block = self.operators.iter().try_fold(block, |block, operator| {
-                        operator.apply(block, &self.pool, &self.store)
-                    })?;
+                    let mut block =
+                        source.operators.iter().try_fold(block, |block, operator| {
+                            operator.apply(block, &self.pool, &source.store)
+                        })?;
                     // Keep only what the output reads; the rest goes back to the pool.
                     let unread: Vec<String> = block
                         .layers
                         .keys()
-                        .filter(|layer| !self.output_layers.contains(*layer))
+                        .filter(|layer| !source.output_layers.contains(*layer))
                         .cloned()
                         .collect();
                     for layer in unread {
@@ -231,21 +244,22 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
     ) -> Option<Item> {
         if streams.is_empty() {
             let block = *next_cell_block;
-            if block >= self.grid.n_cell_blocks() {
+            let grid = self.source.grid;
+            if block >= grid.n_cell_blocks() {
                 return None;
             }
             *next_cell_block += 1;
-            let first = block * self.grid.cell_block_size();
+            let first = block * grid.cell_block_size();
             return Some(Ok(PipelineBlock {
                 cell_block: block,
-                cells: (first..first + self.grid.rows(block)).collect(),
+                cells: (first..first + grid.rows(block)).collect(),
                 layers: BTreeMap::new(),
             }));
         }
         let mut layers = BTreeMap::new();
         let mut rows = None;
         // Every layer's stream has the same cell blocks (same selection, same grid).
-        for (stream, layer) in streams.iter_mut().zip(&self.layers) {
+        for (stream, layer) in streams.iter_mut().zip(&self.source.layers) {
             let selected = match stream.next()? {
                 Ok(selected) => selected,
                 Err(error) => return Some(Err(error)),

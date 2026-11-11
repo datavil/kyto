@@ -3,13 +3,20 @@
 //!
 //! Does: walk from the output's node down to the scan, keep what the stream runs
 //! today (the scan's layers, `with_default_layer`, per-cell `normalize_total`/`log1p`
-//! maps, alone or fused), and refuse the rest with `KY-E601` naming the task that adds
-//! it, before anything is read. [`Pipeline::run`] opens the scan's layers and starts
-//! the stream ([`BlockStream`]) on a thread pool of exactly the threads asked for
+//! maps, alone or fused, and the cross-cell nodes of task 5.4: a median
+//! `normalize_total`, alone or first in a fused pass, and `highly_variable_genes`
+//! without batches), and refuse the rest with `KY-E601` naming the task that adds it,
+//! before anything is read. [`Pipeline::run`] opens the scan's layers once, runs every
+//! cross-cell node's statistics passes in plan order (each pass streams the node's
+//! input again from the scan, through the stages below it; exactly the passes the
+//! physical plan gives the node), then starts the output's stream ([`BlockStream`],
+//! carrying the [`Statistics`]) on a thread pool of exactly the threads asked for
 //! ([`ExecuteOptions`], R7), with the plan's `blocks_in_flight` blocks read and
-//! computed at once.
-//! Does not: filters, gene selections, `take_cells`, computed columns, cross-cell
-//! nodes, sinks (see the error each one gives), or memory limits (5.5).
+//! computed at once. A cross-cell node without an apply pass (HVG) leaves the blocks as
+//! they are. The output's stream reads the store only when the output reads a layer
+//! (4.6's final pass); otherwise it streams the cells' rows alone.
+//! Does not: filters, gene selections, `take_cells`, computed columns, `scale`, `pca`,
+//! HVG batches, sinks (see the error each one gives), or memory limits (5.5).
 
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
@@ -17,15 +24,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kyto_error::KytoError;
-use kyto_plan::{
-    CellScope, CrossCellOp, LogicalNode, Member, Members, Operation, PhysicalPlan, Plan,
-};
+use kyto_plan::{CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan};
 use kyto_store::{LayerReader, TileGrid};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::ReadableStorageTraits;
 
-use crate::block_stream::BlockStream;
+use crate::block_stream::{BlockStream, StreamSource};
+use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
+use crate::statistics::Statistics;
 
 /// How a pipeline runs, apart from the plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +49,15 @@ impl ExecuteOptions {
     }
 }
 
+/// One step of a lowered pipeline, from the scan up.
+#[derive(Debug, Clone)]
+pub(crate) enum Stage {
+    /// Per-cell maps, run on every block as it streams by.
+    Maps(ElementwiseMaps),
+    /// A cross-cell node: statistics passes first.
+    CrossCell(CrossCellStage),
+}
+
 /// One output of a physical plan, lowered to a scan and a chain of streamed operators.
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -49,7 +65,7 @@ pub struct Pipeline {
     pub(crate) grid: TileGrid,
     /// The layers the scan reads.
     pub(crate) layers: Vec<String>,
-    pub(crate) operators: Vec<ElementwiseMaps>,
+    pub(crate) stages: Vec<Stage>,
     /// The layers the output reads; the stream drops the others at its end.
     pub(crate) output_layers: BTreeSet<String>,
     pub(crate) blocks_in_flight: NonZeroUsize,
@@ -76,27 +92,37 @@ impl Pipeline {
             });
         };
         let nodes = optimized.nodes();
-        let mut operators = Vec::new();
+        let executions = plan.executions();
+        let mut stages = Vec::new();
         let mut next = Some(output_entry.node());
         let mut scan = None;
         while let Some(index) = next {
             let node = &nodes[index];
+            let passes = executions[index].statistics_passes();
             match node.operation() {
                 Operation::Scan { plan, reads } => {
                     scan = Some((Arc::clone(plan), layer_names(reads).collect()));
                 }
                 Operation::Fused { maps, writes } => {
-                    if maps
-                        .first()
-                        .is_some_and(|first| first.cell_scope() == CellScope::CrossCell)
-                    {
-                        return Err(not_yet("normalize_total(target_sum=None)", "5.4"));
+                    if starts_with_median(maps) {
+                        stages.push(Stage::CrossCell(CrossCellStage::new(
+                            index,
+                            passes,
+                            CrossCellKind::MedianNormalize {
+                                maps: maps.clone(),
+                                keep: Some(writes.clone()),
+                            },
+                        )));
+                    } else {
+                        stages.push(Stage::Maps(ElementwiseMaps::new(
+                            maps.clone(),
+                            Some(writes),
+                        )));
                     }
-                    operators.push(ElementwiseMaps::new(maps.clone(), Some(writes)));
                 }
                 Operation::Node(logical) => {
-                    if let Some(operator) = lower_node(logical)? {
-                        operators.push(operator);
+                    if let Some(stage) = lower_node(logical, index, passes)? {
+                        stages.push(stage);
                     }
                 }
             }
@@ -106,7 +132,7 @@ impl Pipeline {
         let Some((scan, layers)) = scan else {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
-        operators.reverse();
+        stages.reverse();
         let root = scan.root();
         let schema = root.schema();
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
@@ -126,7 +152,7 @@ impl Pipeline {
             store: root.source().to_owned(),
             grid,
             layers,
-            operators,
+            stages,
             output_layers,
             blocks_in_flight,
         })
@@ -163,10 +189,12 @@ impl Pipeline {
     }
 
     /// Run on the store in `storage` (the scan's store, for example a remote one).
-    /// Opens every layer the scan reads before it returns, then streams in a thread of
-    /// its own (see [`BlockStream`]).
+    /// Opens every layer the scan reads, runs the statistics passes of the cross-cell
+    /// nodes (blocking: each streams the store once), then returns the output's stream,
+    /// which runs in a thread of its own (see [`BlockStream`]).
     ///
     /// # Errors
+    /// - Any error a statistics pass's stream gives (as the output's stream would).
     /// - `KY-E116`, `KY-E115`, `KY-E109`, `KY-E107` or `KY-E110` if a layer cannot be
     ///   opened ([`LayerReader::open`]).
     /// - `KY-E502` if the threads cannot be started.
@@ -178,35 +206,133 @@ impl Pipeline {
     where
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
     {
-        let readers = self
-            .layers
-            .iter()
-            .map(|layer| LayerReader::open(Arc::clone(&storage), &self.store, layer, self.grid))
-            .collect::<Result<Vec<_>, _>>()?;
-        BlockStream::start(self, readers, options.threads)
+        let readers = Arc::new(
+            self.layers
+                .iter()
+                .map(|layer| LayerReader::open(Arc::clone(&storage), &self.store, layer, self.grid))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(options.threads.get())
+            .thread_name(|index| format!("kyto-exec-{index}"))
+            .build()
+            .map_err(|error| KytoError::ThreadStart {
+                threads: options.threads.get() as u64,
+                problem: error.to_string(),
+            })?;
+        let thread_pool = Arc::new(thread_pool);
+        let source = |readers: Arc<Vec<LayerReader<S>>>,
+                      operators: &[ElementwiseMaps],
+                      output_layers: BTreeSet<String>| {
+            let layers = if readers.is_empty() {
+                Vec::new()
+            } else {
+                self.layers.clone()
+            };
+            StreamSource {
+                readers,
+                layers,
+                grid: self.grid,
+                operators: operators.to_vec(),
+                output_layers,
+                window: self.blocks_in_flight,
+                store: self.store.clone(),
+            }
+        };
+
+        // The stages below each cross-cell node run as maps in its statistics passes.
+        let mut operators = Vec::new();
+        let mut statistics = Statistics::default();
+        let n_genes = usize::try_from(self.grid.n_genes()).unwrap_or(usize::MAX);
+        for stage in &self.stages {
+            let cross_cell = match stage {
+                Stage::Maps(maps) => {
+                    operators.push(maps.clone());
+                    continue;
+                }
+                Stage::CrossCell(cross_cell) => cross_cell,
+            };
+            let mut accumulator = cross_cell.accumulator(n_genes);
+            let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
+            for pass in 0..cross_cell.passes {
+                let mut stream = BlockStream::start(
+                    source(Arc::clone(&readers), &operators, input.clone()),
+                    Arc::clone(&thread_pool),
+                    Statistics::default(),
+                )?;
+                while let Some(block) = stream.next() {
+                    let block = block?;
+                    let layer = block.layers.get(cross_cell.input_layer()).ok_or_else(|| {
+                        KytoError::MissingMember {
+                            kind: "layer".to_owned(),
+                            name: cross_cell.input_layer().to_owned(),
+                            store: self.store.clone(),
+                        }
+                    })?;
+                    accumulator.fold(pass, layer)?;
+                    stream.recycle(block);
+                }
+            }
+            let (node_statistics, apply) = cross_cell.finish(accumulator);
+            statistics.nodes.insert(cross_cell.node, node_statistics);
+            operators.extend(apply);
+        }
+
+        // The output's stream reads the store only for the layers it outputs; without
+        // any, it streams the cells' rows, with nothing to map.
+        if self.output_layers.is_empty() {
+            operators.clear();
+        }
+        let readers = if self.output_layers.is_empty() {
+            Arc::new(Vec::new())
+        } else {
+            readers
+        };
+        BlockStream::start(
+            source(readers, &operators, self.output_layers.clone()),
+            thread_pool,
+            statistics,
+        )
     }
 }
 
-/// The operator of a logical node, `None` for one with no work at run time, or
-/// `KY-E601` for one the executor does not run yet.
-fn lower_node(plan: &Plan) -> Result<Option<ElementwiseMaps>, KytoError> {
+/// The stage of logical node `index` (with the plan's statistics `passes`), `None`
+/// for one with no work at run time, or `KY-E601` for one the executor does not run
+/// yet.
+fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, KytoError> {
     match plan {
         Plan::WithDefaultLayer(_) => Ok(None),
         Plan::MapElementwise(node) => {
-            let map = node.params();
-            if map.cell_scope() == CellScope::CrossCell {
-                return Err(not_yet("normalize_total(target_sum=None)", "5.4"));
+            let maps = vec![node.params().clone()];
+            if starts_with_median(&maps) {
+                let kind = CrossCellKind::MedianNormalize { maps, keep: None };
+                return Ok(Some(Stage::CrossCell(CrossCellStage::new(
+                    index, passes, kind,
+                ))));
             }
-            Ok(Some(ElementwiseMaps::new(vec![map.clone()], None)))
+            Ok(Some(Stage::Maps(ElementwiseMaps::new(maps, None))))
         }
-        Plan::CrossCell(node) => {
-            let task = match node.params().op() {
-                CrossCellOp::Scale { .. } => "6.4",
-                CrossCellOp::HighlyVariableGenes { .. } => "6.3",
-                CrossCellOp::Pca { .. } => "6.5",
-            };
-            Err(not_yet(plan.node().method(), task))
-        }
+        Plan::CrossCell(node) => match node.params().op() {
+            CrossCellOp::HighlyVariableGenes {
+                layer,
+                flavor,
+                batch_key: None,
+                ..
+            } => {
+                let kind = CrossCellKind::HighlyVariableGenes {
+                    layer: layer.clone(),
+                    flavor: *flavor,
+                };
+                Ok(Some(Stage::CrossCell(CrossCellStage::new(
+                    index, passes, kind,
+                ))))
+            }
+            CrossCellOp::HighlyVariableGenes { .. } => {
+                Err(not_yet("highly_variable_genes(batch_key=...)", "6.3"))
+            }
+            CrossCellOp::Scale { .. } => Err(not_yet(plan.node().method(), "6.4")),
+            CrossCellOp::Pca { .. } => Err(not_yet(plan.node().method(), "6.5")),
+        },
         Plan::Neighbors(_) => Err(not_yet(plan.node().method(), "6.6")),
         Plan::Cluster(_) => Err(not_yet(plan.node().method(), "6.8")),
         // Filters, selections, computed columns and sinks come with the terminals that

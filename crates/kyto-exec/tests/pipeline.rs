@@ -21,7 +21,8 @@ use std::time::Duration;
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{CellValues, ExecuteOptions, Pipeline, PipelineBlock};
 use kyto_plan::{
-    Member, Operation, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan,
+    HvgFlavor, Member, Operation, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan,
+    physical_plan,
 };
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
@@ -293,13 +294,17 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let base = scan(&store);
-    let median = base.normalize_total(None, Some("counts"), "norm").unwrap();
+    let scale = base.scale(Some("counts"), "scaled", true, None).unwrap();
+    let batched = base
+        .highly_variable_genes(Some("counts"), HvgFlavor::SeuratV3, None, Some("cell_id"))
+        .unwrap();
     let selected = base
         .select_genes(["G1".to_owned(), "G0".to_owned()])
         .unwrap();
     let pca = base.pca(Some("counts"), "X_pca", 2, 0).unwrap();
     for (plan, method, task) in [
-        (&median, "normalize_total(target_sum=None)", "5.4"),
+        (&scale, "scale", "6.4"),
+        (&batched, "batch_key", "6.3"),
         (&selected, "select_genes", "7.2"),
         (&pca, "pca", "6.5"),
     ] {

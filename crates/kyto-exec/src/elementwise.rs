@@ -10,8 +10,10 @@
 //! total is 0 stays as it is, as scanpy's `counts += counts == 0`), `log1p` is kyto's
 //! [`crate::log1p`] ([`Kernels::log1p`]); both keep zeros at zero, so a block keeps its
 //! structure.
-//! Does not: the median `normalize_total` (cross-cell, a statistics pass first: 5.4), or
-//! scanpy's other parameters and its exact float steps (6.2 owns parity).
+//! A median `normalize_total` runs here once its statistics pass found the median
+//! ([`ElementwiseMaps::with_median`], task 5.4).
+//! Does not: find the median (`cross_cell.rs`), or scanpy's other parameters and its
+//! exact float steps (6.2 owns parity).
 
 use std::collections::BTreeSet;
 
@@ -28,6 +30,9 @@ use crate::pipeline_block::PipelineBlock;
 pub(crate) struct ElementwiseMaps {
     maps: Vec<MapElementwise>,
     drop: Vec<String>,
+    /// The target of a median `normalize_total`, once its statistics pass found it
+    /// (task 5.4).
+    median: Option<f64>,
 }
 
 impl ElementwiseMaps {
@@ -44,7 +49,17 @@ impl ElementwiseMaps {
                 .into_iter()
                 .collect(),
         };
-        Self { maps, drop }
+        Self {
+            maps,
+            drop,
+            median: None,
+        }
+    }
+
+    /// These maps with `median` as the target of a median `normalize_total`.
+    pub(crate) fn with_median(mut self, median: f64) -> Self {
+        self.median = Some(median);
+        self
     }
 
     /// Run the maps over `block`, then drop what the pass does not keep.
@@ -67,7 +82,15 @@ impl ElementwiseMaps {
                     name: map.layer().to_owned(),
                     store: store.to_owned(),
                 })?;
-            let output = map_block(map.op(), input, pool)?;
+            let op = match map.op() {
+                ElementwiseOp::NormalizeTotal { target_sum: None } => {
+                    ElementwiseOp::NormalizeTotal {
+                        target_sum: self.median,
+                    }
+                }
+                op => op,
+            };
+            let output = map_block(op, input, pool)?;
             if let Some(replaced) = block.layers.insert(map.output_layer().to_owned(), output) {
                 pool.recycle(replaced);
             }
@@ -117,7 +140,7 @@ fn map_values<T: KernelValue>(op: ElementwiseOp, indptr: &[u64], values: &[T], o
             kernels.row_sums(indptr, values, &mut factors);
             for total in &mut factors {
                 // A zero total leaves the cell as it is (scanpy: counts += counts == 0).
-                // A median target never reaches here (cross-cell, rejected when lowered).
+                // A median target is given by its statistics pass first (task 5.4).
                 *total = match target_sum {
                     Some(target_sum) if *total != 0.0 => target_sum / *total,
                     _ => 1.0,
