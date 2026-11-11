@@ -339,20 +339,19 @@ impl Step {
     }
 
     /// `input` extended by this step, through its builder (every check runs again).
-    /// `node` names the node in `KY-E217` messages.
-    fn apply(self, input: &Arc<Plan>, node: &str) -> Result<Arc<Plan>, KytoError> {
-        match self {
-            Self::Scan { .. } => Err(KytoError::InvalidPlanJson {
-                location: node.to_owned(),
-                problem: "only the first node is a scan".to_owned(),
-            }),
+    /// `node` names the node in `KY-E217` messages. An error is located within the
+    /// step (`/predicate` for its expression, empty for the builder's own errors).
+    fn apply(self, input: &Arc<Plan>, node: &str) -> Result<Arc<Plan>, Located> {
+        let built = match self {
+            Self::Scan { .. } => {
+                return Err(Located::new(
+                    "/method",
+                    invalid(node, "only the first node is a scan"),
+                ));
+            }
             Self::WithDefaultLayer { layer } => input.with_default_layer(&layer),
-            Self::FilterCells { predicate } => {
-                input.filter_cells(&predicate.to_expr(&format!("{node}, predicate"))?)
-            }
-            Self::FilterGenes { predicate } => {
-                input.filter_genes(&predicate.to_expr(&format!("{node}, predicate"))?)
-            }
+            Self::FilterCells { predicate: text } => input.filter_cells(&predicate(&text, node)?),
+            Self::FilterGenes { predicate: text } => input.filter_genes(&predicate(&text, node)?),
             Self::SelectGenes { gene_ids } => input.select_genes(gene_ids),
             Self::TakeCells { cell_ids } => input.take_cells(cell_ids),
             Self::NormalizeTotal {
@@ -430,8 +429,20 @@ impl Step {
             }),
             Self::SinkZarr { path } => input.sink(Sink::Zarr { path }),
             Self::SinkH5ad { path } => input.sink(Sink::H5ad { path }),
-        }
+        };
+        Located::at("", built)
     }
+}
+
+/// The expression of a filter step, an error located at `/predicate`.
+fn predicate<A: kyto_core::ExprAxis>(
+    predicate: &ExprJson,
+    node: &str,
+) -> Result<kyto_core::Expr<A>, Located> {
+    let context = format!("{node}, predicate");
+    predicate
+        .to_expr(&context)
+        .map_err(|error| Located::in_expression("/predicate", &context, error))
 }
 
 fn columns_json<A: kyto_core::ExprAxis>(
@@ -449,16 +460,88 @@ fn columns_json<A: kyto_core::ExprAxis>(
 fn columns_from_json<A: kyto_core::ExprAxis>(
     columns: Vec<ColumnJson>,
     node: &str,
-) -> Result<Vec<(String, kyto_core::Expr<A>)>, KytoError> {
+) -> Result<Vec<(String, kyto_core::Expr<A>)>, Located> {
     columns
         .into_iter()
-        .map(|column| {
-            let expr = column
-                .expr
-                .to_expr(&format!("{node}, column '{}'", column.name))?;
+        .enumerate()
+        .map(|(index, column)| {
+            let context = format!("{node}, column '{}'", column.name);
+            let expr = column.expr.to_expr(&context).map_err(|error| {
+                Located::in_expression(&format!("/columns/{index}/expr"), &context, error)
+            })?;
             Ok((column.name, expr))
         })
         .collect()
+}
+
+/// An error reading a plan JSON and where it is: a JSON Pointer (RFC 6901) into the
+/// text, the empty pointer for the whole text (task 8.4's diagnostics carry it;
+/// `from_json` drops it).
+pub(crate) struct Located {
+    pub(crate) pointer: String,
+    /// Boxed: a `Result` carrying it stays small.
+    pub(crate) error: Box<KytoError>,
+}
+
+impl Located {
+    fn new(pointer: impl Into<String>, error: KytoError) -> Self {
+        Self {
+            pointer: pointer.into(),
+            error: Box::new(error),
+        }
+    }
+
+    /// `result` with its error located at `pointer`.
+    fn at<T>(pointer: impl Into<String>, result: Result<T, KytoError>) -> Result<T, Self> {
+        result.map_err(|error| Self::new(pointer, error))
+    }
+
+    /// An error reading the expression at `pointer` (written in messages as
+    /// `context`), located at its entry when the error names one: `ExprJson` writes
+    /// `{context} entry 3`, and `{context} entry 3, genes entry 1` for an entry of a QC
+    /// metric's gene set (`/3/genes/1`).
+    fn in_expression(pointer: &str, context: &str, error: KytoError) -> Self {
+        let mut pointer = pointer.to_owned();
+        if let KytoError::InvalidPlanJson { location, .. } = &error
+            && let Some(mut rest) = location.strip_prefix(context)
+        {
+            let mut entries = String::new();
+            let mut first = true;
+            loop {
+                let marker = if first { " entry " } else { ", genes entry " };
+                let Some(after) = rest.strip_prefix(marker) else {
+                    break;
+                };
+                let digits =
+                    after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+                if digits == 0 {
+                    break;
+                }
+                if !first {
+                    entries.push_str("/genes");
+                }
+                entries.push('/');
+                entries.push_str(&after[..digits]);
+                rest = &after[digits..];
+                first = false;
+            }
+            if rest.is_empty() {
+                pointer.push_str(&entries);
+            }
+        }
+        Self::new(pointer, error)
+    }
+
+    /// `KY-E217` for a `serde_json` error, for the whole text.
+    pub(crate) fn syntax(error: &serde_json::Error) -> Self {
+        Self::new("", syntax(error))
+    }
+
+    /// This error, located under `prefix`.
+    fn under(mut self, prefix: &str) -> Self {
+        self.pointer.insert_str(0, prefix);
+        self
+    }
 }
 
 /// `KY-E217` at `location`.
@@ -483,41 +566,54 @@ fn syntax(error: &serde_json::Error) -> KytoError {
 }
 
 /// The scan of a `Step::Scan`, its gene IDs and symbols checked against its schema.
+/// Errors are located within the step.
 fn scan(
     source: String,
     schema: AtlasSchema,
     gene_ids: Vec<String>,
     symbols: Option<Vec<Option<String>>>,
-) -> Result<Arc<Plan>, KytoError> {
+) -> Result<Arc<Plan>, Located> {
     let location = "node 0 (scan)";
-    if let Some(problem) = schema_problem(&schema) {
-        return Err(invalid(location, problem));
+    if let Some((pointer, problem)) = schema_problem(&schema) {
+        return Err(Located::new(
+            format!("/schema{pointer}"),
+            invalid(location, problem),
+        ));
     }
     let n_genes = gene_ids.len() as u64;
     if n_genes != schema.n_genes {
-        return Err(invalid(
-            location,
-            format!(
-                "it lists {n_genes} gene IDs, and its schema has n_genes = {}",
-                schema.n_genes
+        return Err(Located::new(
+            "/gene_ids",
+            invalid(
+                location,
+                format!(
+                    "it lists {n_genes} gene IDs, and its schema has n_genes = {}",
+                    schema.n_genes
+                ),
             ),
         ));
     }
     if let Some(symbols) = &symbols
         && symbols.len() != gene_ids.len()
     {
-        return Err(invalid(
-            location,
-            format!(
-                "it lists {} symbols for {} genes; write one per gene (null for none)",
-                symbols.len(),
-                gene_ids.len()
+        return Err(Located::new(
+            "/symbols",
+            invalid(
+                location,
+                format!(
+                    "it lists {} symbols for {} genes; write one per gene (null for none)",
+                    symbols.len(),
+                    gene_ids.len()
+                ),
             ),
         ));
     }
     let mut ids = GeneIds::new(gene_ids);
     if ids.len() as u64 != n_genes {
-        return Err(invalid(location, "its gene IDs are not unique"));
+        return Err(Located::new(
+            "/gene_ids",
+            invalid(location, "its gene IDs are not unique"),
+        ));
     }
     if let Some(symbols) = symbols {
         ids = ids.with_symbols(symbols);
@@ -528,24 +624,30 @@ fn scan(
 /// What makes `schema` one no store has: the checks the store reader makes beyond
 /// serde (format v0 stores no modalities, block sizes are positive), and names that
 /// repeat within a member group or a table (the writers refuse them; a plan built on
-/// them would resolve a name to whichever came first).
-fn schema_problem(schema: &AtlasSchema) -> Option<String> {
+/// them would resolve a name to whichever came first). With the problem, where it is
+/// within the schema (a JSON Pointer).
+fn schema_problem(schema: &AtlasSchema) -> Option<(String, String)> {
     if !schema.modalities.is_empty() {
-        return Some("its schema lists modalities, which format 0.1 stores do not have".to_owned());
+        return Some((
+            "/modalities".to_owned(),
+            "its schema lists modalities, which format 0.1 stores do not have".to_owned(),
+        ));
     }
     for (name, size) in [
         ("cell_block_size", schema.tiling.cell_block_size),
         ("gene_block_size", schema.tiling.gene_block_size),
     ] {
         if size == 0 {
-            return Some(format!(
-                "its schema has {name} = 0; block sizes are positive"
+            return Some((
+                format!("/tiling/{name}"),
+                format!("its schema has {name} = 0; block sizes are positive"),
             ));
         }
     }
-    let groups: [(&str, Vec<&str>); 5] = [
+    let groups: [(&str, &str, Vec<&str>); 5] = [
         (
             "layer",
+            "/layers",
             schema
                 .layers
                 .iter()
@@ -554,6 +656,7 @@ fn schema_problem(schema: &AtlasSchema) -> Option<String> {
         ),
         (
             "embedding",
+            "/embeddings",
             schema
                 .embeddings
                 .iter()
@@ -562,6 +665,7 @@ fn schema_problem(schema: &AtlasSchema) -> Option<String> {
         ),
         (
             "graph",
+            "/graphs",
             schema
                 .graphs
                 .iter()
@@ -570,6 +674,7 @@ fn schema_problem(schema: &AtlasSchema) -> Option<String> {
         ),
         (
             "cell column",
+            "/cells/columns",
             schema
                 .cells
                 .columns
@@ -579,6 +684,7 @@ fn schema_problem(schema: &AtlasSchema) -> Option<String> {
         ),
         (
             "gene column",
+            "/genes/columns",
             schema
                 .genes
                 .columns
@@ -587,10 +693,17 @@ fn schema_problem(schema: &AtlasSchema) -> Option<String> {
                 .collect(),
         ),
     ];
-    for (kind, names) in groups {
+    for (kind, pointer, names) in groups {
         let mut seen = std::collections::HashSet::new();
-        if let Some(name) = names.into_iter().find(|name| !seen.insert(*name)) {
-            return Some(format!("its schema lists the {kind} '{name}' twice"));
+        if let Some((index, name)) = names
+            .into_iter()
+            .enumerate()
+            .find(|(_, name)| !seen.insert(*name))
+        {
+            return Some((
+                format!("{pointer}/{index}/name"),
+                format!("its schema lists the {kind} '{name}' twice"),
+            ));
         }
     }
     None
@@ -633,77 +746,131 @@ impl Plan {
     /// expression); and any error a step's builder raises for its arguments (such as
     /// `KY-E109`, `KY-E205` or `KY-E215`), as when the plan was built.
     pub fn from_json(text: &str) -> Result<Arc<Self>, KytoError> {
-        let header: Header = serde_json::from_str(text).map_err(|error| syntax(&error))?;
-        match header.version.as_ref().map(serde_json::Value::as_u64) {
-            Some(Some(PLAN_JSON_VERSION)) => {}
-            Some(Some(found)) => {
-                return Err(KytoError::PlanJsonVersion {
+        read_plan_json(text).map_err(|located| *located.error)
+    }
+}
+
+/// The plan `text` describes ([`Plan::from_json`]), or the first error and where it is.
+pub(crate) fn read_plan_json(text: &str) -> Result<Arc<Plan>, Located> {
+    check_header(text)?;
+    let json: PlanJson =
+        serde_json::from_str(text).map_err(|error| Located::new("", syntax(&error)))?;
+    replay(json)
+}
+
+/// `KY-E218` for another version, `KY-E217` for a missing or malformed `version` or
+/// `format`, checked before anything else in the text; `KY-E217` for text that is not
+/// a JSON object.
+pub(crate) fn check_header(text: &str) -> Result<(), Located> {
+    let header: Header =
+        serde_json::from_str(text).map_err(|error| Located::new("", syntax(&error)))?;
+    match header.version.as_ref().map(serde_json::Value::as_u64) {
+        Some(Some(PLAN_JSON_VERSION)) => {}
+        Some(Some(found)) => {
+            return Err(Located::new(
+                "/version",
+                KytoError::PlanJsonVersion {
                     found,
                     supported: PLAN_JSON_VERSION,
-                });
-            }
-            Some(None) => {
-                return Err(invalid(
+                },
+            ));
+        }
+        Some(None) => {
+            return Err(Located::new(
+                "/version",
+                invalid(
                     "key 'version'",
                     format!(
                         "it is {}, and a plan JSON version is a non-negative integer",
                         header.version.unwrap_or_default()
                     ),
-                ));
-            }
-            None => return Err(invalid("key 'version'", "it is missing")),
-        }
-        if header.format.as_ref().and_then(serde_json::Value::as_str) != Some(PLAN_JSON_FORMAT) {
-            let found = header
-                .format
-                .map_or_else(|| "missing".to_owned(), |format| format!("{format}"));
-            return Err(invalid(
-                "key 'format'",
-                format!("it is {found}, and a plan JSON has \"{PLAN_JSON_FORMAT}\""),
+                ),
             ));
         }
-        let json: PlanJson = serde_json::from_str(text).map_err(|error| syntax(&error))?;
-        let mut plan: Option<Arc<Self>> = None;
-        for (position, node) in json.nodes.into_iter().enumerate() {
-            let location = format!("node {position} ({})", node.step.method());
-            let id = position as u64;
-            if node.id != NodeId(id) {
-                return Err(invalid(
+        None => {
+            return Err(Located::new(
+                "/version",
+                invalid("key 'version'", "it is missing"),
+            ));
+        }
+    }
+    if header.format.as_ref().and_then(serde_json::Value::as_str) != Some(PLAN_JSON_FORMAT) {
+        let found = header
+            .format
+            .map_or_else(|| "missing".to_owned(), |format| format!("{format}"));
+        return Err(Located::new(
+            "/format",
+            invalid(
+                "key 'format'",
+                format!("it is {found}, and a plan JSON has \"{PLAN_JSON_FORMAT}\""),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The plan of `json`, each step replayed through its builder.
+fn replay(json: PlanJson) -> Result<Arc<Plan>, Located> {
+    let mut plan: Option<Arc<Plan>> = None;
+    for (position, node) in json.nodes.into_iter().enumerate() {
+        let location = format!("node {position} ({})", node.step.method());
+        let pointer = format!("/nodes/{position}");
+        let id = position as u64;
+        if node.id != NodeId(id) {
+            return Err(Located::new(
+                format!("{pointer}/id"),
+                invalid(
                     location,
                     format!(
                         "its id is {}; nodes are listed from the scan up, node i has id i",
                         node.id
                     ),
-                ));
-            }
-            let expected_input = id.checked_sub(1).map(NodeId);
-            if node.input != expected_input {
-                let expected =
-                    expected_input.map_or_else(|| "null".to_owned(), |id| id.to_string());
-                let found = node
-                    .input
-                    .map_or_else(|| "null".to_owned(), |id| id.to_string());
-                return Err(invalid(
+                ),
+            ));
+        }
+        let expected_input = id.checked_sub(1).map(NodeId);
+        if node.input != expected_input {
+            let expected = expected_input.map_or_else(|| "null".to_owned(), |id| id.to_string());
+            let found = node
+                .input
+                .map_or_else(|| "null".to_owned(), |id| id.to_string());
+            return Err(Located::new(
+                format!("{pointer}/input"),
+                invalid(
                     location,
                     format!(
                         "its input is {found}, and this version reads chains only: the input of node i is node i - 1 ({expected})"
                     ),
+                ),
+            ));
+        }
+        let step_pointer = format!("{pointer}/step");
+        plan = Some(match (plan, node.step) {
+            (
+                None,
+                Step::Scan {
+                    source,
+                    schema,
+                    gene_ids,
+                    symbols,
+                },
+            ) => scan(source, schema, gene_ids, symbols)
+                .map_err(|located| located.under(&step_pointer))?,
+            (None, _) => {
+                return Err(Located::new(
+                    format!("{step_pointer}/method"),
+                    invalid(location, "the first node of a plan is a scan"),
                 ));
             }
-            plan = Some(match (plan, node.step) {
-                (
-                    None,
-                    Step::Scan {
-                        source,
-                        schema,
-                        gene_ids,
-                        symbols,
-                    },
-                ) => scan(source, schema, gene_ids, symbols)?,
-                (None, _) => return Err(invalid(location, "the first node of a plan is a scan")),
-                (Some(input), step) => step.apply(&input, &location)?,
-            });
-        }
-        plan.ok_or_else(|| invalid("key 'nodes'", "a plan has at least one node, its scan"))
+            (Some(input), step) => step
+                .apply(&input, &location)
+                .map_err(|located| located.under(&step_pointer))?,
+        });
     }
+    plan.ok_or_else(|| {
+        Located::new(
+            "/nodes",
+            invalid("key 'nodes'", "a plan has at least one node, its scan"),
+        )
+    })
 }

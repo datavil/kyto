@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:kyto:plan-json:1",
+  "title": "kyto plan JSON, version 1",
+  "description": "A kyto plan as Atlas.to_json() writes it: its nodes from the scan up, each with its stable ID, its input's ID and its step (the plan method that builds it and that method's arguments, names resolved in full). This schema checks the shape only; kyto.validate_plan also replays every step through its plan method, which checks names, layers, kinds and values against the plan built so far.",
+  "type": "object",
+  "required": ["format", "version", "nodes"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": "kyto-plan"},
+    "version": {"const": 1, "description": "The plan JSON version. Another version is KY-E218."},
+    "nodes": {
+      "description": "The nodes from the scan up: node i has id i and input i - 1 (null for the scan).",
+      "type": "array",
+      "minItems": 1,
+      "prefixItems": [{"$ref": "#/$defs/scan_node"}],
+      "items": {"$ref": "#/$defs/later_node"}
+    }
+  },
+  "$defs": {
+    "uint": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positive": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "int64": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+    "uint_or_null": {"type": ["integer", "null"], "minimum": 0, "maximum": 18446744073709551615},
+    "string_or_null": {"type": ["string", "null"]},
+    "number_or_null": {"type": ["number", "null"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+
+    "scan_node": {
+      "description": "The first node: a scan.",
+      "allOf": [
+        {"$ref": "#/$defs/node"},
+        {"properties": {"step": {"properties": {"method": {"const": "scan", "description": "The first node of a plan is a scan."}}}}}
+      ]
+    },
+    "later_node": {
+      "description": "Every node after the first: any step but a scan.",
+      "allOf": [
+        {"$ref": "#/$defs/node"},
+        {"properties": {"step": {"properties": {"method": {
+          "description": "Only the first node of a plan is a scan.",
+          "enum": [
+            "with_default_layer", "filter_cells", "filter_genes", "select_genes", "take_cells",
+            "normalize_total", "log1p", "scale", "highly_variable_genes", "pca", "with_cells",
+            "with_genes", "neighbors", "leiden", "louvain", "sink_zarr", "sink_h5ad"
+          ]
+        }}}}}
+      ]
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "step"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/uint", "description": "The stable node ID: the position from the scan."},
+        "input": {"$ref": "#/$defs/uint_or_null", "description": "The input's ID; null for the scan."},
+        "step": {"$ref": "#/$defs/step"}
+      }
+    },
+
+    "step": {
+      "description": "The plan method that builds the node (method: a scan first, any other method after) and its arguments as stored.",
+      "type": "object",
+      "required": ["method"],
+      "allOf": [
+        {"if": {"required": ["method"], "properties": {"method": {"const": "scan"}}}, "then": {"$ref": "#/$defs/scan"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "with_default_layer"}}}, "then": {"$ref": "#/$defs/with_default_layer"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "filter_cells"}}}, "then": {"$ref": "#/$defs/filter"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "filter_genes"}}}, "then": {"$ref": "#/$defs/filter"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "select_genes"}}}, "then": {"$ref": "#/$defs/select_genes"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "take_cells"}}}, "then": {"$ref": "#/$defs/take_cells"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "normalize_total"}}}, "then": {"$ref": "#/$defs/normalize_total"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "log1p"}}}, "then": {"$ref": "#/$defs/log1p"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "scale"}}}, "then": {"$ref": "#/$defs/scale"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "highly_variable_genes"}}}, "then": {"$ref": "#/$defs/highly_variable_genes"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "pca"}}}, "then": {"$ref": "#/$defs/pca"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "with_cells"}}}, "then": {"$ref": "#/$defs/with_columns"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "with_genes"}}}, "then": {"$ref": "#/$defs/with_columns"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "neighbors"}}}, "then": {"$ref": "#/$defs/neighbors"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "leiden"}}}, "then": {"$ref": "#/$defs/cluster"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "louvain"}}}, "then": {"$ref": "#/$defs/cluster"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "sink_zarr"}}}, "then": {"$ref": "#/$defs/sink"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "sink_h5ad"}}}, "then": {"$ref": "#/$defs/sink"}}
+      ]
+    },
+
+    "scan": {
+      "description": "scan: the store snapshot the plan was built on (no store is read).",
+      "required": ["source", "schema", "gene_ids"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "source": {"type": "string", "description": "The store location."},
+        "schema": {"$ref": "#/$defs/atlas_schema"},
+        "gene_ids": {"$ref": "#/$defs/strings", "description": "Every gene ID, in store order, unique; as many as schema.n_genes."},
+        "symbols": {
+          "description": "One symbol per gene (null for none), or null when the store has no symbols.",
+          "type": ["array", "null"],
+          "items": {"$ref": "#/$defs/string_or_null"}
+        }
+      }
+    },
+    "with_default_layer": {
+      "required": ["layer"],
+      "additionalProperties": false,
+      "properties": {"method": true, "layer": {"type": "string"}}
+    },
+    "filter": {
+      "description": "filter_cells (a cell expression) or filter_genes (a gene expression).",
+      "required": ["predicate"],
+      "additionalProperties": false,
+      "properties": {"method": true, "predicate": {"$ref": "#/$defs/expression"}}
+    },
+    "select_genes": {
+      "required": ["gene_ids"],
+      "additionalProperties": false,
+      "properties": {"method": true, "gene_ids": {"$ref": "#/$defs/strings"}}
+    },
+    "take_cells": {
+      "required": ["cell_ids"],
+      "additionalProperties": false,
+      "properties": {"method": true, "cell_ids": {"$ref": "#/$defs/strings"}}
+    },
+    "normalize_total": {
+      "required": ["layer", "into"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "layer": {"type": "string"},
+        "into": {"type": "string"},
+        "target_sum": {"$ref": "#/$defs/number_or_null", "description": "null: the median total over cells."}
+      }
+    },
+    "log1p": {
+      "required": ["layer", "into"],
+      "additionalProperties": false,
+      "properties": {"method": true, "layer": {"type": "string"}, "into": {"type": "string"}}
+    },
+    "scale": {
+      "required": ["layer", "into", "zero_center"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "layer": {"type": "string"},
+        "into": {"type": "string"},
+        "zero_center": {"type": "boolean"},
+        "max_value": {"$ref": "#/$defs/number_or_null"}
+      }
+    },
+    "highly_variable_genes": {
+      "required": ["layer", "flavor"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "layer": {"type": "string"},
+        "flavor": {"enum": ["seurat", "cell_ranger", "seurat_v3"]},
+        "n_top_genes": {"$ref": "#/$defs/uint_or_null"},
+        "batch_key": {"$ref": "#/$defs/string_or_null"}
+      }
+    },
+    "pca": {
+      "required": ["layer", "into", "n_components", "seed"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "layer": {"type": "string"},
+        "into": {"type": "string"},
+        "n_components": {"$ref": "#/$defs/uint"},
+        "seed": {"$ref": "#/$defs/uint"}
+      }
+    },
+    "with_columns": {
+      "description": "with_cells (cell expressions) or with_genes (gene expressions).",
+      "required": ["columns"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "expr"],
+            "additionalProperties": false,
+            "properties": {"name": {"type": "string"}, "expr": {"$ref": "#/$defs/expression"}}
+          }
+        }
+      }
+    },
+    "neighbors": {
+      "required": ["embedding", "n_neighbors", "metric", "search", "seed"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "embedding": {"type": "string"},
+        "n_components": {"$ref": "#/$defs/uint_or_null"},
+        "n_neighbors": {"$ref": "#/$defs/uint"},
+        "metric": {"enum": ["euclidean", "cosine"]},
+        "search": {"enum": ["exact", "approximate"]},
+        "seed": {"$ref": "#/$defs/uint"},
+        "key": {"$ref": "#/$defs/string_or_null"}
+      }
+    },
+    "cluster": {
+      "description": "leiden or louvain.",
+      "required": ["graph", "resolution", "seed", "into"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "graph": {"type": "string"},
+        "resolution": {"type": "number"},
+        "seed": {"$ref": "#/$defs/uint"},
+        "into": {"type": "string"}
+      }
+    },
+    "sink": {
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {"method": true, "path": {"type": "string"}}
+    },
+
+    "expression": {
+      "description": "An expression as a flat list of entries, each operation after its operands (named by their 0-based position), the root last.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/expr_entry"}
+    },
+    "expr_entry": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": {
+          "enum": [
+            "column", "recompute", "gene_expression", "gene_symbol", "cell_profile", "embedding",
+            "feature", "qc", "boolean", "int", "float", "string", "binary", "not", "starts_with",
+            "ends_with", "is_null", "is_not_null"
+          ]
+        }
+      },
+      "allOf": [
+        {"if": {"required": ["op"], "properties": {"op": {"enum": ["column", "recompute", "feature"]}}}, "then": {"$ref": "#/$defs/entry_name"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "gene_expression"}}}, "then": {"$ref": "#/$defs/entry_gene_expression"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "gene_symbol"}}}, "then": {"$ref": "#/$defs/entry_gene_symbol"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "cell_profile"}}}, "then": {"$ref": "#/$defs/entry_cell_profile"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "embedding"}}}, "then": {"$ref": "#/$defs/entry_embedding"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "qc"}}}, "then": {"$ref": "#/$defs/entry_qc"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "boolean"}}}, "then": {"$ref": "#/$defs/entry_boolean"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "int"}}}, "then": {"$ref": "#/$defs/entry_int"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "float"}}}, "then": {"$ref": "#/$defs/entry_float"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "string"}}}, "then": {"$ref": "#/$defs/entry_string"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "binary"}}}, "then": {"$ref": "#/$defs/entry_binary"}},
+        {"if": {"required": ["op"], "properties": {"op": {"enum": ["not", "is_null", "is_not_null"]}}}, "then": {"$ref": "#/$defs/entry_unary"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "starts_with"}}}, "then": {"$ref": "#/$defs/entry_starts_with"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "ends_with"}}}, "then": {"$ref": "#/$defs/entry_ends_with"}}
+      ]
+    },
+    "entry_name": {
+      "description": "column / recompute: a table column; feature: a feature name as written.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {"op": true, "name": {"type": "string"}}
+    },
+    "entry_gene_expression": {
+      "description": "A gene's values in a layer (cell expressions only).",
+      "required": ["gene_id"],
+      "additionalProperties": false,
+      "properties": {"op": true, "layer": {"$ref": "#/$defs/string_or_null"}, "gene_id": {"type": "string"}}
+    },
+    "entry_gene_symbol": {
+      "required": ["symbol"],
+      "additionalProperties": false,
+      "properties": {"op": true, "layer": {"$ref": "#/$defs/string_or_null"}, "symbol": {"type": "string"}}
+    },
+    "entry_cell_profile": {
+      "description": "A cell's values in a layer (gene expressions only).",
+      "required": ["cell_id"],
+      "additionalProperties": false,
+      "properties": {"op": true, "layer": {"$ref": "#/$defs/string_or_null"}, "cell_id": {"type": "string"}}
+    },
+    "entry_embedding": {
+      "required": ["name", "component"],
+      "additionalProperties": false,
+      "properties": {"op": true, "name": {"type": "string"}, "component": {"$ref": "#/$defs/uint"}}
+    },
+    "entry_qc": {
+      "description": "A QC metric (cell expressions only); genes is a gene expression selecting the gene set, null for a metric without one.",
+      "required": ["metric"],
+      "additionalProperties": false,
+      "properties": {
+        "op": true,
+        "metric": {"enum": ["total_counts", "genes_detected", "total_counts_in", "percent_counts_in"]},
+        "layer": {"$ref": "#/$defs/string_or_null"},
+        "genes": {"type": ["array", "null"], "items": {"$ref": "#/$defs/expr_entry"}}
+      }
+    },
+    "entry_boolean": {
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {"op": true, "value": {"type": "boolean"}}
+    },
+    "entry_int": {
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {"op": true, "value": {"$ref": "#/$defs/int64"}}
+    },
+    "entry_float": {
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {
+        "op": true,
+        "value": {
+          "description": "A number, or \"NaN\", \"inf\" or \"-inf\".",
+          "anyOf": [{"type": "number"}, {"enum": ["NaN", "inf", "-inf"]}]
+        }
+      }
+    },
+    "entry_string": {
+      "required": ["value"],
+      "additionalProperties": false,
+      "properties": {"op": true, "value": {"type": "string"}}
+    },
+    "entry_binary": {
+      "required": ["operator", "left", "right"],
+      "additionalProperties": false,
+      "properties": {
+        "op": true,
+        "operator": {"enum": ["==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "&", "|"]},
+        "left": {"$ref": "#/$defs/uint"},
+        "right": {"$ref": "#/$defs/uint"}
+      }
+    },
+    "entry_unary": {
+      "description": "not, is_null, is_not_null: input is the operand's entry.",
+      "required": ["input"],
+      "additionalProperties": false,
+      "properties": {"op": true, "input": {"$ref": "#/$defs/uint"}}
+    },
+    "entry_starts_with": {
+      "required": ["prefix", "input"],
+      "additionalProperties": false,
+      "properties": {"op": true, "prefix": {"type": "string"}, "input": {"$ref": "#/$defs/uint"}}
+    },
+    "entry_ends_with": {
+      "required": ["suffix", "input"],
+      "additionalProperties": false,
+      "properties": {"op": true, "suffix": {"type": "string"}, "input": {"$ref": "#/$defs/uint"}}
+    },
+
+    "atlas_schema": {
+      "description": "The store's schema.json (format.md section 8).",
+      "type": "object",
+      "required": ["n_cells", "n_genes", "tiling", "cells", "genes", "layers", "embeddings", "graphs"],
+      "additionalProperties": false,
+      "properties": {
+        "n_cells": {"$ref": "#/$defs/uint"},
+        "n_genes": {"$ref": "#/$defs/uint"},
+        "tiling": {
+          "type": "object",
+          "required": ["cell_block_size", "gene_block_size"],
+          "additionalProperties": false,
+          "properties": {"cell_block_size": {"$ref": "#/$defs/positive"}, "gene_block_size": {"$ref": "#/$defs/positive"}}
+        },
+        "cells": {"$ref": "#/$defs/table"},
+        "genes": {"$ref": "#/$defs/table"},
+        "layers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "dtype", "nnz"],
+            "additionalProperties": false,
+            "properties": {"name": {"type": "string"}, "dtype": {"enum": ["float32", "uint32"]}, "nnz": {"$ref": "#/$defs/uint"}}
+          }
+        },
+        "embeddings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "axis", "width", "dtype"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string"},
+              "axis": {"enum": ["cells", "genes"]},
+              "width": {"$ref": "#/$defs/uint"},
+              "dtype": {"enum": ["float32", "float64"]}
+            }
+          }
+        },
+        "graphs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "axis", "dtype", "nnz"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string"},
+              "axis": {"enum": ["cells", "genes"]},
+              "dtype": {"enum": ["float32", "float64"]},
+              "nnz": {"$ref": "#/$defs/uint"}
+            }
+          }
+        },
+        "modalities": {"type": "array", "maxItems": 0, "description": "Format 0.1 stores have no modalities."}
+      }
+    },
+    "table": {
+      "type": "object",
+      "required": ["columns"],
+      "additionalProperties": false,
+      "properties": {"columns": {"type": "array", "items": {"$ref": "#/$defs/column"}}}
+    },
+    "column": {
+      "type": "object",
+      "required": ["name", "dtype"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "dtype": {
+          "enum": [
+            "Boolean", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+            "Float32", "Float64", "String", "Enum"
+          ]
+        },
+        "n_categories": {"$ref": "#/$defs/uint"},
+        "ordered": {"type": "boolean"},
+        "lineage": {
+          "type": "object",
+          "required": ["layer", "node"],
+          "additionalProperties": false,
+          "properties": {"layer": {"type": "string"}, "node": {"type": "string"}}
+        }
+      },
+      "if": {"required": ["dtype"], "properties": {"dtype": {"const": "Enum"}}},
+      "then": {"required": ["n_categories", "ordered"]},
+      "else": {"properties": {"n_categories": false, "ordered": false}}
+    }
+  }
+}

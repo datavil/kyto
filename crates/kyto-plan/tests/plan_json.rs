@@ -498,6 +498,9 @@ fn corpus() -> Vec<Arc<Plan>> {
 fn assert_round_trip(plan: &Arc<Plan>) -> String {
     let json = plan.to_json();
     let back = Plan::from_json(&json).unwrap_or_else(|error| panic!("{error}\n{plan}"));
+    // Task 8.4: the text matches the published JSON Schema and has no diagnostics.
+    let diagnostics = kyto_plan::validate_plan_json(&json);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}\n{plan}");
     assert_eq!(back.to_json(), json, "{plan}");
     // A NaN literal is never equal to itself; the text above is the check then.
     if !json.contains("\"NaN\"") {
@@ -618,7 +621,15 @@ fn edited(plan: &Plan, edit: impl FnOnce(&mut Value)) -> String {
 }
 
 fn refused(text: &str) -> KytoError {
-    Plan::from_json(text).unwrap_err()
+    let error = Plan::from_json(text).unwrap_err();
+    // Task 8.4: `validate_plan_json` reports it too, first, with the same code.
+    let diagnostics = kyto_plan::validate_plan_json(text);
+    assert_eq!(
+        diagnostics.first().map(kyto_plan::PlanDiagnostic::code),
+        Some(error.code()),
+        "{error}\n{diagnostics:?}"
+    );
+    error
 }
 
 #[test]

@@ -13,7 +13,9 @@
 //! output [`PlanSchema`] from its input's ([`Transform`]). `Plan::resolve` resolves an
 //! expression's names against the plan (task 3.5, R6). The read-only handles [`Table`],
 //! [`Matrix`], [`Embedding`], [`Graph`] and [`Modality`] (task 3.6). The plan JSON
-//! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`]. The optimizer (task 4.4):
+//! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`]; its JSON Schema
+//! ([`PLAN_JSON_SCHEMA`]) and [`validate_plan_json`], which lists problems without
+//! raising (task 8.4). The optimizer (task 4.4):
 //! [`optimize`] (and [`Plan::optimize`]) turns the plans of one or more [`Output`]s into
 //! an [`OptimizedPlan`] by common sub-plan reuse, projection pushdown, elementwise
 //! fusion and predicate pushdown, each its own `optimize_*.rs` file. The physical plan
@@ -49,6 +51,7 @@ mod physical_plan;
 mod plan;
 mod plan_json;
 mod plan_schema;
+mod plan_validate;
 mod scan;
 mod select_genes;
 mod sink;
@@ -76,6 +79,7 @@ pub use physical_plan::{
 pub use plan::{Plan, PlanNodes};
 pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};
 pub use plan_schema::{PlanSchema, SparseMember};
+pub use plan_validate::{PLAN_JSON_SCHEMA, PlanDiagnostic, validate_plan_json};
 pub use scan::Scan;
 pub use select_genes::SelectGenes;
 pub use sink::Sink;

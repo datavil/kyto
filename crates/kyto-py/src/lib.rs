@@ -11,6 +11,7 @@ pub mod convert;
 pub mod errors;
 pub mod expr;
 pub mod handles;
+pub mod plan_validate;
 pub mod qc;
 pub mod run;
 pub mod sink_h5ad;
@@ -25,6 +26,8 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<atlas::Atlas>()?;
     module.add_function(wrap_pyfunction!(atlas::scan, module)?)?;
     module.add_function(wrap_pyfunction!(atlas::from_json, module)?)?;
+    module.add_function(wrap_pyfunction!(plan_validate::validate_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(plan_validate::plan_json_schema, module)?)?;
     module.add_class::<handles::PyTable>()?;
     module.add_class::<handles::PyMatrix>()?;
     module.add_class::<handles::PyEmbedding>()?;

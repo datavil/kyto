@@ -20,7 +20,9 @@
 //! Adding a node: a file with its parameters, their [`LogicalNode`] and [`Transform`]
 //! impls and its builder (`impl Plan`), then one variant here and one arm in each of
 //! `parts`, `input_mut` and `same_node`, its `Step` in `plan_json.rs` (written from
-//! the parameters, read back through the builder), and what it reads and writes in
+//! the parameters, read back through the builder) and its method in
+//! `plan_json.schema.json` (8.4; the plan JSON corpus test fails until both match), and
+//! what it reads and writes in
 //! `members.rs` (the optimizer's rules move and leave out nodes by it, 4.4).
 
 use std::fmt;

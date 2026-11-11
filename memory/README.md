@@ -34,3 +34,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [QC metrics are expression leaves](qc_expression_leaves.md): `Source::Qc` resolved at build, computed per block by `kyto_algo::CellQc`; gene set = Polars predicate on genes.parquet; `Source` lost Eq/Hash.
 - [scanpy `normalize_total` in float32 steps](scanpy_normalize_float32_steps.md): f32 total, f32 divisor, divide (not reciprocal), f32 median mean; `normalized = adata.X` before in-place `log1p` aliases (1.5 reference bug).
 - [Filters and computed columns in the executor](executor_filters_columns.md): Polars runs one-row columns as scalars (other float bits): evaluate as two rows; reference evaluator rounds maps to f32; QC moved to kyto-exec; Enum table reads peak high.
+- [The plan JSON Schema is checked, not trusted](plan_json_schema.md): the schema is `validate_plan`'s runtime shape check; never stricter than serde; `if`/`then` per tag, not `oneOf`; corpus has no diagnostics.

@@ -11,6 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# `validate_plan` checks a plan JSON against the published JSON Schema (task 8.4), so the
+# schema is the one description of the format's shape. No default features: no remote
+# `$ref` resolution (HTTP, files), the schema is self-contained.
+jsonschema = { version = "0.61.1", default-features = false }
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
 # Node parameters and output schemas derive serde for the plan JSON of task 4.3.
