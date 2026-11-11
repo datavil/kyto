@@ -251,7 +251,10 @@ pub(crate) fn reads_genes(plan: &Plan) -> bool {
     for_each_leaf(root, &mut |source| {
         found |= matches!(
             source,
-            Source::Recompute { .. } | Source::Expression { .. } | Source::GeneSymbol { .. }
+            Source::Recompute { .. }
+                | Source::Expression { .. }
+                | Source::GeneSymbol { .. }
+                | Source::Qc { .. }
         );
     });
     found
@@ -274,6 +277,16 @@ fn expr_reads<A: ExprAxis>(expr: &Expr<A>, input: &PlanSchema, reads: &mut Membe
         }
         Source::Embedding { name, .. } => {
             reads.insert(Member::Embedding(name.clone()));
+        }
+        // A QC metric reads its layer and, for a gene set, the gene columns of its
+        // predicate (task 6.1).
+        Source::Qc { layer, metric } => {
+            if let Some(layer) = layer {
+                reads.insert(Member::Layer(layer.clone()));
+            }
+            if let Some(genes) = metric.genes() {
+                expr_reads(genes, input, reads);
+            }
         }
         Source::Recompute { name } => {
             reads.insert(Member::column(A::AXIS, name.clone()));

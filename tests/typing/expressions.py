@@ -10,7 +10,15 @@ off here, so each ignore names only the error under test.
 # pyright: reportUnnecessaryTypeIgnoreComment=error
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
-from kyto import cell_column, gene_column, gene_expression
+from kyto import (
+    cell_column,
+    gene_column,
+    gene_expression,
+    genes_detected,
+    percent_counts_in,
+    total_counts,
+    total_counts_in,
+)
 from kyto._kyto import Atlas, CellExpr, GeneExpr
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
 
@@ -92,3 +100,17 @@ def gene_symbols(atlas: Atlas) -> None:
     resolved: CellExpr[Numeric] = atlas.resolve(gene_expression("CD3E", by="id"))
     _ = (by_symbol, resolved)
     _ = gene_expression("CD3E", by="name")  # pyright: ignore[reportArgumentType]
+
+
+def qc_metrics(atlas: Atlas) -> None:
+    """QC metrics are numeric cell expressions; a gene set is a boolean gene expression
+    (task 6.1)."""
+    mitochondrial = gene_column("symbol").str.starts_with("MT-")
+    total: CellExpr[Numeric] = total_counts(layer="counts")
+    detected: CellExpr[Numeric] = genes_detected()
+    in_set: CellExpr[Numeric] = total_counts_in(mitochondrial, layer="counts")
+    percent: CellExpr[Numeric] = percent_counts_in(gene_column("mito"))
+    resolved: CellExpr[Numeric] = atlas.resolve(percent)
+    _ = (total, detected, in_set, resolved, percent < 5)
+    _ = total_counts_in(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
+    _ = percent_counts_in(cell_column("mito"))  # pyright: ignore[reportArgumentType]

@@ -11,6 +11,10 @@ from kyto._kyto import (
     gene_column,
     gene_embedding,
     gene_expression,
+    genes_detected,
+    percent_counts_in,
+    total_counts,
+    total_counts_in,
 )
 from kyto.errors import (
     AxisError,
@@ -66,4 +70,8 @@ __all__ = [
     "gene_column",
     "gene_embedding",
     "gene_expression",
+    "genes_detected",
+    "percent_counts_in",
+    "total_counts",
+    "total_counts_in",
 ]

@@ -11,3 +11,18 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+kyto-core = { path = "../kyto-core" }
+kyto-error = { path = "../kyto-error" }
+# Blocks and the 5.3 row-sum and nnz kernels (task 6.1).
+kyto-exec = { path = "../kyto-exec" }
+# The gene table a QC gene set is evaluated on (task 6.1).
+kyto-store = { path = "../kyto-store" }
+# Evaluates a gene-set predicate on the gene table; same version as kyto-core.
+polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "dtype-categorical"] }
+
+[dev-dependencies]
+# The 6.1 parity test runs a scan plan through the executor.
+kyto-plan = { path = "../kyto-plan" }
+tempfile = "3.27.0"
+serde_json = "1.0.154"
+polars = { version = "0.55.2", default-features = false }

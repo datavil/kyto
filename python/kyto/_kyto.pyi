@@ -1691,6 +1691,129 @@ def feature(name: builtins.str, /) -> CellExpr[Unknown]:
     kyto.errors.ResolutionError: KY-E208: invalid feature name 'log1p:'...
     """
 
+def total_counts(*, layer: builtins.str | None = None) -> CellExpr[Numeric]:
+    """Each cell's total count: the sum of its values over every gene, as a ``CellExpr``.
+
+    scanpy's ``total_counts`` (``scanpy.pp.calculate_qc_metrics``), computed when a
+    plan reads it, over the genes present then, so it never goes stale. Summed in
+    ``float64`` (scanpy: ``float32``).
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to sum. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> total_counts(layer="counts") > 500
+    total_counts(layer='counts') > 500
+    """
+
+def genes_detected(*, layer: builtins.str | None = None) -> CellExpr[Numeric]:
+    """Each cell's number of genes with a non-zero value, as a ``CellExpr``.
+
+    scanpy's ``n_genes_by_counts`` (``scanpy.pp.calculate_qc_metrics``), computed when
+    a plan reads it, over the genes present then, so it never goes stale.
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to count in. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric (``UInt32``) expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> genes_detected(layer="counts") >= 200
+    genes_detected(layer='counts') >= 200
+    """
+
+def total_counts_in(
+    genes: _GeneExprBoolean, /, *, layer: builtins.str | None = None
+) -> CellExpr[Numeric]:
+    """Each cell's total count over a gene set, as a ``CellExpr``.
+
+    scanpy's ``total_counts_<qc_var>`` (``scanpy.pp.calculate_qc_metrics``), computed
+    when a plan reads it, over the genes present then, so it never goes stale. Summed
+    in ``float64`` (scanpy: ``float32``).
+
+    Parameters
+    ----------
+    genes : GeneExpr
+        The gene set: a boolean expression on gene-table columns, such as
+        ``gene_column('symbol').str.starts_with('MT-')``. A gene where it is null is
+        not in the set. Checked when the plan is built.
+    layer : str or None, default=None
+        The layer to sum. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ExpressionError
+        ``KY-E205`` if ``genes`` is not a ``GeneExpr`` or not boolean (a column of
+        unknown dtype is checked when the plan is built, as is an expression that
+        reads matrix values).
+
+    Examples
+    --------
+    >>> total_counts_in(gene_column("symbol").str.starts_with("MT-"))
+    total_counts_in(gene_column('symbol').str.starts_with('MT-'))
+    """
+
+def percent_counts_in(
+    genes: _GeneExprBoolean, /, *, layer: builtins.str | None = None
+) -> CellExpr[Numeric]:
+    """Each cell's percentage of counts in a gene set, as a ``CellExpr``.
+
+    scanpy's ``pct_counts_<qc_var>`` (``scanpy.pp.calculate_qc_metrics``):
+    ``total_counts_in(genes) / total_counts() * 100``, ``NaN`` for a cell without
+    counts. Computed when a plan reads it, over the genes present then, so it never
+    goes stale; in ``float64`` (scanpy: ``float32``).
+
+    Parameters
+    ----------
+    genes : GeneExpr
+        The gene set: a boolean expression on gene-table columns, such as
+        ``gene_column('symbol').str.starts_with('MT-')``. A gene where it is null is
+        not in the set. Checked when the plan is built.
+    layer : str or None, default=None
+        The layer to sum. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    CellExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Raises
+    ------
+    ExpressionError
+        ``KY-E205`` if ``genes`` is not a ``GeneExpr`` or not boolean (a column of
+        unknown dtype is checked when the plan is built, as is an expression that
+        reads matrix values).
+
+    Examples
+    --------
+    >>> mitochondrial = gene_column("symbol").str.starts_with("MT-")
+    >>> percent_counts_in(mitochondrial, layer="counts") < 5
+    percent_counts_in(gene_column('symbol').str.starts_with('MT-'), layer='counts') < 5
+    """
+
 def from_json(text: builtins.str, /) -> Atlas:
     """Read a plan from the JSON text that ``Atlas.to_json`` wrote.
 

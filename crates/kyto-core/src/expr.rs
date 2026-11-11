@@ -368,7 +368,7 @@ impl<A: ExprAxis> Expr<A> {
         Self::with_depth(node, dtype, 1)
     }
 
-    fn with_depth(node: ExprNode, dtype: ExprDtype, depth: u32) -> Self {
+    pub(crate) fn with_depth(node: ExprNode, dtype: ExprDtype, depth: u32) -> Self {
         Self {
             node: Arc::new(node),
             dtype,
@@ -381,7 +381,7 @@ impl<A: ExprAxis> Expr<A> {
     ///
     /// # Errors
     /// `KY-E207` beyond [`MAX_EXPR_DEPTH`].
-    fn deeper(operation: &str, child_depth: u32) -> Result<u32, KytoError> {
+    pub(crate) fn deeper(operation: &str, child_depth: u32) -> Result<u32, KytoError> {
         let depth = child_depth.saturating_add(1);
         if depth > MAX_EXPR_DEPTH {
             return Err(KytoError::ExpressionDepth {
@@ -789,6 +789,19 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
             ),
             ExprNode::Source(Source::Feature { name }) => {
                 write!(formatter, "feature({})", python_string(&name.to_string()))
+            }
+            ExprNode::Source(Source::Qc { layer, metric }) => {
+                write!(formatter, "{}(", metric.function())?;
+                if let Some(genes) = metric.genes() {
+                    write!(formatter, "{genes}")?;
+                }
+                match (layer, metric.genes()) {
+                    (Some(layer), Some(_)) => {
+                        write!(formatter, ", layer={})", python_string(layer))
+                    }
+                    (Some(layer), None) => write!(formatter, "layer={})", python_string(layer)),
+                    (None, _) => formatter.write_str(")"),
+                }
             }
             ExprNode::Source(Source::Recompute { name }) => {
                 write!(

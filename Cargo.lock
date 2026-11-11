@@ -1501,6 +1501,16 @@ dependencies = [
 [[package]]
 name = "kyto-algo"
 version = "0.0.0"
+dependencies = [
+ "kyto-core",
+ "kyto-error",
+ "kyto-exec",
+ "kyto-plan",
+ "kyto-store",
+ "polars",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "kyto-core"

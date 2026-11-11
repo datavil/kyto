@@ -589,7 +589,7 @@ impl Atlas {
 
 /// `KY-E205`: `operation` needs `accepted` and got `value`, a Python object of another
 /// type.
-fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAny>) -> KytoError {
+pub(crate) fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAny>) -> KytoError {
     let type_name = value
         .get_type()
         .name()

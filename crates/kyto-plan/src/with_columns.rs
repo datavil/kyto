@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use kyto_core::{
     Axis, CellExpr, ColumnDtype, ColumnSchema, Expr, ExprAxis, ExprNode, FloatDtype, GeneExpr,
-    LayerDtype, Source,
+    LayerDtype, QcMetric, Source,
 };
 use kyto_error::KytoError;
 use polars::prelude::{DataFrame, DataType, IntoLazy, Series, col};
@@ -224,6 +224,14 @@ fn source_dtype(schema: &PlanSchema, axis: Axis, source: &Source) -> ColumnDtype
         Source::Embedding { name, .. } => match schema.embedding(name).map(|e| e.dtype) {
             Some(FloatDtype::Float64) => ColumnDtype::Float64,
             Some(FloatDtype::Float32) | None => ColumnDtype::Float32,
+        },
+        // Counts and percentages in `f64` (scanpy: `float32`), detected genes as
+        // `UInt32` (scanpy: `int32`); deviations.md, task 6.1.
+        Source::Qc { metric, .. } => match metric {
+            QcMetric::GenesDetected => ColumnDtype::UInt32,
+            QcMetric::TotalCounts
+            | QcMetric::TotalCountsIn { .. }
+            | QcMetric::PercentCountsIn { .. } => ColumnDtype::Float64,
         },
         // Resolved expressions hold neither; a gene symbol reads a layer like a gene ID.
         Source::GeneSymbol { .. } | Source::Feature { .. } => ColumnDtype::Float32,

@@ -11,6 +11,7 @@ pub mod convert;
 pub mod errors;
 pub mod expr;
 pub mod handles;
+pub mod qc;
 pub mod run;
 pub mod sink_h5ad;
 
@@ -40,6 +41,10 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(expr::cell_embedding, module)?)?;
     module.add_function(wrap_pyfunction!(expr::gene_embedding, module)?)?;
     module.add_function(wrap_pyfunction!(expr::feature, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::total_counts, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::genes_detected, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::total_counts_in, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::percent_counts_in, module)?)?;
     module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;

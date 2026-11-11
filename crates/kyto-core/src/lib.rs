@@ -13,7 +13,8 @@
 //! missing-value rules of R9 (task 3.7): null tests on expressions ([`NullTest`]) and
 //! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`). The format's name rules
 //! ([`member_name_problem`], [`column_name_problem`]), shared by store and plan (task 4.2). The JSON form of an expression, [`ExprJson`]
-//! (task 4.3, for the plan JSON).
+//! (task 4.3, for the plan JSON). Per-cell QC metrics as expression leaves, [`QcMetric`]
+//! (task 6.1).
 #![forbid(unsafe_code)]
 
 mod expr;
@@ -24,6 +25,7 @@ mod expr_source;
 mod feature_name;
 mod gene_ids;
 mod member_name;
+mod qc_metric;
 mod removed_genes;
 mod resolve;
 mod schema;
@@ -34,11 +36,12 @@ pub use expr::{
     MAX_EXPR_DEPTH, NullTest, Operand, StrFunction, mixed_axes,
 };
 pub use expr_dtype::ExprDtype;
-pub use expr_json::{ExprEntry, ExprJson, MAX_EXPANDED_NODES, Operator};
+pub use expr_json::{ExprEntry, ExprJson, MAX_EXPANDED_NODES, Operator, QcMetricName};
 pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;
 pub use member_name::{MAX_MEMBER_NAME_BYTES, column_name_problem, member_name_problem};
+pub use qc_metric::QcMetric;
 pub use removed_genes::RemovedGenes;
 pub use resolve::{META_PREFIX, Resolver, SYMBOL_COLUMN};
 pub use schema::{

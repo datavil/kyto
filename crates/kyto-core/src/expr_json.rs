@@ -27,10 +27,13 @@ use kyto_error::KytoError;
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::expr::{BinaryOp, Expr, ExprAxis, ExprNode, Literal, NullTest, Operand, StrFunction};
+use crate::expr::{
+    BinaryOp, CellExpr, Expr, ExprAxis, ExprNode, GeneAxis, Literal, NullTest, Operand, StrFunction,
+};
 use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
 use crate::feature_name::FeatureName;
+use crate::qc_metric::QcMetric;
 use crate::schema::Axis;
 
 /// The most nodes an expression read from JSON may have once every shared entry is
@@ -90,6 +93,16 @@ pub enum ExprEntry {
     Feature {
         /// The name as written (`CD3E`, `log1p:CD3E`).
         name: String,
+    },
+    /// `total_counts(layer=layer)`, `genes_detected(...)`, `total_counts_in(genes, ...)`
+    /// or `percent_counts_in(genes, ...)` (cell axis only, task 6.1).
+    Qc {
+        /// The metric's constructor name.
+        metric: QcMetricName,
+        /// The layer; `null` is the plan's default layer (resolved plans name it).
+        layer: Option<String>,
+        /// The gene set, a gene expression (`null` for a metric without one).
+        genes: Option<ExprJson>,
     },
     /// A boolean literal.
     Boolean {
@@ -151,6 +164,17 @@ pub enum ExprEntry {
         /// The entry of the operand.
         input: usize,
     },
+}
+
+/// The constructor of a QC metric (task 6.1), as written in an [`ExprEntry::Qc`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum QcMetricName {
+    TotalCounts,
+    GenesDetected,
+    TotalCountsIn,
+    PercentCountsIn,
 }
 
 /// A binary operator, written as its Python symbol.
@@ -271,7 +295,7 @@ impl ExprJson {
             let expr = build_entry(entry, &built, context, position)?;
             let size = operand_positions(entry)
                 .into_iter()
-                .fold(1_u64, |size, operand| {
+                .fold(nested_size(entry).saturating_add(1), |size, operand| {
                     size.saturating_add(expanded[operand])
                 });
             if size > MAX_EXPANDED_NODES {
@@ -290,6 +314,27 @@ impl ExprJson {
             problem: "the expression has no entries".to_owned(),
         })
     }
+}
+
+/// The nodes of the expression nested in `entry` once expanded (a QC leaf's gene
+/// set, task 6.1), so it counts against the outer expression's budget too.
+fn nested_size(entry: &ExprEntry) -> u64 {
+    let ExprEntry::Qc {
+        genes: Some(genes), ..
+    } = entry
+    else {
+        return 0;
+    };
+    let mut expanded: Vec<u64> = Vec::with_capacity(genes.0.len());
+    for entry in &genes.0 {
+        let size = operand_positions(entry)
+            .into_iter()
+            .fold(nested_size(entry).saturating_add(1), |size, operand| {
+                size.saturating_add(expanded.get(operand).copied().unwrap_or(0))
+            });
+        expanded.push(size);
+    }
+    expanded.last().copied().unwrap_or(0)
 }
 
 /// The positions of the operands of `entry` (all written before it: `build_entry`
@@ -341,6 +386,16 @@ fn entry_of(node: &ExprNode, position: impl Fn(&Arc<ExprNode>) -> usize) -> Expr
             },
             Source::Feature { name } => ExprEntry::Feature {
                 name: name.to_string(),
+            },
+            Source::Qc { layer, metric } => ExprEntry::Qc {
+                metric: match metric {
+                    QcMetric::TotalCounts => QcMetricName::TotalCounts,
+                    QcMetric::GenesDetected => QcMetricName::GenesDetected,
+                    QcMetric::TotalCountsIn { .. } => QcMetricName::TotalCountsIn,
+                    QcMetric::PercentCountsIn { .. } => QcMetricName::PercentCountsIn,
+                },
+                layer: layer.clone(),
+                genes: metric.genes().map(ExprJson::from_expr),
             },
         },
         ExprNode::Literal(literal) => match literal {
@@ -458,6 +513,44 @@ fn build_entry<A: ExprAxis>(
                 },
                 ExprDtype::Unknown,
             )
+        }
+        ExprEntry::Qc {
+            metric,
+            layer,
+            genes,
+        } => {
+            only_on(Axis::Cells, "qc")?;
+            let genes = genes
+                .as_ref()
+                .map(|genes| {
+                    genes.to_expr::<GeneAxis>(&format!("{context} entry {position}, genes"))
+                })
+                .transpose()?;
+            let metric = match (metric, genes) {
+                (QcMetricName::TotalCounts, None) => QcMetric::TotalCounts,
+                (QcMetricName::GenesDetected, None) => QcMetric::GenesDetected,
+                (QcMetricName::TotalCountsIn, Some(genes)) => QcMetric::TotalCountsIn { genes },
+                (QcMetricName::PercentCountsIn, Some(genes)) => QcMetric::PercentCountsIn { genes },
+                (QcMetricName::TotalCounts | QcMetricName::GenesDetected, Some(_)) => {
+                    return Err(invalid(
+                        "'genes' is set, and only total_counts_in and percent_counts_in take a gene set"
+                            .to_owned(),
+                    ));
+                }
+                (QcMetricName::TotalCountsIn | QcMetricName::PercentCountsIn, None) => {
+                    return Err(invalid(
+                        "'genes' is null, and total_counts_in and percent_counts_in need a gene set"
+                            .to_owned(),
+                    ));
+                }
+            };
+            let expr = CellExpr::qc(layer.clone(), metric)?;
+            // Built on the cell axis (checked above); `A` is that axis.
+            Ok(Expr::with_depth(
+                expr.node().as_ref().clone(),
+                expr.dtype(),
+                expr.depth(),
+            ))
         }
         ExprEntry::Boolean { value } => literal(Literal::Boolean(*value)),
         ExprEntry::Int { value } => literal(Literal::Int(*value)),

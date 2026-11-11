@@ -30,10 +30,11 @@ use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
 use crate::feature_name::FeatureName;
 use crate::gene_ids::GeneIds;
+use crate::qc_metric::gene_set_error;
 use crate::removed_genes::RemovedGenes;
 use crate::schema::{AtlasSchema, Axis, EmbeddingSchema, TableSchema};
 use crate::schema_column::{ColumnDtype, ColumnSchema};
-use crate::{BinaryOp, CellAxis};
+use crate::{BinaryOp, CellAxis, GeneAxis};
 
 /// The gene table column that holds gene symbols (format.md §5.2, task 3.9).
 pub const SYMBOL_COLUMN: &str = "symbol";
@@ -541,6 +542,33 @@ impl<'a> Resolver<'a> {
                     ));
                 }
                 (source.clone(), ExprDtype::Numeric)
+            }
+            Source::Qc { layer, metric } => {
+                if A::AXIS != CellAxis::AXIS {
+                    return Err(unknown(
+                        "QC metric".to_owned(),
+                        metric.function(),
+                        "QC metrics are cell expressions".to_owned(),
+                    ));
+                }
+                let layer = self.layer(layer.as_deref(), &code())?;
+                let metric = match metric.genes() {
+                    None => metric.clone(),
+                    Some(genes) => {
+                        let genes = self.resolve::<GeneAxis>(genes)?;
+                        if genes.dtype() != ExprDtype::Boolean || !genes.is_metadata_only() {
+                            return Err(gene_set_error(metric, &genes));
+                        }
+                        metric.with_genes(genes)
+                    }
+                };
+                (
+                    Source::Qc {
+                        layer: Some(layer),
+                        metric,
+                    },
+                    ExprDtype::Numeric,
+                )
             }
             Source::Feature { name } => self.feature::<A>(name, &code())?,
         };
