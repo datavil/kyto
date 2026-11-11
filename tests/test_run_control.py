@@ -18,6 +18,7 @@ the end. The executor side (cancel in a statistics pass, no reads after a cancel
 import _thread
 import doctest
 import gzip
+import json
 import signal
 import threading
 import time
@@ -204,10 +205,22 @@ def test_arguments_and_unsupported_plans_are_coded(store: Path) -> None:
         atlas._execute(progress=3)  # pyright: ignore[reportArgumentType]
     assert raised.value.code == "KY-E215"
     assert "not callable" in str(raised.value)
+    # A gene filter runs since task 5.8 (every cell streams, over one gene).
     filtered = atlas.filter_genes(gene_column("gene_id") == "g1")
+    assert filtered._execute(threads=1) == N_CELLS
+    # A sink waits for task 5.9 (built from plan JSON: Python has no sink method yet).
+    plan = json.loads(filtered.to_json())
+    plan["nodes"].append(
+        {
+            "id": len(plan["nodes"]),
+            "input": len(plan["nodes"]) - 1,
+            "step": {"method": "sink_zarr", "path": "out.kyto"},
+        }
+    )
     with pytest.raises(kyto.NotImplementedYetError) as raised:
-        filtered._execute(threads=1)
+        kyto.from_json(json.dumps(plan))._execute(threads=1)
     assert raised.value.code == "KY-E601"
+    assert "5.9" in str(raised.value)
 
 
 def test_docstring_example_runs(tmp_path: Path) -> None:

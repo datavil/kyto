@@ -3,10 +3,15 @@
 //!
 //! Does: walk from the output's node down to the scan, keep what the stream runs
 //! today (the scan's layers, `with_default_layer`, per-cell `normalize_total`/`log1p`
-//! maps, alone or fused, and the cross-cell nodes of task 5.4: a median
+//! maps, alone or fused, the cross-cell nodes of task 5.4: a median
 //! `normalize_total`, alone or first in a fused pass, and `highly_variable_genes`
-//! without batches), and refuse the rest with `KY-E601` naming the task that adds it,
-//! before anything is read. [`Pipeline::run`] opens the scan's layers once, runs every
+//! without batches, and the steps of task 5.8: cell and gene filters, `select_genes`,
+//! `take_cells`, `with_cells` and `with_genes`), and refuse the rest with `KY-E601`
+//! naming the task that adds it, before anything is read. Cell steps run on every
+//! block (`cell_steps.rs`); gene steps run once, in plan order, between the statistics
+//! passes (`gene_steps.rs`: a step reading a cell's profile streams the store once to
+//! collect it), and leave a gene selection for the blocks after them. The cell and gene
+//! tables are read (from the scan's local store) only when a step needs them. [`Pipeline::run`] opens the scan's layers once, runs every
 //! cross-cell node's statistics passes in plan order (each pass streams the node's
 //! input again from the scan, through the stages below it; exactly the passes the
 //! physical plan gives the node; its blocks reduced in a fixed tree in block order,
@@ -16,23 +21,34 @@
 //! computed at once. A cross-cell node without an apply pass (HVG) leaves the blocks as
 //! they are. The output's stream reads the store only when the output reads a layer
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
-//! Does not: filters, gene selections, `take_cells`, computed columns, `scale`, `pca`,
-//! HVG batches, sinks (see the error each one gives), or memory limits (5.5).
+//! Does not: `scale`, `pca`, HVG batches, neighbours, clusterings, sinks, expression
+//! leaves reading embeddings or recomputing stored columns (see the error each one
+//! gives), or memory limits (5.5). Tables of a remote store (`run_on` other storage)
+//! are still read from the scan's path (plan 5.8 Open).
 
 use std::collections::BTreeSet;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
+use kyto_core::{Axis, ColumnDtype, Expr, ExprAxis, Source};
 use kyto_error::KytoError;
-use kyto_plan::{Blocks, CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan};
-use kyto_store::{LayerReader, TileGrid};
+use kyto_plan::{
+    Blocks, Columns, CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan, Predicate,
+};
+use kyto_store::{LayerReader, TableAxis, TileGrid, read_table};
+use polars::prelude::DataFrame;
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::block_stream::{BlockStream, StreamSource};
+use crate::cell_steps::{CellLeaf, CellStep, Evaluation, Take, is_block_leaf};
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
+use crate::expression::Prepared;
+use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
+use crate::operator::Operator;
+use crate::qc::{CellQc, GeneSet};
 use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
 use crate::statistics::Statistics;
@@ -71,6 +87,20 @@ pub(crate) enum Stage {
     Maps(ElementwiseMaps),
     /// A cross-cell node: statistics passes first.
     CrossCell(CrossCellStage),
+    /// A cell filter, `take_cells` or `with_cells`, run on every block (task 5.8).
+    Cells(CellStage),
+    /// A gene filter, `select_genes` or `with_genes`, run once with the statistics
+    /// passes the physical plan gives it (task 5.8).
+    Genes { kind: GeneStepKind, passes: u32 },
+}
+
+/// A cell step as the plan gives it, before its leaves are resolved against the genes
+/// present at its place.
+#[derive(Debug, Clone)]
+pub(crate) enum CellStage {
+    Filter(Prepared),
+    Take(Vec<String>),
+    Columns(Vec<(String, Prepared, ColumnDtype)>),
 }
 
 /// One output of a physical plan, lowered to a scan and a chain of streamed operators.
@@ -155,6 +185,7 @@ impl Pipeline {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
         stages.reverse();
+        refuse_unwritten_gene_columns(&stages)?;
         let root = scan.root();
         let schema = root.schema();
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
@@ -248,8 +279,9 @@ impl Pipeline {
         // Every statistics pass and the output's stream compute every cell once.
         let control = options.control.clone();
         let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
-            Stage::Maps(_) => passes,
+            Stage::Maps(_) | Stage::Cells(_) => passes,
             Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
+            Stage::Genes { passes: more, .. } => passes.saturating_add(u64::from(*more)),
         });
         control.set_total(self.grid.n_cells().saturating_mul(passes));
         control.check()?;
@@ -263,7 +295,7 @@ impl Pipeline {
             })?;
         let thread_pool = Arc::new(thread_pool);
         let source = |readers: Arc<Vec<LayerReader<S>>>,
-                      operators: &[ElementwiseMaps],
+                      operators: &[Operator],
                       output_layers: BTreeSet<String>| {
             let layers = if readers.is_empty() {
                 Vec::new()
@@ -274,7 +306,7 @@ impl Pipeline {
                 readers,
                 layers,
                 grid: self.grid,
-                operators: operators.to_vec(),
+                operators: operators.iter().map(Operator::fresh).collect(),
                 output_layers,
                 window: self.blocks_in_flight,
                 block_cells: self.block_cells,
@@ -283,18 +315,69 @@ impl Pipeline {
             }
         };
 
-        // The stages below each cross-cell node run as maps in its statistics passes.
+        // The stages below each cross-cell node or gene step run as operators in its
+        // statistics passes.
         let mut operators = Vec::new();
         let mut statistics = Statistics::default();
-        let n_genes = usize::try_from(self.grid.n_genes()).unwrap_or(usize::MAX);
+        let mut tables = RunTables::new(&self.store, self.grid.n_genes());
         for stage in &self.stages {
             let cross_cell = match stage {
                 Stage::Maps(maps) => {
-                    operators.push(maps.clone());
+                    operators.push(Operator::Maps(maps.clone()));
+                    continue;
+                }
+                Stage::Cells(cell_stage) => {
+                    operators.push(Operator::Cells(tables.cell_step(cell_stage)?));
+                    continue;
+                }
+                Stage::Genes { kind, passes } => {
+                    let profiles = kind.profiles();
+                    let mut values = Vec::new();
+                    if profiles.is_empty() {
+                        // A pass the plan counts that this step does not need (a gene
+                        // embedding leaf is refused when built): counted as done.
+                        control.add_done(self.grid.n_cells().saturating_mul(u64::from(*passes)));
+                    } else {
+                        let wanted = profiles
+                            .iter()
+                            .map(|(layer, cell_id)| {
+                                Ok((
+                                    layer.clone(),
+                                    tables.cell_position(cell_id, "a gene step's profile")?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>, KytoError>>()?;
+                        let found = collect_profiles(
+                            &source(Arc::clone(&readers), &operators, profile_layers(&profiles)),
+                            &thread_pool,
+                            &wanted,
+                        )?;
+                        for (profile, found) in profiles.into_iter().zip(found) {
+                            let Some(found) = found else {
+                                return Err(KytoError::UnknownName {
+                                    kind: "cell".to_owned(),
+                                    name: profile.1.clone(),
+                                    expression: format!(
+                                        "profile({:?}, layer={:?})",
+                                        profile.1, profile.0
+                                    ),
+                                    problem:
+                                        "an earlier step (a cell filter or take_cells) removed it"
+                                            .to_owned(),
+                                });
+                            };
+                            values.push((profile, found));
+                        }
+                    }
+                    let genes = tables.genes()?;
+                    if let Some(selection) = kind.apply(genes, &values, &self.store)? {
+                        operators.push(Operator::Genes(selection));
+                    }
                     continue;
                 }
                 Stage::CrossCell(cross_cell) => cross_cell,
             };
+            let n_genes = usize::try_from(tables.n_genes()).unwrap_or(usize::MAX);
             let mut accumulator = cross_cell.accumulator(n_genes);
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
             for pass in 0..cross_cell.passes {
@@ -310,23 +393,28 @@ impl Pipeline {
             }
             let (node_statistics, apply) = cross_cell.finish(accumulator);
             statistics.nodes.insert(cross_cell.node, node_statistics);
-            operators.extend(apply);
+            operators.extend(apply.map(Operator::Maps));
         }
 
-        // The output's stream reads the store only for the layers it outputs; without
-        // any, it streams the cells' rows, with nothing to map.
-        if self.output_layers.is_empty() {
-            operators.clear();
-        }
-        let readers = if self.output_layers.is_empty() {
-            Arc::new(Vec::new())
-        } else {
+        // The output's stream reads the store only for the layers it outputs or a cell
+        // step reads; without any, it streams the cells' rows through the cell steps
+        // alone, with nothing to map.
+        let reads_layers = !self.output_layers.is_empty()
+            || operators.iter().any(|operator| match operator {
+                Operator::Cells(step) => step.reads_layers(),
+                _ => false,
+            });
+        let readers = if reads_layers {
             readers
+        } else {
+            operators.retain(|operator| !operator.reads_layers());
+            Arc::new(Vec::new())
         };
         BlockStream::start(
             source(readers, &operators, self.output_layers.clone()),
             thread_pool,
             statistics,
+            tables.into_genes(),
         )
     }
 }
@@ -370,14 +458,342 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
         },
         Plan::Neighbors(_) => Err(not_yet(plan.node().method(), "6.6")),
         Plan::Cluster(_) => Err(not_yet(plan.node().method(), "6.8")),
-        // Filters, selections, computed columns and sinks come with the terminals that
-        // run plans from Python (7.2); plan 5.2 Open (1).
-        Plan::Scan(_)
-        | Plan::Filter(_)
-        | Plan::SelectGenes(_)
-        | Plan::TakeCells(_)
-        | Plan::WithColumns(_)
-        | Plan::Sink(_) => Err(not_yet(plan.node().method(), "7.2")),
+        Plan::Filter(node) => Ok(Some(match node.params().predicate() {
+            Predicate::Cells(predicate) => Stage::Cells(CellStage::Filter(cell_expression(
+                predicate,
+                "filter_cells",
+            )?)),
+            Predicate::Genes(predicate) => Stage::Genes {
+                kind: GeneStepKind::Filter(gene_expression(predicate, "filter_genes")?),
+                passes,
+            },
+        })),
+        Plan::SelectGenes(node) => Ok(Some(Stage::Genes {
+            kind: GeneStepKind::Select(node.params().gene_ids().to_vec()),
+            passes,
+        })),
+        Plan::TakeCells(node) => Ok(Some(Stage::Cells(CellStage::Take(
+            node.params().cell_ids().to_vec(),
+        )))),
+        Plan::WithColumns(node) => {
+            let schema = plan.output_schema();
+            let dtype = |axis: Axis, name: &str| {
+                schema
+                    .column(axis, name)
+                    .map(|column| column.dtype)
+                    .ok_or_else(|| KytoError::InvalidArgument {
+                        function: "Pipeline::new".to_owned(),
+                        parameter: "plan".to_owned(),
+                        value: name.to_owned(),
+                        problem: "a computed column is not in its node's output schema".to_owned(),
+                        accepted: "a plan built by kyto".to_owned(),
+                    })
+            };
+            Ok(Some(match node.params().columns() {
+                Columns::Cells(columns) => Stage::Cells(CellStage::Columns(
+                    columns
+                        .iter()
+                        .map(|(name, expr)| {
+                            Ok((
+                                name.clone(),
+                                cell_expression(expr, "with_cells")?,
+                                dtype(Axis::Cells, name)?,
+                            ))
+                        })
+                        .collect::<Result<_, KytoError>>()?,
+                )),
+                Columns::Genes(columns) => Stage::Genes {
+                    kind: GeneStepKind::Columns(
+                        columns
+                            .iter()
+                            .map(|(name, expr)| {
+                                Ok((
+                                    name.clone(),
+                                    gene_expression(expr, "with_genes")?,
+                                    dtype(Axis::Genes, name)?,
+                                ))
+                            })
+                            .collect::<Result<_, KytoError>>()?,
+                    ),
+                    passes,
+                },
+            }))
+        }
+        // Sinks write a store or an .h5ad file from the stream (plan 5.9).
+        Plan::Scan(_) | Plan::Sink(_) => Err(not_yet(plan.node().method(), "5.9")),
+    }
+}
+
+/// `KY-E601` for a step that reads a gene column `highly_variable_genes` writes below
+/// it: its statistics do not become gene columns before task 6.3, and a stored column
+/// of the same name would be read stale (bug-hunter, 5.8).
+fn refuse_unwritten_gene_columns(stages: &[Stage]) -> Result<(), KytoError> {
+    let mut unwritten: BTreeSet<String> = BTreeSet::new();
+    for stage in stages {
+        let mut reads: Vec<&str> = Vec::new();
+        let mut qc_reads: Vec<Prepared> = Vec::new();
+        let mut cell_prepared: Vec<&Prepared> = Vec::new();
+        match stage {
+            Stage::CrossCell(cross_cell) => {
+                if let CrossCellKind::HighlyVariableGenes { flavor, .. } = &cross_cell.kind {
+                    unwritten.extend(
+                        kyto_plan::hvg_columns(*flavor, false)
+                            .into_iter()
+                            .map(|column| column.name),
+                    );
+                }
+            }
+            Stage::Genes { kind, .. } => match kind {
+                GeneStepKind::Filter(predicate) => {
+                    reads.extend(predicate.columns.iter().map(String::as_str))
+                }
+                GeneStepKind::Select(_) => {}
+                GeneStepKind::Columns(columns) => {
+                    for (_, prepared, _) in columns {
+                        reads.extend(prepared.columns.iter().map(String::as_str));
+                    }
+                }
+            },
+            Stage::Cells(CellStage::Filter(predicate)) => cell_prepared.push(predicate),
+            Stage::Cells(CellStage::Columns(columns)) => {
+                cell_prepared.extend(columns.iter().map(|(_, prepared, _)| prepared));
+            }
+            Stage::Cells(CellStage::Take(_)) | Stage::Maps(_) => {}
+        }
+        // A QC metric's gene set reads gene columns too.
+        for prepared in cell_prepared {
+            for leaf in &prepared.leaves {
+                if let Source::Qc { metric, .. } = leaf
+                    && let Some(genes) = metric.genes()
+                {
+                    qc_reads.push(Prepared::new(genes.node()));
+                }
+            }
+        }
+        reads.extend(
+            qc_reads
+                .iter()
+                .flat_map(|prepared| prepared.columns.iter().map(String::as_str)),
+        );
+        if let Some(name) = reads.iter().find(|name| unwritten.contains(**name)) {
+            return Err(not_yet(
+                &format!("reading the gene column '{name}' that highly_variable_genes writes"),
+                "6.3",
+            ));
+        }
+        // A with_genes column of that name replaces it.
+        if let Stage::Genes {
+            kind: GeneStepKind::Columns(columns),
+            ..
+        } = stage
+        {
+            for (name, _, _) in columns {
+                unwritten.remove(name);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A resolved cell expression of `method`, whose leaves the stream computes: table
+/// columns, gene values and QC metrics. `KY-E601` for embeddings and recomputed
+/// columns (plan 5.9).
+fn cell_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
+    let prepared = Prepared::new(expr.node());
+    for leaf in &prepared.leaves {
+        let layered = match leaf {
+            Source::Expression { layer, .. } | Source::Qc { layer, .. } => layer.is_some(),
+            _ => false,
+        };
+        if !(is_block_leaf(leaf) && layered) {
+            return Err(unsupported_leaf(leaf, method));
+        }
+    }
+    Ok(prepared)
+}
+
+/// A resolved gene expression of `method`, whose leaves the run computes: table
+/// columns and cell profiles. `KY-E601` for embeddings (plan 5.9).
+fn gene_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
+    let prepared = Prepared::new(expr.node());
+    for leaf in &prepared.leaves {
+        if !matches!(leaf, Source::Profile { layer: Some(_), .. }) {
+            return Err(unsupported_leaf(leaf, method));
+        }
+    }
+    Ok(prepared)
+}
+
+fn unsupported_leaf(leaf: &Source, method: &str) -> KytoError {
+    let what = match leaf {
+        Source::Embedding { .. } => "an embedding component",
+        Source::Recompute { .. } => "a recomputed column (`.recompute()`)",
+        _ => "an unresolved name",
+    };
+    not_yet(&format!("{what} in {method}"), "5.9")
+}
+
+/// The cell and gene tables of a run, read when a step first needs them, and the
+/// genes present at the step being lowered.
+struct RunTables {
+    store: String,
+    n_genes: u64,
+    cells: Option<Arc<DataFrame>>,
+    genes: Option<Genes>,
+}
+
+impl RunTables {
+    fn new(store: &str, n_genes: u64) -> Self {
+        Self {
+            store: store.to_owned(),
+            n_genes,
+            cells: None,
+            genes: None,
+        }
+    }
+
+    /// The number of genes present.
+    fn n_genes(&self) -> u64 {
+        self.genes
+            .as_ref()
+            .map_or(self.n_genes, |genes| genes.len() as u64)
+    }
+
+    fn cells(&mut self) -> Result<Arc<DataFrame>, KytoError> {
+        if let Some(cells) = &self.cells {
+            return Ok(Arc::clone(cells));
+        }
+        let cells = Arc::new(read_table(Path::new(&self.store), TableAxis::Cells)?);
+        self.cells = Some(Arc::clone(&cells));
+        Ok(cells)
+    }
+
+    fn genes(&mut self) -> Result<&mut Genes, KytoError> {
+        if self.genes.is_none() {
+            self.genes = Some(Genes::read(&self.store)?);
+        }
+        match self.genes.as_mut() {
+            Some(genes) => Ok(genes),
+            None => unreachable!("set above"),
+        }
+    }
+
+    fn into_genes(self) -> Option<Genes> {
+        self.genes
+    }
+
+    /// The store positions of the cells `ids`, in their order; `KY-E210` for an ID
+    /// the store does not have (`expression` names the step).
+    fn cell_positions(&mut self, ids: &[String], expression: &str) -> Result<Vec<u64>, KytoError> {
+        let cells = self.cells()?;
+        let column = cells
+            .column("cell_id")
+            .and_then(|column| column.str().cloned())
+            .map_err(|error| KytoError::CorruptTable {
+                path: format!("{}/cells.parquet", self.store),
+                problem: error.to_string(),
+            })?;
+        let wanted: std::collections::HashMap<&str, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(order, id)| (id.as_str(), order))
+            .collect();
+        let mut positions = vec![None; ids.len()];
+        for (position, id) in column.iter().enumerate() {
+            if let Some(order) = id.and_then(|id| wanted.get(id)) {
+                positions[*order] = Some(position as u64);
+            }
+        }
+        positions
+            .into_iter()
+            .zip(ids)
+            .map(|(position, id)| {
+                position.ok_or_else(|| KytoError::UnknownName {
+                    kind: "cell".to_owned(),
+                    name: id.clone(),
+                    expression: expression.to_owned(),
+                    problem: "the store has no cell with this ID".to_owned(),
+                })
+            })
+            .collect()
+    }
+
+    fn cell_position(&mut self, id: &str, expression: &str) -> Result<u64, KytoError> {
+        Ok(self.cell_positions(&[id.to_owned()], expression)?[0])
+    }
+
+    /// `stage` with its leaves resolved against the genes present.
+    fn cell_step(&mut self, stage: &CellStage) -> Result<CellStep, KytoError> {
+        let table = self.cells()?;
+        Ok(match stage {
+            CellStage::Filter(predicate) => {
+                CellStep::filter(self.evaluation(predicate)?, table, &self.store)
+            }
+            CellStage::Take(ids) => {
+                let expression = format!("take_cells([{} IDs])", ids.len());
+                let positions = self.cell_positions(ids, &expression)?;
+                CellStep::take(Take::new(positions, ids), table, &self.store)
+            }
+            CellStage::Columns(columns) => {
+                let columns = columns
+                    .iter()
+                    .map(|(name, prepared, dtype)| {
+                        Ok((name.clone(), self.evaluation(prepared)?, *dtype))
+                    })
+                    .collect::<Result<_, KytoError>>()?;
+                CellStep::columns(columns, table, &self.store)
+            }
+        })
+    }
+
+    /// How a block computes each leaf of `prepared`.
+    fn evaluation(&mut self, prepared: &Prepared) -> Result<Evaluation, KytoError> {
+        let store = self.store.clone();
+        let leaves = prepared
+            .leaves
+            .iter()
+            .map(|leaf| match leaf {
+                Source::Expression {
+                    layer: Some(layer),
+                    gene_id,
+                } => {
+                    let position =
+                        self.genes()?
+                            .position(gene_id)
+                            .ok_or_else(|| KytoError::UnknownName {
+                                kind: "gene".to_owned(),
+                                name: gene_id.clone(),
+                                expression: format!("expression({gene_id:?}, layer={layer:?})"),
+                                problem: "an earlier step (a gene filter or selection) removed it"
+                                    .to_owned(),
+                            })?;
+                    Ok(CellLeaf::Gene {
+                        layer: layer.clone(),
+                        position,
+                    })
+                }
+                Source::Qc {
+                    layer: Some(layer),
+                    metric,
+                } => {
+                    // The gene set over the genes present at this step (6.1 Open).
+                    let gene_set = match metric.genes() {
+                        Some(genes) => Some(GeneSet::evaluate(
+                            self.genes()?.table(),
+                            genes,
+                            &format!("{store}/genes.parquet"),
+                        )?),
+                        None => None,
+                    };
+                    Ok(CellLeaf::Qc {
+                        layer: layer.clone(),
+                        qc: Box::new(CellQc::new(metric, gene_set)),
+                    })
+                }
+                other => Err(unsupported_leaf(other, "a cell expression")),
+            })
+            .collect::<Result<Vec<_>, KytoError>>()?;
+        Ok(Evaluation::new(prepared.clone(), leaves))
     }
 }
 

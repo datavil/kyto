@@ -132,7 +132,8 @@ impl Transform for WithColumns {
 /// layer's (`float32` is `Float32`, `uint32` is `UInt32`), an embedding component its
 /// dtype. Any other expression gets the dtype Polars infers for it, asked of Polars
 /// itself with one empty stand-in column per leaf (`Enum` and `String` leaves stand in
-/// as `String`), so supertypes, literals that adapt or widen, and true division follow
+/// as `String`; `uint32` matrix reads and detected genes as `Float64`, so arithmetic
+/// on counts does not wrap, task 5.8), so supertypes, literals that adapt or widen, and true division follow
 /// Polars exactly (`tests/column_dtype_polars.rs`). The executor casts each result to
 /// the declared dtype. `Float64` if Polars cannot say (resolution refuses such
 /// expressions first).
@@ -151,7 +152,8 @@ fn inferred_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> Option<Co
         let position = match leaves.iter().position(|(known, _)| known == source) {
             Some(position) => position,
             None => {
-                let dtype = polars_dtype(source_dtype(schema, axis, source));
+                let dtype =
+                    polars_dtype(arithmetic_dtype(source, source_dtype(schema, axis, source)));
                 leaves.push((source.clone(), dtype));
                 leaves.len() - 1
             }
@@ -170,6 +172,20 @@ fn inferred_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> Option<Co
     let mut frame = DataFrame::new(0, columns).ok()?.lazy().select([lowered]);
     let schema = frame.collect_schema().ok()?;
     column_dtype_of(schema.get("out")?)
+}
+
+/// The dtype a leaf takes part in arithmetic with: a `uint32` matrix read (a gene's
+/// values or a gene's profile) and detected genes are `Float64`, so `counts - 10` does
+/// not wrap as Polars' `UInt32` would (user decision, Nov 12, 2026; deviations.md, task
+/// 5.8). Table columns keep their dtype.
+fn arithmetic_dtype(source: &Source, dtype: ColumnDtype) -> ColumnDtype {
+    match (source, dtype) {
+        (
+            Source::Expression { .. } | Source::Profile { .. } | Source::Qc { .. },
+            ColumnDtype::UInt32,
+        ) => ColumnDtype::Float64,
+        _ => dtype,
+    }
 }
 
 fn polars_dtype(dtype: ColumnDtype) -> DataType {

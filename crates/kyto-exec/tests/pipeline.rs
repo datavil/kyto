@@ -296,14 +296,17 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     let batched = base
         .highly_variable_genes(Some("counts"), HvgFlavor::SeuratV3, None, Some("cell_id"))
         .unwrap();
-    let selected = base
-        .select_genes(["G1".to_owned(), "G0".to_owned()])
+    // `select_genes` and the other 5.8 steps run now; sinks wait for 5.9.
+    let sunk = base
+        .sink(kyto_plan::Sink::Zarr {
+            path: work.path().join("out.kyto").display().to_string(),
+        })
         .unwrap();
     let pca = base.pca(Some("counts"), "X_pca", 2, 0).unwrap();
     for (plan, method, task) in [
         (&scale, "scale", "6.4"),
         (&batched, "batch_key", "6.3"),
-        (&selected, "select_genes", "7.2"),
+        (&sunk, "sink_zarr", "5.9"),
         (&pca, "pca", "6.5"),
     ] {
         let physical = PhysicalPlan::new(plan.optimize(), PhysicalOptions::default());

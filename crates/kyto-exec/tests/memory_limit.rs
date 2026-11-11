@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{
-    CellValues, ExecuteOptions, Pipeline, fit_memory_limit, fit_memory_limit_with,
-    process_resident_bytes,
+    ALLOCATOR_OVERHEAD_PERCENT, CellValues, ExecuteOptions, Pipeline, fit_memory_limit,
+    fit_memory_limit_with, process_resident_bytes,
 };
 use kyto_plan::{
     Blocks, Member, MemoryLimit, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan,
@@ -251,7 +251,8 @@ fn impossible_limits_raise_ky_e401_before_reading() {
     for array in ["indices", "data", "indptr"] {
         std::fs::remove_dir_all(store.join("layers/counts").join(array)).unwrap();
     }
-    // As if the process held 20 MB: the plan gets two thirds of what is left.
+    // As if the process held 20 MB: the plan gets half of what is left
+    // (`ALLOCATOR_OVERHEAD_PERCENT`).
     let resident = 20_000_000;
     let error = fitted(&store, resident + 100_000, resident).unwrap_err();
     assert_eq!(error.code(), "KY-E401");
@@ -275,7 +276,10 @@ fn impossible_limits_raise_ky_e401_before_reading() {
     // does not.
     let smallest = fitted(&store, required_bytes, resident).unwrap();
     let plan_peak = smallest.estimate().peak_memory();
-    assert_eq!(required_bytes, resident + (plan_peak * 3).div_ceil(2));
+    assert_eq!(
+        required_bytes,
+        resident + (plan_peak * (100 + ALLOCATOR_OVERHEAD_PERCENT)).div_ceil(100)
+    );
     assert_eq!(blocks_of(&smallest), (1, 1));
     let error = fitted(&store, required_bytes - 1, resident).unwrap_err();
     assert_eq!(error.code(), "KY-E401");

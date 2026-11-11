@@ -8,8 +8,10 @@
 //! defines them per cell. Sums are `f64` through the 5.3 row-sum kernel (same bits on
 //! every ISA, R11); a gene-set sum is the same kernel over the row with the other genes'
 //! values set to zero, so a gene set of every gene gives the total's exact bits.
+//! Lives in kyto-exec since task 5.8, which computes the metric inside the stream
+//! (`with_cells`, `filter_cells`) with the gene set taken over the genes present at that
+//! step; kyto-algo re-exports it.
 //! Does not: pick the layer or check the predicate (the resolver does, at plan build),
-//! wire the metric into a terminal (`with_cells`, `select`, `pull`: 5.2 Open (1), 7.x),
 //! or compute scanpy's per-gene metrics, `log1p_` variants or
 //! `pct_counts_in_top_N_genes` (deviations.md).
 
@@ -17,9 +19,10 @@ use std::path::Path;
 
 use kyto_core::{GeneExpr, QcMetric};
 use kyto_error::KytoError;
-use kyto_exec::{CellBlock, CellValues, KernelValue, Kernels};
-use kyto_store::{TableAxis, read_table};
+use kyto_store::{CellBlock, CellValues, TableAxis, read_table};
 use polars::prelude::{ChunkExpandAtIndex, DataFrame, IntoLazy};
+
+use crate::kernels::{KernelValue, Kernels};
 
 /// The genes of a gene set: one flag per gene of the store, in table order.
 #[derive(Debug, Clone, PartialEq, Eq)]

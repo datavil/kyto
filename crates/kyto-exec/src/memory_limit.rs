@@ -13,10 +13,11 @@ use kyto_error::KytoError;
 use kyto_plan::{MemoryLimit, OptimizedPlan, PhysicalOptions, PhysicalPlan};
 
 /// Heap bytes the allocator keeps resident beyond what the plan holds, in percent of
-/// it: freed buffers it caches and fragmentation (measured 30% to 40% over the 5.5
-/// dataset on macOS, `tests/memory_limit.rs`; provisional, re-measured with the
+/// it: freed buffers it caches and fragmentation (measured 28% to 95% over the 5.5
+/// dataset on macOS depending on the block size, `tests/memory_limit.rs`; raised from
+/// 50 to 100 by the user, Nov 12, 2026 (task 5.8); provisional, re-measured with the
 /// benchmarks of 10.3).
-pub const ALLOCATOR_OVERHEAD_PERCENT: u64 = 50;
+pub const ALLOCATOR_OVERHEAD_PERCENT: u64 = 100;
 
 /// The resident set of this process now, in bytes, or `None` where the operating
 /// system does not tell (then a run counts nothing as held before it).
@@ -95,9 +96,9 @@ mod tests {
 
     #[test]
     fn the_budget_leaves_the_allocator_its_overhead() {
-        assert_eq!(plan_budget(150), 100);
+        assert_eq!(plan_budget(200), 100);
         assert_eq!(plan_budget(0), 0);
-        assert_eq!(plan_budget(u64::MAX), (u128::from(u64::MAX) * 2 / 3) as u64);
+        assert_eq!(plan_budget(u64::MAX), u64::MAX / 2);
     }
 
     #[test]

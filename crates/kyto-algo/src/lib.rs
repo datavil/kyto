@@ -4,9 +4,9 @@
 //! connectivities, Leiden/Louvain, UMAP layout and differential expression.
 //! Does not: storage, planning or Python bindings.
 //!
-//! So far: per-cell QC metrics computed on each block ([`qc`], task 6.1).
+//! So far: per-cell QC metrics computed on each block (task 6.1). They live in
+//! kyto-exec since task 5.8 (the executor computes them inside its stream, and this
+//! crate depends on the executor), re-exported here unchanged.
 #![forbid(unsafe_code)]
 
-pub mod qc;
-
-pub use qc::{CellQc, GeneSet, QcValues};
+pub use kyto_exec::{CellQc, GeneSet, QcValues};

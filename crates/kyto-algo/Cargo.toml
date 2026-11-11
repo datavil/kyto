@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
-# Blocks and the 5.3 row-sum and nnz kernels (task 6.1).
+# The per-cell QC metrics (task 6.1) live in the executor, which computes them (task 5.8).
 kyto-exec = { path = "../kyto-exec" }
 # The gene table a QC gene set is evaluated on (task 6.1).
 kyto-store = { path = "../kyto-store" }

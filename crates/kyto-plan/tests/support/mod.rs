@@ -538,12 +538,18 @@ fn layer<'a>(data: &'a Data, name: &str) -> Result<&'a Vec<Vec<f64>>, String> {
         .ok_or_else(|| format!("missing layer {name}"))
 }
 
-/// The median cell total of `input`, when `map` scales to it.
+/// The median cell total of `input` over the cells with a non-zero total (scanpy's
+/// `normalize_total(target_sum=None)`, as the executor computes it, 6.2), when `map`
+/// scales to it.
 fn median_total(map: &MapElementwise, input: &[Vec<f64>]) -> Option<f64> {
     if !matches!(map.op(), ElementwiseOp::NormalizeTotal { target_sum: None }) {
         return None;
     }
-    let mut totals: Vec<f64> = input.iter().map(|row| row.iter().sum()).collect();
+    let mut totals: Vec<f64> = input
+        .iter()
+        .map(|row| row.iter().sum::<f64>())
+        .filter(|total| *total > 0.0)
+        .collect();
     totals.sort_by(f64::total_cmp);
     let n = totals.len();
     Some(match n {
@@ -553,7 +559,16 @@ fn median_total(map: &MapElementwise, input: &[Vec<f64>]) -> Option<f64> {
     })
 }
 
+/// One cell's row through `map`, each value rounded to the `float32` a map writes (its
+/// logical dtype, as the executor stores it; 5.8 compares the two).
 fn map_row(map: &MapElementwise, row: &[f64], median: Option<f64>) -> Vec<f64> {
+    map_row_f64(map, row, median)
+        .into_iter()
+        .map(|value| f64::from(value as f32))
+        .collect()
+}
+
+fn map_row_f64(map: &MapElementwise, row: &[f64], median: Option<f64>) -> Vec<f64> {
     match map.op() {
         ElementwiseOp::Log1p => row.iter().map(|value| value.ln_1p()).collect(),
         ElementwiseOp::NormalizeTotal { target_sum } => {

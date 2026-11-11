@@ -1545,6 +1545,7 @@ dependencies = [
  "proptest",
  "pulp",
  "rayon",
+ "serde_json",
  "stats_alloc",
  "sysinfo",
  "tempfile",

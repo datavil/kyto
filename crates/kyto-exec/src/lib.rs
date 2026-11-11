@@ -17,30 +17,40 @@
 //! allocator's overhead, fits beside what the process already holds, or `KY-E401`.
 //! A run is cancelled and followed through its [`RunControl`] (task 5.7): it stops at
 //! its next block with `KY-E503`, and counts the cell rows it has computed.
+//! Filters, `select_genes`, `take_cells` and computed columns (task 5.8) run in the
+//! stream: cell steps on every block (with per-cell QC metrics, [`CellQc`], task 6.1),
+//! gene steps once before the output's stream, leaving the genes present ([`Genes`]).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
 
 mod block_stream;
 mod cell_block_pool;
+mod cell_steps;
 mod cross_cell;
 mod elementwise;
+mod expression;
+mod gene_steps;
 mod kernels;
 mod memory_limit;
+mod operator;
 mod pipeline;
 mod pipeline_block;
+mod qc;
 mod reduction;
 mod run_control;
 mod statistics;
 
 pub use block_stream::BlockStream;
 pub use cell_block_pool::CellBlockPool;
+pub use gene_steps::Genes;
 pub use kernels::{KernelValue, Kernels, SUM_LANES, combine_lanes, log1p};
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
 };
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
+pub use qc::{CellQc, GeneSet, QcValues};
 pub use run_control::{Progress, RunControl};
 pub use statistics::{
     ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, NodeStatistics, Statistics,

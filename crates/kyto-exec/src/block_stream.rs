@@ -23,6 +23,11 @@
 //! no block is read or computed after the cancel is seen, the window ends with
 //! `KY-E503` and the stream after it. Each computed block adds its cells to the run's
 //! progress.
+//! Operators are the per-cell maps, the cell steps (filters, `take_cells`,
+//! `with_cells`) and the gene selections of task 5.8; blocks a filter emptied are not
+//! handed over, and a `take_cells` whose cells did not all reach it ends the stream
+//! with an error after its last block. The output's stream carries the genes present at
+//! its end ([`BlockStream::genes`]).
 //! Does not: cancel a window being computed when only dropped (it finishes, then
 //! stops), interrupt a tile read or kernel already started, or choose block sizes (the
 //! physical plan does, 5.5).
@@ -38,8 +43,11 @@ use kyto_store::{AxisSelection, CellBlocks, LayerReader, TileGrid};
 use rayon::prelude::*;
 use zarrs::storage::ReadableStorageTraits;
 
+use polars::prelude::DataFrame;
+
 use crate::cell_block_pool::CellBlockPool;
-use crate::elementwise::ElementwiseMaps;
+use crate::gene_steps::Genes;
+use crate::operator::Operator;
 use crate::pipeline_block::PipelineBlock;
 use crate::run_control::RunControl;
 use crate::statistics::Statistics;
@@ -56,6 +64,7 @@ pub struct BlockStream {
     producer: Option<JoinHandle<()>>,
     pool: Arc<CellBlockPool>,
     statistics: Statistics,
+    genes: Option<Genes>,
 }
 
 /// What one stream reads and runs: the scanned layers (shared by every pass of a
@@ -66,7 +75,7 @@ pub(crate) struct StreamSource<S: ?Sized> {
     /// The name of each reader's layer.
     pub(crate) layers: Vec<String>,
     pub(crate) grid: TileGrid,
-    pub(crate) operators: Vec<ElementwiseMaps>,
+    pub(crate) operators: Vec<Operator>,
     /// The layers each block keeps at the stream's end.
     pub(crate) output_layers: BTreeSet<String>,
     pub(crate) window: NonZeroUsize,
@@ -93,6 +102,7 @@ impl BlockStream {
         source: StreamSource<S>,
         thread_pool: Arc<rayon::ThreadPool>,
         statistics: Statistics,
+        genes: Option<Genes>,
     ) -> Result<Self, KytoError>
     where
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
@@ -123,7 +133,15 @@ impl BlockStream {
             producer: Some(handle),
             pool,
             statistics,
+            genes,
         })
+    }
+
+    /// The genes the stream's blocks are over and their table, when the plan changes
+    /// them or computes gene columns (task 5.8); `None` when the blocks are over every
+    /// gene of the store, as stored.
+    pub fn genes(&self) -> Option<&Genes> {
+        self.genes.as_ref()
     }
 
     /// The statistics the cross-cell nodes below the output computed in their
@@ -194,6 +212,17 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
         };
         while let Some(outputs) = windows.next_window() {
             for item in outputs {
+                // A block a filter emptied is not handed over.
+                if let Ok(block) = &item
+                    && block.cells.is_empty()
+                {
+                    if let Ok(block) = item {
+                        for (_, layer) in block.layers {
+                            self.pool.recycle(layer);
+                        }
+                    }
+                    continue;
+                }
                 let failed = item.is_err();
                 if self.sender.send(item).is_err() || failed {
                     return;
@@ -255,13 +284,17 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
         let source = self.source;
         let mut inputs = Vec::with_capacity(source.window.get());
         let mut failure = None;
+        let mut ended = false;
         while inputs.len() < source.window.get() {
             if let Err(cancelled) = source.control.check() {
                 failure = Some(cancelled);
                 break;
             }
             match self.read_next() {
-                None => break,
+                None => {
+                    ended = true;
+                    break;
+                }
                 Some(Ok(block)) => inputs.push(block),
                 Some(Err(error)) => {
                     failure = Some(error);
@@ -271,15 +304,18 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
         }
         if inputs.is_empty() && failure.is_none() {
             self.done = true;
-            return None;
+            // A take_cells missing some of its cells ends the stream with an error.
+            return self.end_check().map(|error| vec![Err(error)]);
         }
-        self.done = failure.is_some();
+        self.done = failure.is_some() || ended;
         let pool = self.pool;
         // Rayon over blocks; an indexed collect keeps cell order (R11).
         let mut outputs: Vec<Item> = inputs
             .into_par_iter()
             .map(|block| {
                 source.control.check()?;
+                // Progress counts the rows read, whatever filters keep.
+                let rows = block.cells.len() as u64;
                 let mut block = source.operators.iter().try_fold(block, |block, operator| {
                     operator.apply(block, pool, &source.store)
                 })?;
@@ -295,12 +331,25 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
                         pool.recycle(dropped);
                     }
                 }
-                source.control.add_done(block.cells.len() as u64);
+                source.control.add_done(rows);
                 Ok(block)
             })
             .collect();
+        let failed = failure.is_some() || outputs.iter().any(Result::is_err);
         outputs.extend(failure.map(Err));
+        if ended && !failed {
+            outputs.extend(self.end_check().map(Err));
+        }
         Some(outputs)
+    }
+
+    /// At the stream's end: the first operator's error for something it expected
+    /// and did not see (a `take_cells` cell an earlier step removed).
+    fn end_check(&self) -> Option<KytoError> {
+        self.source
+            .operators
+            .iter()
+            .find_map(|operator| operator.check_end().err())
     }
 
     /// The next cell block of every scanned layer, joined; without layers, the next
@@ -324,10 +373,12 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
                 (block, end)
             };
             let first = block * grid.cell_block_size();
+            let rows = (end - row) as usize;
             return Some(Ok(PipelineBlock {
                 cell_block: block,
                 cells: (first + row..first + end).collect(),
                 layers: BTreeMap::new(),
+                columns: DataFrame::empty_with_height(rows),
             }));
         }
         let mut layers = BTreeMap::new();
@@ -342,10 +393,12 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
             layers.insert(layer.clone(), selected.block);
         }
         let (cell_block, cells) = rows?;
+        let rows = cells.len();
         Some(Ok(PipelineBlock {
             cell_block,
             cells,
             layers,
+            columns: DataFrame::empty_with_height(rows),
         }))
     }
 }

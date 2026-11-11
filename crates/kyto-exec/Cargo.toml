@@ -26,15 +26,21 @@ pulp = { version = "0.22.3", features = ["x86-v4"] }
 # The process's resident memory for the memory limit (task 5.5); the version and
 # features polars already builds (`polars-utils`).
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+# Filters, selections and computed columns (task 5.8) evaluate resolved expressions; the
+# per-cell QC metrics they compute (task 6.1) moved here from kyto-algo.
+kyto-core = { path = "../kyto-core" }
+# Expressions run on the cell and gene tables through Polars; same version as kyto-core,
+# the features kyto-algo used for the QC gene sets.
+polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "dtype-categorical"] }
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).
 stats_alloc = "0.1.10"
 # Peak heap bytes for the 5.5 memory-limit check, against the estimate (as kyto-plan's 4.6 check).
 peak_alloc = "0.3.0"
-kyto-core = { path = "../kyto-core" }
-polars = { version = "0.55.2", default-features = false }
 proptest = "1.11.0"
+# The 4.4 reference evaluator's dataset schema (`kyto-plan/tests/support`, task 5.8).
+serde_json = "1.0.154"
 tempfile = "3.27.0"
 # Kernel benches (task 5.3): `cargo bench -p kyto-exec --bench kernels`.
 criterion = { version = "0.8.2", default-features = false }

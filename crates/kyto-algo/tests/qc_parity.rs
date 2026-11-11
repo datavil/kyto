@@ -236,7 +236,8 @@ fn qc_metrics_match_scanpy_on_fixtures() {
 }
 
 /// A QC column in `with_cells` gets its dtype and reads its layer and the gene-set
-/// columns; the executor still refuses computed columns (5.2 Open (1)), naming 7.2.
+/// columns; the executor computes the columns in the stream (task 5.8), equal to
+/// scanpy's reference.
 #[test]
 fn qc_columns_in_a_plan() {
     let work = tempfile::tempdir().unwrap();
@@ -299,8 +300,30 @@ fn qc_columns_in_a_plan() {
         reads.contains(&Member::GeneColumn("symbol".to_owned())),
         "{reads:?}"
     );
-    let error = Pipeline::new(&physical, 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601");
+    let stream = Pipeline::new(&physical, 0)
+        .unwrap()
+        .run(ExecuteOptions::new(NonZeroUsize::MIN))
+        .unwrap();
+    let mut columns: Vec<Vec<f64>> = vec![Vec::new(); 3];
+    for block in stream {
+        let block = block.unwrap();
+        for (values, name) in
+            columns
+                .iter_mut()
+                .zip(["total_counts", "n_genes_by_counts", "pct_counts_mt"])
+        {
+            let column = block.columns.column(name).unwrap();
+            let column = column.cast(&polars::prelude::DataType::Float64).unwrap();
+            values.extend(column.f64().unwrap().iter().map(Option::unwrap));
+        }
+    }
+    for (values, name) in columns
+        .iter()
+        .zip(["total_counts", "n_genes_by_counts", "pct_counts_mt"])
+    {
+        let scanpy = read_f64(&reference.join(format!("{name}.f64")));
+        assert_close("synthetic", name, values, &scanpy);
+    }
 }
 
 /// A gene set without a column (a literal from plan JSON) holds for every gene, or for

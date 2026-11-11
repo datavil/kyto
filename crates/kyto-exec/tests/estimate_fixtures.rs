@@ -14,7 +14,9 @@
 //! with `PhysicalPlan::estimate` of the same physical plan: within 25% for whole
 //! blocks; for split blocks at most 25% below (above is the decode term's upper bound,
 //! 4.6 Open (3): every tile of a block decoding at once, 32 tiles on pbmc3k at 1024
-//! genes a block, while 2 threads decode 2). Needs Python with anndata
+//! genes a block, while 2 threads decode 2). A third plan (task 5.8: a QC column, a
+//! cell filter, a gene filter on `symbol`, then the maps) is reported but not asserted
+//! until the estimate counts table reads (task 5.10). Needs Python with anndata
 //! (`uv run cargo test`); skips where it has no wheels (exit code 77). The only test in
 //! this binary, so no other test allocates while it measures.
 
@@ -26,7 +28,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use kyto_core::{GeneIds, Tiling};
+use kyto_core::{
+    BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, QcMetric, StrFunction, Tiling,
+};
 use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{Member, Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
@@ -127,7 +131,40 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                 .unwrap()
                 .log1p(Some("norm"), "log1p")
                 .unwrap();
-            let plans = [("scan", &scan, layer.as_str()), ("maps", &mapped, "log1p")];
+            // Task 5.8's steps: a QC column, a cell filter on it, a gene filter on
+            // the gene table, then the maps (4.6 Open (1): new rows measured).
+            let filtered = scan
+                .with_cells([(
+                    "n_genes".to_owned(),
+                    CellExpr::qc(Some(layer.clone()), QcMetric::GenesDetected).unwrap(),
+                )])
+                .unwrap()
+                .filter_cells(
+                    &Expr::binary(
+                        CellExpr::column("n_genes"),
+                        BinaryOp::GtEq,
+                        Literal::Int(30),
+                    )
+                    .unwrap(),
+                )
+                .unwrap()
+                .filter_genes(
+                    &GeneExpr::column("symbol")
+                        .str(StrFunction::StartsWith("MT-".to_owned()))
+                        .unwrap()
+                        .not()
+                        .unwrap(),
+                )
+                .unwrap()
+                .normalize_total(Some(1e4), Some(&layer), "norm")
+                .unwrap()
+                .log1p(Some("norm"), "log1p")
+                .unwrap();
+            let plans = [
+                ("scan", &scan, layer.as_str()),
+                ("maps", &mapped, "log1p"),
+                ("filters", &filtered, "log1p"),
+            ];
             for ((kind, plan, read), blocks_in_flight, block_cells) in plans
                 .into_iter()
                 .flat_map(|plan| [1, 2].map(|in_flight| (plan, in_flight)))
@@ -156,7 +193,12 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                 // Whole blocks: the 4.6 Done-when. Split blocks (5.5) on many gene blocks
                 // are dominated by the decode term, which assumes every tile of a block
                 // decodes at once (4.6 Open (3)): too high, never far too low.
-                let off = if block_cells.is_none() {
+                // The "filters" rows are reported, not asserted: the estimate has no
+                // term for reading the cell and gene tables, and reading an Enum column
+                // (pbmc3k's `symbol`) peaks far above what it holds (task 5.10).
+                let off = if kind == "filters" {
+                    false
+                } else if block_cells.is_none() {
                     error.abs() > TOLERANCE
                 } else {
                     error < -TOLERANCE
