@@ -168,20 +168,18 @@ fn rows_of(blocks: &[PipelineBlock], layer: &str) -> (Vec<u64>, Vec<u64>, Vec<Ro
     (cells, numbers, rows)
 }
 
-/// `log1p(normalize_total(counts, 1e4))` by hand, each map's output rounded to f32.
+/// `log1p(normalize_total(counts, 1e4))` by hand, each map's output rounded to f32,
+/// `normalize_total` in scanpy's float32 steps (task 6.2).
 fn expected_rows() -> Vec<Row> {
     counts()
         .iter()
         .map(|row| {
             let total: f64 = row.iter().map(|&(_, count)| f64::from(count)).sum();
-            let factor = if total == 0.0 {
-                1.0
-            } else {
-                TARGET_SUM / total
-            };
+            let divisor = total as f32 / TARGET_SUM as f32;
+            let divisor = if divisor == 0.0 { 1.0 } else { divisor };
             row.iter()
                 .map(|&(gene, count)| {
-                    let normalized = (f64::from(count) * factor) as f32;
+                    let normalized = count as f32 / divisor;
                     (gene, kyto_exec::log1p(normalized).to_bits())
                 })
                 .collect()

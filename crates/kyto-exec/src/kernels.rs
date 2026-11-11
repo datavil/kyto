@@ -1,5 +1,5 @@
 //! SIMD kernels over the values of CSR rows: row sums, row sums of squares, row nnz,
-//! row scaling and `log1p` (task 5.3).
+//! row scaling, row division (task 6.2) and `log1p` (task 5.3).
 //!
 //! Does: run each kernel through `pulp`'s runtime dispatch ([`Kernels::detected`]: AVX-512
 //! with `x86-v4`, AVX2 + FMA with `x86-v3`, NEON on aarch64) or on pulp's scalar
@@ -19,7 +19,7 @@
 //!
 //! A NaN stays a NaN, but its payload bits are not promised.
 //! Does not: per-gene (column) reductions (a scatter by gene index, task 5.4/6.x),
-//! choose float steps for parity with scanpy (task 6.2), or check CSR structure: the
+//! choose float steps for parity with scanpy (the callers do, task 6.2), or check CSR structure: the
 //! callers pass a checked `CellBlock`'s `indptr` and values.
 
 mod log1p;
@@ -189,6 +189,35 @@ impl Kernels {
         });
     }
 
+    /// Each value divided by its row's divisor in `f32`, `value as f32 / divisor`,
+    /// written to `out` (same length as `values`): numpy's `float32` division, as
+    /// scanpy's `normalize_total` divides (task 6.2). Not [`Kernels::scale_rows`] by
+    /// the reciprocal, which rounds differently.
+    ///
+    /// # Panics
+    /// If `indptr` is not a row pointer into `values`, `divisors` has not one divisor
+    /// per row, or `out` is not as long as `values`.
+    pub fn divide_rows<T: KernelValue>(
+        &self,
+        indptr: &[u64],
+        values: &[T],
+        divisors: &[f32],
+        out: &mut [f32],
+    ) {
+        assert_eq!(
+            divisors.len(),
+            indptr.len().saturating_sub(1),
+            "one divisor per row"
+        );
+        assert_eq!(out.len(), values.len(), "out as long as values");
+        self.arch.dispatch(DivideRows {
+            indptr,
+            values,
+            divisors,
+            out,
+        });
+    }
+
     /// [`log1p`] of each value (a `u32` rounded to `f32` first), written to `out`.
     ///
     /// # Panics
@@ -313,6 +342,27 @@ impl<T: KernelValue> WithSimd for ScaleRows<'_, T> {
             let row = &self.values[range.clone()];
             for (out, &value) in self.out[range].iter_mut().zip(row) {
                 *out = (value.to_f64() * factor) as f32;
+            }
+        }
+    }
+}
+
+struct DivideRows<'a, T> {
+    indptr: &'a [u64],
+    values: &'a [T],
+    divisors: &'a [f32],
+    out: &'a mut [f32],
+}
+
+impl<T: KernelValue> WithSimd for DivideRows<'_, T> {
+    type Output = ();
+    #[inline(always)]
+    fn with_simd<S: Simd>(self, _simd: S) {
+        for (bounds, &divisor) in self.indptr.windows(2).zip(self.divisors) {
+            let range = bounds[0] as usize..bounds[1] as usize;
+            let row = &self.values[range.clone()];
+            for (out, &value) in self.out[range].iter_mut().zip(row) {
+                *out = value.to_f32() / divisor;
             }
         }
     }

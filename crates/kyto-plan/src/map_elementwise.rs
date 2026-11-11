@@ -8,8 +8,11 @@
 //! axis. `log1p` and `normalize_total` with a `target_sum` are per-cell;
 //! `normalize_total` without one scales to the median total over cells (scanpy's
 //! default), which is cross-cell.
-//! Does not: compute anything (6.2, fused into one pass by 4.4), or take scanpy's
-//! other parameters (`exclude_highly_expressed`, `base`, ...), which 6.2 adds.
+//! A `target_sum` must be within `float32`'s normal range (task 6.2: the executor
+//! divides in `float32`, as scanpy).
+//! Does not: compute anything (the executor does, `kyto-exec` `elementwise.rs`, fused
+//! into one pass by 4.4), or take scanpy's other parameters
+//! (`exclude_highly_expressed`, `log1p`'s `base`; not asked for by 6.2).
 
 use std::fmt;
 use std::sync::Arc;
@@ -129,9 +132,14 @@ impl Plan {
     /// This plan with `layer` (or the default layer) scaled so each cell sums to
     /// `target_sum` (the median total over cells when `None`), written to `into`.
     ///
+    /// `target_sum` is used as a `float32`, as scanpy divides by it in the data's
+    /// `float32` (task 6.2).
+    ///
     /// # Errors
-    /// `KY-E215` for a `target_sum` that is not a positive finite number; and those of
-    /// [`Plan::log1p`].
+    /// `KY-E215` for a `target_sum` that is not a positive finite number, or that is
+    /// not within `float32`'s normal range (it would round to 0, a subnormal or
+    /// infinity: scanpy then gives all zeros or leaves the data unscaled; task 6.2,
+    /// deviations.md); and those of [`Plan::log1p`].
     pub fn normalize_total(
         self: &Arc<Self>,
         target_sum: Option<f64>,
@@ -141,6 +149,19 @@ impl Plan {
         self.check_open("normalize_total")?;
         if let Some(target_sum) = target_sum {
             Self::check_positive("normalize_total", "target_sum", target_sum)?;
+            if !(target_sum as f32).is_normal() {
+                return Err(Self::invalid_argument(
+                    "normalize_total",
+                    "target_sum",
+                    &target_sum.to_string(),
+                    "it is outside float32's normal range, in which kyto divides as scanpy",
+                    &format!(
+                        "a positive float from {:e} to {:e}",
+                        f32::MIN_POSITIVE,
+                        f32::MAX
+                    ),
+                ));
+            }
         }
         self.map_elementwise(ElementwiseOp::NormalizeTotal { target_sum }, layer, into)
     }

@@ -110,6 +110,22 @@ fn check_all<T: KernelValue + std::fmt::Debug>(rows: &[Vec<T>], factors: &[f64])
             "scale_rows {set}"
         );
 
+        let divisors: Vec<f32> = factors.iter().map(|&factor| factor as f32).collect();
+        kernels.divide_rows(&indptr, &values, &divisors, &mut out);
+        let expected: Vec<u32> = rows
+            .iter()
+            .zip(&divisors)
+            .flat_map(|(row, &divisor)| {
+                row.iter()
+                    .map(move |value| f32_key(value.to_f32() / divisor))
+            })
+            .collect();
+        assert_eq!(
+            out.iter().map(|&value| f32_key(value)).collect::<Vec<_>>(),
+            expected,
+            "divide_rows {set}"
+        );
+
         kernels.log1p(&values, &mut out);
         let expected: Vec<u32> = values
             .iter()

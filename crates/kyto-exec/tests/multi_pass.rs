@@ -511,16 +511,19 @@ fn median_by_hand() -> (f64, Vec<Vec<(u32, u32)>>) {
     let median = if n % 2 == 1 {
         positive[n / 2]
     } else {
-        (positive[n / 2 - 1] + positive[n / 2]) / 2.0
+        // numpy's float32 mean of the two middle totals (task 6.2).
+        f64::from((positive[n / 2 - 1] as f32 + positive[n / 2] as f32) / 2.0)
     };
+    // scanpy's float32 steps (task 6.2): f32 total / f32 median, value / that in f32.
     let expected = rows
         .iter()
         .zip(&totals)
         .map(|(row, total)| {
-            let factor = if *total == 0.0 { 1.0 } else { median / total };
+            let divisor = *total as f32 / median as f32;
+            let divisor = if divisor == 0.0 { 1.0 } else { divisor };
             row.iter()
                 .map(|&(gene, count)| {
-                    let normalized = (f64::from(count) * factor) as f32;
+                    let normalized = count as f32 / divisor;
                     (gene, kyto_exec::log1p(normalized).to_bits())
                 })
                 .collect()

@@ -331,7 +331,12 @@ fn corpus() -> Vec<Arc<Plan>> {
             .unwrap(),
     );
     // Layers.
-    for target_sum in [None, Some(1e4), Some(0.1 + 0.2), Some(f64::MIN_POSITIVE)] {
+    for target_sum in [
+        None,
+        Some(1e4),
+        Some(0.1 + 0.2),
+        Some(f64::from(f32::MIN_POSITIVE)),
+    ] {
         plans.push(
             scan()
                 .normalize_total(target_sum, Some("counts"), "normalized")

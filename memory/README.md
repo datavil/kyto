@@ -32,3 +32,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Deterministic reductions](deterministic_reductions.md): leaf per store cell block (split parts continue it), binary-counter tree in block order; stable across threads and block sizes, not tilings.
 - [GIL, progress and Ctrl-C](gil_cancel_progress.md): worker thread runs the plan, Python thread polls `check_signals`/progress every 20 ms detached; `Receiver` is not `Sync` (move it through `detach`); `interrupt_main` in tests.
 - [QC metrics are expression leaves](qc_expression_leaves.md): `Source::Qc` resolved at build, computed per block by `kyto_algo::CellQc`; gene set = Polars predicate on genes.parquet; `Source` lost Eq/Hash.
+- [scanpy `normalize_total` in float32 steps](scanpy_normalize_float32_steps.md): f32 total, f32 divisor, divide (not reciprocal), f32 median mean; `normalized = adata.X` before in-place `log1p` aliases (1.5 reference bug).

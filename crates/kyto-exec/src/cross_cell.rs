@@ -10,8 +10,9 @@
 //! `reduction.rs`, R11), kept by an [`Accumulator`]; and turn the
 //! result into [`NodeStatistics`] and, for `normalize_total`, the maps of its apply pass
 //! with the median as their target. Median `normalize_total`: one pass of cell totals
-//! (`f64`, [`Kernels::row_sums`]), target = median of the positive totals as
-//! `np.median(counts[counts > 0])` (NaN when there is none, as numpy). HVG `seurat` and
+//! (`f64`, [`Kernels::row_sums`], rounded to `f32` as scanpy keeps them, task 6.2),
+//! target = median of the positive totals as `np.median(counts[counts > 0])` on
+//! `float32` (NaN when there is none, as numpy). HVG `seurat` and
 //! `cell_ranger`: one pass of per-gene moments (of `expm1(value)` for `seurat`, as
 //! scanpy undoes the log first); `seurat_v3`: moments, then moments of
 //! `min(value, clip)` per gene with `clip = mean + sqrt(n) * reg_std`.
@@ -25,7 +26,7 @@ use kyto_error::KytoError;
 use kyto_plan::{ElementwiseOp, HvgFlavor, MapElementwise};
 use kyto_store::{CellBlock, CellValues};
 
-use crate::elementwise::ElementwiseMaps;
+use crate::elementwise::{ElementwiseMaps, cell_totals};
 use crate::kernels::{KernelValue, Kernels};
 use crate::statistics::{
     ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, NodeStatistics,
@@ -204,16 +205,23 @@ impl Accumulator {
         match (self, leaf) {
             (Self::Totals(_), Partial::Totals(totals)) => {
                 let mut row_totals = Vec::new();
+                let kernels = Kernels::detected();
                 match block.data() {
                     CellValues::F32(values) => {
-                        Kernels::detected().row_sums(block.indptr(), values, &mut row_totals);
+                        cell_totals(kernels, block.indptr(), values, &mut row_totals);
                     }
                     CellValues::U32(values) => {
-                        Kernels::detected().row_sums(block.indptr(), values, &mut row_totals);
+                        cell_totals(kernels, block.indptr(), values, &mut row_totals);
                     }
                 }
-                // NaN is not positive, as numpy's `counts > 0`.
-                totals.extend(row_totals.into_iter().filter(|total| *total > 0.0));
+                // scanpy keeps the totals in the data's float32 (task 6.2); NaN is not
+                // positive, as numpy's `counts > 0`.
+                totals.extend(
+                    row_totals
+                        .into_iter()
+                        .map(|total| f64::from(total as f32))
+                        .filter(|total| *total > 0.0),
+                );
                 Ok(())
             }
             (
@@ -338,15 +346,16 @@ impl<'a> GeneValues<'a> {
     }
 }
 
-/// `np.median` of `values` (sorted here): the middle value, or the mean of the two
-/// middle values; NaN for none.
+/// `np.median` of `values` (`float32` values held as `f64`, sorted here): the middle
+/// value, or the mean of the two middle values in `float32` as numpy's `float32` mean
+/// (`f32(f32(a + b) / 2)`, task 6.2); NaN for none.
 fn median(values: &mut [f64]) -> f64 {
     values.sort_unstable_by(f64::total_cmp);
     let n = values.len();
     match n {
         0 => f64::NAN,
         _ if n % 2 == 1 => values[n / 2],
-        _ => (values[n / 2 - 1] + values[n / 2]) / 2.0,
+        _ => f64::from((values[n / 2 - 1] as f32 + values[n / 2] as f32) / 2.0),
     }
 }
 
@@ -378,6 +387,16 @@ mod tests {
         assert_eq!(median(&mut [3.0]), 3.0);
         assert_eq!(median(&mut [4.0, 1.0, 3.0]), 3.0);
         assert_eq!(median(&mut [4.0, 1.0, 3.0, 2.0]), 2.5);
+        // float32 mean of the two middle values: 2^24 + 1 is not a float32.
+        assert_eq!(
+            median(&mut [16_777_216.0, 2.0, 1.0, 16_777_218.0]),
+            8_388_609.0
+        );
+        assert_eq!(
+            median(&mut [16_777_218.0, 16_777_216.0]),
+            16_777_216.0,
+            "(2^24 + 2^24 + 2) / 2 in float32"
+        );
     }
 
     #[test]

@@ -337,6 +337,30 @@ fn normalize_total_is_cross_cell_without_a_target() {
             .code(),
         "KY-E215"
     );
+    // Task 6.2: the target is used as a float32, so it must be a normal float32.
+    for target_sum in [1e-50, 1e-40, 1e39, f64::MAX] {
+        let error = scan()
+            .normalize_total(Some(target_sum), Some("counts"), "x")
+            .unwrap_err();
+        assert_eq!(error.code(), "KY-E215", "{target_sum}");
+        let message = error.to_string();
+        assert!(message.contains("target_sum"), "{message}");
+        assert!(message.contains("float32's normal range"), "{message}");
+        assert!(error.hint().contains("1.1754944e-38"), "{}", error.hint());
+    }
+    for target_sum in [
+        f64::from(f32::MIN_POSITIVE),
+        1e-30,
+        1e30,
+        f64::from(f32::MAX),
+    ] {
+        assert!(
+            scan()
+                .normalize_total(Some(target_sum), Some("counts"), "x")
+                .is_ok(),
+            "{target_sum}"
+        );
+    }
     let no_default = scan().log1p(None, "x").unwrap_err();
     assert_eq!(no_default.code(), "KY-E211");
     assert!(no_default.to_string().contains("log1p(layer=None)"));

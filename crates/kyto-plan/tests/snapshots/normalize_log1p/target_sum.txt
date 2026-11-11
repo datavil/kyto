@@ -1,0 +1,8 @@
+logical plan
+  node 2 LOG1P "normalized" -> "log1p" <- node 1
+  node 1 NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000 <- node 0
+  node 0 SCAN "synthetic.kyto" (24 cells x 6 genes)
+optimized plan
+  output #1 reads [layer:counts, layer:log1p, layer:normalized, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities]
+  #1 FUSED_ELEMENTWISE [NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000; LOG1P "normalized" -> "log1p"] keeps ["log1p", "normalized"] <- #0 (node 1, 2) [device=cpu passes=1 blocks=4096 cells]
+  #0 SCAN "synthetic.kyto" (24 cells x 6 genes) reads [layer:counts, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities] (node 0) [device=cpu passes=1 blocks=4096 cells]
