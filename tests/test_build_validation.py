@@ -99,6 +99,10 @@ def test_every_ky_e2xx_code_fires_without_reading_the_store(tmp_path: Path) -> N
         "KY-E212": lambda: loose == None,
         "KY-E213": lambda: (cell_column("n_genes") + 1).recompute(),
         "KY-E214": lambda: gene_expression("CD3E", by=cast(Any, "name")),
+        "KY-E217": lambda: kyto.from_json(atlas.to_json()[:-1]),
+        "KY-E218": lambda: kyto.from_json(
+            atlas.to_json().replace('"version":1', '"version":2', 1)
+        ),
     }
     for code, build in cases.items():
         with pytest.raises(kyto.KytoError) as raised:

@@ -5,7 +5,8 @@
 //! new `Atlas` (R2); resolve an expression's names against the plan (task 3.5); build
 //! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
 //! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early);
-//! filter genes (`filter_genes`, 4.1/7.2's gene filter taken early for task 3.8).
+//! filter genes (`filter_genes`, 4.1/7.2's gene filter taken early for task 3.8); write the
+//! plan JSON (`to_json`) and read it back (`from_json`, task 4.3).
 //! Does not: read other columns or the matrix; hold any state besides the plan (R7); expose
 //! `__getitem__`, `.X`, `obs` or `var` (R4). The public `kyto.scan` and the chain
 //! methods arrive with 7.1/7.2; `scan` is private until then.
@@ -346,6 +347,36 @@ impl Atlas {
             .map_err(|error| to_py_err(py, &error))
     }
 
+    /// Write the plan as JSON text, to store it or send it elsewhere.
+    ///
+    /// The text is versioned (``"version": 1``) and lists the plan's nodes from the
+    /// scan up, each with its stable ID (its position from the scan, 0), the ID of its
+    /// input, and its step: the plan method that built it and its arguments with every
+    /// name resolved in full (R6). The scan holds the store's location, its schema and
+    /// its gene IDs and symbols as read when the plan was built, so ``from_json`` needs
+    /// no store. Equal plans write equal text, and ``from_json(atlas.to_json())``
+    /// gives back an equal plan.
+    ///
+    /// Returns
+    /// -------
+    /// str
+    ///     The plan JSON, on one line (a new string; the plan is unchanged). Nothing
+    ///     is read.
+    ///
+    /// Examples
+    /// --------
+    /// >>> genes = gene_column("feature_type") == "Gene Expression"
+    /// >>> atlas = scan(store).filter_genes(genes)
+    /// >>> text = atlas.to_json()
+    /// >>> text[:39]
+    /// '{"format":"kyto-plan","version":1,"node'
+    /// >>> print(from_json(text))
+    /// FILTER_GENES gene_column('feature_type') == 'Gene Expression'
+    /// SCAN "..." (2 cells x 3 genes)
+    fn to_json(&self) -> String {
+        self.plan.to_json()
+    }
+
     /// The plan, one node per line, from the last step down to the scan.
     fn __str__(&self) -> String {
         self.plan.to_string()
@@ -377,6 +408,57 @@ fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAny>) -> Kyto
             .repr()
             .map_or_else(|_| format!("<{type_name}>"), |text| text.to_string()),
     }
+}
+
+/// Read a plan from the JSON text that ``Atlas.to_json`` wrote.
+///
+/// The plan is rebuilt step by step with the same checks as when it was first built,
+/// against the store snapshot the text holds (schema, gene IDs and symbols). No store
+/// is opened or read; the store is checked when the plan runs.
+///
+/// Parameters
+/// ----------
+/// text : str
+///     A plan JSON, as ``Atlas.to_json`` writes it.
+///
+/// Returns
+/// -------
+/// Atlas
+///     A new plan, equal to the one that wrote ``text``.
+///
+/// Raises
+/// ------
+/// PlanError
+///     ``KY-E217``: ``text`` is not JSON, not a plan JSON, or breaks its format (the
+///     message names the line and column, or the node).
+///     ``KY-E218``: the text has a ``version`` this kyto does not read.
+/// KytoError
+///     Any error a plan method raises for its arguments, when the text was edited
+///     into a plan that does not build (such as ``KY-E109`` for a missing layer).
+///
+/// Examples
+/// --------
+/// >>> text = (
+/// ...     '{"format":"kyto-plan","version":1,"nodes":[{"id":0,"input":null,"step":'
+/// ...     '{"method":"scan","source":"pbmc.kyto","schema":{"n_cells":2,"n_genes":1,'
+/// ...     '"tiling":{"cell_block_size":4096,"gene_block_size":1024},'
+/// ...     '"cells":{"columns":[{"name":"cell_id","dtype":"String"}]},'
+/// ...     '"genes":{"columns":[{"name":"gene_id","dtype":"String"}]},'
+/// ...     '"layers":[{"name":"counts","dtype":"uint32","nnz":2}],'
+/// ...     '"embeddings":[],"graphs":[]},"gene_ids":["CD3E"],"symbols":null}}]}'
+/// ... )
+/// >>> print(from_json(text))
+/// SCAN "pbmc.kyto" (2 cells x 1 genes)
+/// >>> from_json('{"format":"kyto-plan","version":2,"nodes":[]}')
+/// Traceback (most recent call last):
+///     ...
+/// kyto.errors.PlanError: KY-E218: the plan JSON has version 2, but this kyto reads only version 1...
+#[pyfunction]
+#[pyo3(signature = (text, /))]
+pub fn from_json(py: Python<'_>, text: &str) -> PyResult<Atlas> {
+    py.detach(|| Plan::from_json(text))
+        .map(|plan| Atlas { plan })
+        .map_err(|error| to_py_err(py, &error))
 }
 
 /// Build the root `Atlas` of the local store at `store` (private until 7.1).

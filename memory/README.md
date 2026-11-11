@@ -21,3 +21,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [serde validation and R10](serde_errors_r10.md): no `try_from` with String errors; hand-written `Deserialize` with `missing_field`/`unknown_variant`; reject `null` optional keys for exact round trips.
 - [`.h5ad` float NaN becomes null](h5ad_float_nan_null.md): importer turns obs/var float NaN into null (user, 3.7); kyto writers keep NaN; a stored NaN round-trips through `.h5ad` as null.
 - [Ask Polars for result dtypes](polars_dtype_inference.md): hand-copied supertype and literal rules were wrong; `column_dtype` asks `collect_schema()` with stand-in leaf columns.
+- [Exact JSON floats and deep expression trees](plan_json_floats_and_depth.md): `serde_json` needs `float_roundtrip`; NaN/inf as text; flat `ExprJson` for 1000-deep trees; `from_json` replays the builders, so a new node needs a `Step`.

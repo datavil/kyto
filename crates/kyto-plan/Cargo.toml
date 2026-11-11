@@ -18,6 +18,9 @@ kyto-error = { path = "../kyto-error" }
 # as kyto-core, which already brings it in.
 polars = { version = "0.55.2", default-features = false, features = ["lazy", "dtype-i8", "dtype-i16", "dtype-u8", "dtype-u16"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
+# The plan JSON (task 4.3). `float_roundtrip` parses every float back to the same bits,
+# so the round trip is exact.
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 
 [dev-dependencies]
-serde_json = "1.0.154"
+proptest = "1.11.0"

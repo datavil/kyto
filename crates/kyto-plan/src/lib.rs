@@ -12,7 +12,8 @@
 //! changes and whether it is per-cell or cross-cell ([`LogicalNode`]) and computes its
 //! output [`PlanSchema`] from its input's ([`Transform`]). `Plan::resolve` resolves an
 //! expression's names against the plan (task 3.5, R6). The read-only handles [`Table`],
-//! [`Matrix`], [`Embedding`], [`Graph`] and [`Modality`] (task 3.6).
+//! [`Matrix`], [`Embedding`], [`Graph`] and [`Modality`] (task 3.6). The plan JSON
+//! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`].
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -24,6 +25,7 @@ mod names;
 mod neighbors;
 mod node;
 mod plan;
+mod plan_json;
 mod plan_schema;
 mod scan;
 mod select_genes;
@@ -40,6 +42,7 @@ pub use map_elementwise::{ElementwiseOp, MapElementwise};
 pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
 pub use plan::{Plan, PlanNodes};
+pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};
 pub use plan_schema::{PlanSchema, SparseMember};
 pub use scan::Scan;
 pub use select_genes::SelectGenes;

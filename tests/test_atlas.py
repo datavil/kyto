@@ -86,6 +86,7 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "embedding",
         "graph",
         "modality",
+        "to_json",
     }
 
 
@@ -115,6 +116,7 @@ def test_docstring_examples_run(store: Path) -> None:
         ("Atlas.with_default_layer", _kyto.Atlas.with_default_layer.__doc__),
         ("Atlas.resolve", _kyto.Atlas.resolve.__doc__),
         ("Atlas.filter_genes", _kyto.Atlas.filter_genes.__doc__),
+        ("Atlas.to_json", _kyto.Atlas.to_json.__doc__),
     ):
         assert docstring is not None
         globs = {
@@ -122,7 +124,8 @@ def test_docstring_examples_run(store: Path) -> None:
             "store": store,
             "feature": kyto.feature,
             "gene_column": kyto.gene_column,
+            "from_json": kyto.from_json,
         }
         runner.run(parser.get_doctest(docstring, globs, name, None, 0))
     assert runner.failures == 0
-    assert runner.tries == 10
+    assert runner.tries == 15

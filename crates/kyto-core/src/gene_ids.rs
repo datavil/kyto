@@ -78,6 +78,20 @@ impl GeneIds {
             .unwrap_or_default()
     }
 
+    /// Each gene's symbol, in table order (`None` for a gene without one), or `None`
+    /// when no symbols were read: the input of [`GeneIds::with_symbols`] back (the
+    /// plan JSON writes it, task 4.3).
+    pub fn symbols(&self) -> Option<Vec<Option<&str>>> {
+        let index = self.symbols.as_ref()?;
+        let mut symbols = vec![None; self.ordered.len()];
+        for (symbol, positions) in index {
+            for &position in positions {
+                symbols[position] = Some(symbol.as_str());
+            }
+        }
+        Some(symbols)
+    }
+
     /// The IDs in table order: gene `j` is the `j`-th (format.md §5.1).
     pub fn ordered(&self) -> &[String] {
         &self.ordered

@@ -8,7 +8,7 @@
 //! the default layer. Caching these makes building a chain of N nodes O(N), not
 //! O(N^2) (task 3.8's open item).
 //! Does not: validate parameters against the schema (each builder does, before the
-//! node exists) or serialize plans (task 4.3; parameters already derive serde).
+//! node exists) or serialize plans (`plan_json.rs`, task 4.3).
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;

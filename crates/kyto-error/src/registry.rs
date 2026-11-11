@@ -405,6 +405,22 @@ pub enum KytoError {
         /// The sink that ends the plan.
         sink: String,
     },
+    /// KY-E217: Text given to from_json is not a plan JSON, or breaks its format.
+    #[error("KY-E217: the plan JSON is invalid at {location}: {problem}")]
+    InvalidPlanJson {
+        /// Where: the line and column, or the node and expression entry.
+        location: String,
+        /// What is wrong there.
+        problem: String,
+    },
+    /// KY-E218: A plan JSON has a version this kyto does not read.
+    #[error("KY-E218: the plan JSON has version {found}, but this kyto reads only version {supported}")]
+    PlanJsonVersion {
+        /// The version in the text.
+        found: u64,
+        /// The version this kyto reads and writes.
+        supported: u64,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -451,7 +467,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 46] = [
+    pub const CODES: [&'static str; 48] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -493,6 +509,8 @@ impl KytoError {
         "KY-E214",
         "KY-E215",
         "KY-E216",
+        "KY-E217",
+        "KY-E218",
         "KY-E301",
         "KY-E302",
         "KY-E401",
@@ -544,6 +562,8 @@ impl KytoError {
             Self::InvalidChoice { .. } => "KY-E214",
             Self::InvalidArgument { .. } => "KY-E215",
             Self::PlanEnded { .. } => "KY-E216",
+            Self::InvalidPlanJson { .. } => "KY-E217",
+            Self::PlanJsonVersion { .. } => "KY-E218",
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
             Self::MemoryLimit { .. } => "KY-E401",
@@ -596,6 +616,8 @@ impl KytoError {
             Self::InvalidChoice { .. } => "ResolutionError",
             Self::InvalidArgument { .. } => "PlanError",
             Self::PlanEnded { .. } => "PlanError",
+            Self::InvalidPlanJson { .. } => "PlanError",
+            Self::PlanJsonVersion { .. } => "PlanError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
@@ -729,6 +751,12 @@ impl KytoError {
             }
             Self::PlanEnded { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e216"
+            }
+            Self::InvalidPlanJson { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e217"
+            }
+            Self::PlanJsonVersion { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e218"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -873,6 +901,12 @@ impl KytoError {
             }
             Self::PlanEnded { method, sink } => {
                 format!("add '{method}' before '{sink}', or build a new plan from the store that '{sink}' writes")
+            }
+            Self::InvalidPlanJson { .. } => {
+                String::from("pass the text Atlas.to_json() wrote, unchanged; to change a plan, build it with plan methods and write it again")
+            }
+            Self::PlanJsonVersion { .. } => {
+                String::from("load it with the kyto version that wrote it, or build the plan again with this one and write it with Atlas.to_json()")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -1093,6 +1127,14 @@ impl KytoError {
             Self::PlanEnded { method, sink } => vec![
                 ("method", FieldValue::Str(method.clone())),
                 ("sink", FieldValue::Str(sink.clone())),
+            ],
+            Self::InvalidPlanJson { location, problem } => vec![
+                ("location", FieldValue::Str(location.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::PlanJsonVersion { found, supported } => vec![
+                ("found", FieldValue::Int(*found)),
+                ("supported", FieldValue::Int(*supported)),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1320,6 +1362,14 @@ impl KytoError {
             Self::PlanEnded {
                 method: "log1p".to_owned(),
                 sink: "sink_zarr".to_owned(),
+            },
+            Self::InvalidPlanJson {
+                location: "node 2 (filter_cells), predicate entry 3".to_owned(),
+                problem: "entry 3 reads entry 5, which is not written before it".to_owned(),
+            },
+            Self::PlanJsonVersion {
+                found: 2,
+                supported: 1,
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

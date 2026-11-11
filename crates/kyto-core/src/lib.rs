@@ -12,11 +12,13 @@
 //! name against a plan's schema and [`GeneIds`] and stores it in full (task 3.5); the
 //! missing-value rules of R9 (task 3.7): null tests on expressions ([`NullTest`]) and
 //! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`). The format's name rules
-//! ([`member_name_problem`], [`column_name_problem`]), shared by store and plan (task 4.2).
+//! ([`member_name_problem`], [`column_name_problem`]), shared by store and plan (task 4.2). The JSON form of an expression, [`ExprJson`]
+//! (task 4.3, for the plan JSON).
 #![forbid(unsafe_code)]
 
 mod expr;
 mod expr_dtype;
+mod expr_json;
 mod expr_polars;
 mod expr_source;
 mod feature_name;
@@ -32,6 +34,7 @@ pub use expr::{
     MAX_EXPR_DEPTH, NullTest, Operand, StrFunction, mixed_axes,
 };
 pub use expr_dtype::ExprDtype;
+pub use expr_json::{ExprEntry, ExprJson, MAX_EXPANDED_NODES, Operator};
 pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;

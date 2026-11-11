@@ -143,6 +143,14 @@ fn plan_build_errors() -> Vec<KytoError> {
                 .unwrap()
                 .log1p(None, "log1p"),
         ),
+        // Plan JSON that breaks its format (task 4.3): the plan is not built.
+        error(Plan::from_json(
+            r#"{"format":"kyto-plan","version":1,"nodes":[]}"#,
+        )),
+        // Plan JSON of a version this kyto does not read.
+        error(Plan::from_json(
+            r#"{"format":"kyto-plan","version":2,"nodes":[]}"#,
+        )),
     ]
 }
 

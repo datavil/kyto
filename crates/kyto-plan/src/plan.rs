@@ -5,7 +5,7 @@
 //! copied or changed: R2), walk a plan from a node to its scan, and answer what a
 //! node's output schema, default layer and removed genes are from the state cached
 //! when it was built (so these answers do not walk the chain).
-//! Does not: serialize (4.3), optimize (4.4) or execute plans. Build-time validation
+//! Does not: serialize (`plan_json.rs`, 4.3), optimize (4.4) or execute plans. Build-time validation
 //! (4.2) happens in each step's builder as the plan grows: names resolved, kinds
 //! checked, arguments and new names checked (`names.rs`), so a built plan is valid.
 //!
@@ -18,7 +18,8 @@
 //!
 //! Adding a node: a file with its parameters, their [`LogicalNode`] and [`Transform`]
 //! impls and its builder (`impl Plan`), then one variant here and one arm in each of
-//! `parts`, `input_mut` and `same_node`.
+//! `parts`, `input_mut` and `same_node`, and its `Step` in `plan_json.rs` (written from
+//! the parameters, read back through the builder).
 
 use std::fmt;
 use std::sync::Arc;

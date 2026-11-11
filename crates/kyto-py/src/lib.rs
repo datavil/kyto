@@ -22,6 +22,7 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", VERSION)?;
     module.add_class::<atlas::Atlas>()?;
     module.add_function(wrap_pyfunction!(atlas::scan, module)?)?;
+    module.add_function(wrap_pyfunction!(atlas::from_json, module)?)?;
     module.add_class::<handles::PyTable>()?;
     module.add_class::<handles::PyMatrix>()?;
     module.add_class::<handles::PyEmbedding>()?;

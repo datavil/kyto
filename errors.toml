@@ -625,6 +625,30 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E217"
+variant = "InvalidPlanJson"
+class = "PlanError"
+summary = "Text given to from_json is not a plan JSON, or breaks its format."
+message = "the plan JSON is invalid at {location}: {problem}"
+hint = "pass the text Atlas.to_json() wrote, unchanged; to change a plan, build it with plan methods and write it again"
+fields = [
+    { name = "location", type = "str", doc = "Where: the line and column, or the node and expression entry.", example = "node 2 (filter_cells), predicate entry 3" },
+    { name = "problem", type = "str", doc = "What is wrong there.", example = "entry 3 reads entry 5, which is not written before it" },
+]
+
+[[errors]]
+code = "KY-E218"
+variant = "PlanJsonVersion"
+class = "PlanError"
+summary = "A plan JSON has a version this kyto does not read."
+message = "the plan JSON has version {found}, but this kyto reads only version {supported}"
+hint = "load it with the kyto version that wrote it, or build the plan again with this one and write it with Atlas.to_json()"
+fields = [
+    { name = "found", type = "int", doc = "The version in the text.", example = 2 },
+    { name = "supported", type = "int", doc = "The version this kyto reads and writes.", example = 1 },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"

@@ -505,6 +505,8 @@ class PlanError(KytoError, ValueError):
 
     - ``KY-E215``: A plan method is given an argument value outside what it accepts.
     - ``KY-E216``: A plan that ends in a sink is extended with another step.
+    - ``KY-E217``: Text given to from_json is not a plan JSON, or breaks its format.
+    - ``KY-E218``: A plan JSON has a version this kyto does not read.
 
     See `KytoError` for the parameters and attributes.
 
@@ -979,6 +981,26 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("method", "str"),
             _Field("sink", "str"),
+        ),
+    ),
+    "KY-E217": _Entry(
+        class_name="PlanError",
+        message="the plan JSON is invalid at {location}: {problem}",
+        hint="pass the text Atlas.to_json() wrote, unchanged; to change a plan, build it with plan methods and write it again",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e217",
+        fields=(
+            _Field("location", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E218": _Entry(
+        class_name="PlanError",
+        message="the plan JSON has version {found}, but this kyto reads only version {supported}",
+        hint="load it with the kyto version that wrote it, or build the plan again with this one and write it with Atlas.to_json()",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e218",
+        fields=(
+            _Field("found", "int"),
+            _Field("supported", "int"),
         ),
     ),
     "KY-E301": _Entry(

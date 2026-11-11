@@ -1415,6 +1415,7 @@ dependencies = [
  "kyto-core",
  "kyto-error",
  "polars",
+ "proptest",
  "serde",
  "serde_json",
 ]
