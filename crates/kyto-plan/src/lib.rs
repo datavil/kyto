@@ -16,7 +16,9 @@
 //! (task 4.3): [`Plan::to_json`] and [`Plan::from_json`]. The optimizer (task 4.4):
 //! [`optimize`] (and [`Plan::optimize`]) turns the plans of one or more [`Output`]s into
 //! an [`OptimizedPlan`] by common sub-plan reuse, projection pushdown, elementwise
-//! fusion and predicate pushdown, each its own `optimize_*.rs` file.
+//! fusion and predicate pushdown, each its own `optimize_*.rs` file. The physical plan
+//! (task 4.5): [`PhysicalPlan`] (and [`Plan::physical`], [`Plan::explain`]) says the
+//! device, passes and blocks of each optimized node.
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -34,6 +36,7 @@ mod optimize_predicate;
 mod optimize_projection;
 mod optimize_reuse;
 mod optimized_plan;
+mod physical_plan;
 mod plan;
 mod plan_json;
 mod plan_schema;
@@ -54,6 +57,9 @@ pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
 pub use optimize::{OptimizeOptions, Output, optimize};
 pub use optimized_plan::{Operation, OptimizedNode, OptimizedOutput, OptimizedPlan};
+pub use physical_plan::{
+    Blocks, Device, Execution, PCA_POWER_ITERATIONS, PhysicalOptions, PhysicalPlan, physical_plan,
+};
 pub use plan::{Plan, PlanNodes};
 pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};
 pub use plan_schema::{PlanSchema, SparseMember};

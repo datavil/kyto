@@ -10,7 +10,7 @@
 //! ([`Operation::Fused`]). Each node keeps the [`NodeId`]s of the logical nodes it
 //! came from. Prints one line per node, outputs first, then from the top down.
 //! Does not: rewrite anything (the rule files `optimize_*.rs`), serialize (the plan
-//! JSON writes the logical plan, 4.3) or choose devices and passes (4.5).
+//! JSON writes the logical plan, 4.3) or choose devices and passes (4.5, `physical_plan.rs`).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -229,8 +229,23 @@ impl OptimizedPlan {
     }
 }
 
+impl OptimizedPlan {
+    /// One line per output: `output #3 reads [layer:log1p]`.
+    pub(crate) fn fmt_outputs(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for output in &self.outputs {
+            writeln!(
+                formatter,
+                "output #{} reads {}",
+                output.node,
+                MemberList(&output.reads)
+            )?;
+        }
+        Ok(())
+    }
+}
+
 /// A node's line: its name, parameters, input and origin.
-struct NodeLine<'a>(usize, &'a OptimizedNode);
+pub(crate) struct NodeLine<'a>(pub(crate) usize, pub(crate) &'a OptimizedNode);
 
 impl fmt::Display for NodeLine<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -287,14 +302,7 @@ impl fmt::Display for MemberList<'_> {
 /// last (top) to the first (a scan).
 impl fmt::Display for OptimizedPlan {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for output in &self.outputs {
-            writeln!(
-                formatter,
-                "output #{} reads {}",
-                output.node,
-                MemberList(&output.reads)
-            )?;
-        }
+        self.fmt_outputs(formatter)?;
         for (index, node) in self.nodes.iter().enumerate().rev() {
             write!(formatter, "{}", NodeLine(index, node))?;
             if index > 0 {

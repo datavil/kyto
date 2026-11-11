@@ -158,6 +158,31 @@ class Atlas:
         FILTER_GENES gene_column('feature_type') == 'Gene Expression'
         SCAN "..." (2 cells x 3 genes)
         """
+    def explain(self) -> str:
+        """How the plan would run: its physical plan, as text (task 4.5).
+
+        The plan is optimized with every rule (for a terminal reading all of its output),
+        then each node is given a device, a number of passes over its input's blocks
+        and how it meets the data. The first line says what the output reads; then one
+        line per node from the last down to the scan, each ending in brackets:
+        ``device`` (``cpu``), ``passes`` (with the ``statistics`` passes over all cells
+        and the ``apply`` pass when there are statistics passes), and ``blocks=N cells``
+        (streamed in blocks of the store's cell block size), ``in memory`` or ``no
+        data``. Nothing is read. Task 4.7 adds the logical tree and ``format=``.
+
+        Returns
+        -------
+        str
+            The physical plan, one line per node (a new string; the plan is unchanged).
+
+        Examples
+        --------
+        >>> genes = gene_column("feature_type") == "Gene Expression"
+        >>> print(scan(store).filter_genes(genes).explain())
+        output #1 reads [...]
+        #1 FILTER_GENES ... [device=cpu passes=1 blocks=4096 cells]
+        #0 SCAN ... [device=cpu passes=1 blocks=4096 cells]
+        """
     def to_json(self) -> str:
         """Write the plan as JSON text, to store it or send it elsewhere.
 

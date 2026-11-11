@@ -377,6 +377,33 @@ impl Atlas {
         self.plan.to_json()
     }
 
+    /// How the plan would run: its physical plan, as text (task 4.5).
+    ///
+    /// The plan is optimized with every rule (for a terminal reading all of its output),
+    /// then each node is given a device, a number of passes over its input's blocks
+    /// and how it meets the data. The first line says what the output reads; then one
+    /// line per node from the last down to the scan, each ending in brackets:
+    /// ``device`` (``cpu``), ``passes`` (with the ``statistics`` passes over all cells
+    /// and the ``apply`` pass when there are statistics passes), and ``blocks=N cells``
+    /// (streamed in blocks of the store's cell block size), ``in memory`` or ``no
+    /// data``. Nothing is read. Task 4.7 adds the logical tree and ``format=``.
+    ///
+    /// Returns
+    /// -------
+    /// str
+    ///     The physical plan, one line per node (a new string; the plan is unchanged).
+    ///
+    /// Examples
+    /// --------
+    /// >>> genes = gene_column("feature_type") == "Gene Expression"
+    /// >>> print(scan(store).filter_genes(genes).explain())
+    /// output #1 reads [...]
+    /// #1 FILTER_GENES ... [device=cpu passes=1 blocks=4096 cells]
+    /// #0 SCAN ... [device=cpu passes=1 blocks=4096 cells]
+    fn explain(&self) -> String {
+        self.plan.explain()
+    }
+
     /// The plan, one node per line, from the last step down to the scan.
     fn __str__(&self) -> String {
         self.plan.to_string()
