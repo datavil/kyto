@@ -52,7 +52,8 @@
 //! Polars string views), embedding (`rows x width x dtype`) and graph (`nnz x (4 +
 //! dtype) + (n_cells + 1) x 8`) a node writes; and the state of cross-cell nodes:
 //! median `normalize_total` `n_cells x 8`, `scale` and `highly_variable_genes`
-//! `n_genes x 16`, a `filter_genes` reading the matrix `n_genes x 8`, `pca` the streamed
+//! `n_genes x 16`, and while their statistics pass runs `n_genes x 16` more per block
+//! in flight and per subtree of its reduction tree (`log2(blocks) + 1`, task 5.6), a `filter_genes` reading the matrix `n_genes x 8`, `pca` the streamed
 //! Halko blocks `(2 x n_cells + n_genes) x (n_components + `[`PCA_OVERSAMPLES`]`) x 8`.
 //!
 //! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today;
@@ -235,6 +236,12 @@ impl PhysicalPlan {
                 }
             }
             resident += node_resident(node, schema, input);
+            resident += reduction_bytes(
+                node,
+                input.unwrap_or(schema),
+                in_flight.min(sizes.n_blocks.max(1)),
+                sizes.n_blocks,
+            );
         }
         let per_block = scan_reading.max(joined_and_written);
         let mut block = window * per_block;
@@ -573,6 +580,25 @@ fn node_resident(node: &OptimizedNode, schema: &PlanSchema, input: Option<&PlanS
         };
     }
     bytes + statistics_bytes(node, input.unwrap_or(schema))
+}
+
+/// The leaves a statistics pass of a per-gene node holds at once (task 5.6,
+/// kyto-exec's `reduction.rs`): one per block in flight and the reduction tree's
+/// subtrees (at most `log2(n_blocks) + 1`), each a sum and a sum of squares per gene.
+fn reduction_bytes(node: &OptimizedNode, input: &PlanSchema, window: u128, n_blocks: u128) -> u128 {
+    let n_genes = u128::from(input.atlas().n_genes);
+    let per_leaf = match node.operation() {
+        Operation::Node(plan) => match plan.as_ref() {
+            Plan::CrossCell(cross_cell) => match cross_cell.params().op() {
+                CrossCellOp::Scale { .. } | CrossCellOp::HighlyVariableGenes { .. } => n_genes * 16,
+                CrossCellOp::Pca { .. } => 0,
+            },
+            _ => 0,
+        },
+        _ => 0,
+    };
+    let subtrees = u128::from(u128::BITS - n_blocks.leading_zeros());
+    per_leaf * (window + subtrees)
 }
 
 /// The state a cross-cell node keeps from its statistics passes, over its input.

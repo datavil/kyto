@@ -14,7 +14,8 @@
 //! stream's [`CellBlockPool`] through [`BlockStream::recycle`]. Every pass of one run
 //! (the statistics passes of task 5.4, then the output's stream) is a stream of its
 //! own over the same opened readers and thread pool ([`StreamSource`]); the output's
-//! stream carries the run's [`Statistics`].
+//! stream carries the run's [`Statistics`]. The statistics passes read and compute
+//! through the same [`Windows`] without the producer thread (`reduction.rs`).
 //! Blocks hold at most `block_cells` rows of one store cell block: the store's cell
 //! blocks, or parts of them when the physical plan splits them for a memory limit
 //! (task 5.5).
@@ -176,7 +177,45 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
     /// Read, compute and send windows of blocks until the end, an error, or a caller
     /// that hung up.
     fn run(self) {
-        let source = &self.source;
+        let mut windows = match Windows::open(&self.source, &self.pool) {
+            Ok(windows) => windows,
+            Err(error) => {
+                let _ = self.sender.send(Err(error));
+                return;
+            }
+        };
+        while let Some(outputs) = windows.next_window() {
+            for item in outputs {
+                let failed = item.is_err();
+                if self.sender.send(item).is_err() || failed {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The windows of a stream: `window` blocks read, then computed in parallel (rayon
+/// over blocks), in cell order. Shared by the producer thread and the statistics
+/// passes (task 5.6, `reduction.rs`); runs on the rayon pool it is called from.
+pub(crate) struct Windows<'a, S: ?Sized> {
+    source: &'a StreamSource<S>,
+    pool: &'a CellBlockPool,
+    streams: Vec<CellBlocks<'a, S>>,
+    /// The next block of rows without layers: (cell block, its first row).
+    next_cell_block: (u64, u64),
+    done: bool,
+}
+
+impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
+    /// Open every scanned layer's stream of cell blocks.
+    ///
+    /// # Errors
+    /// As [`LayerReader::cell_blocks_of_rows`].
+    pub(crate) fn open(
+        source: &'a StreamSource<S>,
+        pool: &'a CellBlockPool,
+    ) -> Result<Self, KytoError> {
         let streams = source
             .readers
             .iter()
@@ -188,71 +227,73 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
                     source.window,
                 )
             })
-            .collect::<Result<Vec<_>, _>>();
-        let mut streams = match streams {
-            Ok(streams) => streams,
-            Err(error) => {
-                let _ = self.sender.send(Err(error));
-                return;
-            }
-        };
-        // The next block of rows without layers: (cell block, its first row).
-        let mut next_cell_block = (0, 0);
-        loop {
-            let mut inputs = Vec::with_capacity(source.window.get());
-            let mut failure = None;
-            while inputs.len() < source.window.get() {
-                match self.read_next(&mut streams, &mut next_cell_block) {
-                    None => break,
-                    Some(Ok(block)) => inputs.push(block),
-                    Some(Err(error)) => {
-                        failure = Some(error);
-                        break;
-                    }
-                }
-            }
-            if inputs.is_empty() && failure.is_none() {
-                return;
-            }
-            // Rayon over blocks; an indexed collect keeps cell order (R11).
-            let outputs: Vec<Item> = inputs
-                .into_par_iter()
-                .map(|block| {
-                    let mut block =
-                        source.operators.iter().try_fold(block, |block, operator| {
-                            operator.apply(block, &self.pool, &source.store)
-                        })?;
-                    // Keep only what the output reads; the rest goes back to the pool.
-                    let unread: Vec<String> = block
-                        .layers
-                        .keys()
-                        .filter(|layer| !source.output_layers.contains(*layer))
-                        .cloned()
-                        .collect();
-                    for layer in unread {
-                        if let Some(dropped) = block.layers.remove(&layer) {
-                            self.pool.recycle(dropped);
-                        }
-                    }
-                    Ok(block)
-                })
-                .collect();
-            for item in outputs.into_iter().chain(failure.map(Err)) {
-                let failed = item.is_err();
-                if self.sender.send(item).is_err() || failed {
-                    return;
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            source,
+            pool,
+            streams,
+            next_cell_block: (0, 0),
+            done: false,
+        })
+    }
+
+    /// The next window's blocks in cell order, each through every operator; an error
+    /// ends the window and the stream (blocks before it in cell order come first).
+    /// `None` at the end.
+    pub(crate) fn next_window(&mut self) -> Option<Vec<Item>> {
+        if self.done {
+            return None;
+        }
+        let source = self.source;
+        let mut inputs = Vec::with_capacity(source.window.get());
+        let mut failure = None;
+        while inputs.len() < source.window.get() {
+            match self.read_next() {
+                None => break,
+                Some(Ok(block)) => inputs.push(block),
+                Some(Err(error)) => {
+                    failure = Some(error);
+                    break;
                 }
             }
         }
+        if inputs.is_empty() && failure.is_none() {
+            self.done = true;
+            return None;
+        }
+        self.done = failure.is_some();
+        let pool = self.pool;
+        // Rayon over blocks; an indexed collect keeps cell order (R11).
+        let mut outputs: Vec<Item> = inputs
+            .into_par_iter()
+            .map(|block| {
+                let mut block = source.operators.iter().try_fold(block, |block, operator| {
+                    operator.apply(block, pool, &source.store)
+                })?;
+                // Keep only what the output reads; the rest goes back to the pool.
+                let unread: Vec<String> = block
+                    .layers
+                    .keys()
+                    .filter(|layer| !source.output_layers.contains(*layer))
+                    .cloned()
+                    .collect();
+                for layer in unread {
+                    if let Some(dropped) = block.layers.remove(&layer) {
+                        pool.recycle(dropped);
+                    }
+                }
+                Ok(block)
+            })
+            .collect();
+        outputs.extend(failure.map(Err));
+        Some(outputs)
     }
 
     /// The next cell block of every scanned layer, joined; without layers, the next
     /// cell block's rows alone.
-    fn read_next(
-        &self,
-        streams: &mut [CellBlocks<'_, S>],
-        next_cell_block: &mut (u64, u64),
-    ) -> Option<Item> {
+    fn read_next(&mut self) -> Option<Item> {
+        let streams = &mut self.streams;
+        let next_cell_block = &mut self.next_cell_block;
         if streams.is_empty() {
             // The same blocks the readers would give: each cell block's rows, at most
             // block_cells at a time.

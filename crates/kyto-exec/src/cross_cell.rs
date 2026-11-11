@@ -4,9 +4,10 @@
 //!
 //! Does: lower a median `normalize_total` (alone, or first in a fused pass) and
 //! `highly_variable_genes` (no batches) to a [`CrossCellStage`] that runs exactly the
-//! statistics passes the physical plan gives the node (task 4.5); fold each block of
-//! a pass into an [`Accumulator`], in cell order (one fold after another on the
-//! consuming thread, so the sums do not depend on the thread count, R11); and turn the
+//! statistics passes the physical plan gives the node (task 4.5); fold the blocks of
+//! a pass into leaves ([`Partial`], one per store cell block, in cell order) that
+//! combine into the pass's result in a fixed tree in block order (task 5.6,
+//! `reduction.rs`, R11), kept by an [`Accumulator`]; and turn the
 //! result into [`NodeStatistics`] and, for `normalize_total`, the maps of its apply pass
 //! with the median as their target. Median `normalize_total`: one pass of cell totals
 //! (`f64`, [`Kernels::row_sums`]), target = median of the positive totals as
@@ -16,8 +17,7 @@
 //! `min(value, clip)` per gene with `clip = mean + sqrt(n) * reg_std`.
 //! Does not: fit `seurat_v3`'s loess (`reg_std` here is the gene's own standard
 //! deviation, 1 for a constant gene, a stand-in until 6.3), rank or flag genes (6.3),
-//! batches (6.3), `scale` (6.4) or `pca` (6.5), or tree reductions over blocks in
-//! parallel (5.6).
+//! batches (6.3), `scale` (6.4) or `pca` (6.5), or run passes (see `reduction.rs`).
 
 use std::collections::BTreeSet;
 
@@ -131,12 +131,13 @@ impl CrossCellStage {
     }
 }
 
-/// What a stage's passes have summed so far.
+/// What a stage's passes have summed so far: the result of every pass that ended.
 #[derive(Debug, Clone)]
 pub(crate) enum Accumulator {
     /// The positive cell totals, in cell order.
     Totals(Vec<f64>),
-    /// Per-gene moments; `clipped` once the second pass of `seurat_v3` started.
+    /// Per-gene moments; `clipped` once the first pass of `seurat_v3` ended (its clip
+    /// set, its moments those of the second pass).
     Genes {
         flavor: HvgFlavor,
         moments: GeneMoments,
@@ -144,16 +145,64 @@ pub(crate) enum Accumulator {
     },
 }
 
+/// What one leaf of a pass's reduction holds (task 5.6): the sums over one store cell
+/// block, in cell order, or two leaves' sums combined (`reduction.rs`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Partial {
+    /// The positive cell totals, in cell order.
+    Totals(Vec<f64>),
+    /// Per-gene moments.
+    Moments(GeneMoments),
+}
+
+impl Partial {
+    /// `self` (the cells before) and `right` (the cells after) as one partial: totals
+    /// one after the other, moments added gene by gene.
+    pub(crate) fn combine(self, right: Self) -> Self {
+        match (self, right) {
+            (Self::Totals(mut left), Self::Totals(right)) => {
+                left.extend(right);
+                Self::Totals(left)
+            }
+            (Self::Moments(mut left), Self::Moments(right)) => {
+                left.n_cells += right.n_cells;
+                for (sum, right) in left.sums.iter_mut().zip(&right.sums) {
+                    *sum += right;
+                }
+                for (squares, right) in left.sums_of_squares.iter_mut().zip(&right.sums_of_squares)
+                {
+                    *squares += right;
+                }
+                Self::Moments(left)
+            }
+            _ => unreachable!("one pass's partials come from Accumulator::leaf"),
+        }
+    }
+}
+
 impl Accumulator {
-    /// Add `block` (the stream's input layer of one cell block) to pass `pass`
-    /// (0-based); blocks come in cell order.
+    /// An empty leaf of the next pass's reduction.
+    pub(crate) fn leaf(&self) -> Partial {
+        match self {
+            Self::Totals(_) => Partial::Totals(Vec::new()),
+            Self::Genes { moments, .. } => Partial::Moments(GeneMoments::new(moments.sums.len())),
+        }
+    }
+
+    /// Add `block` (the stream's input layer of rows of one cell block) to `leaf`, a
+    /// leaf of pass `pass` (0-based); a leaf's blocks come in cell order.
     ///
     /// # Errors
     /// `KY-E117` if the block's genes are not the accumulator's (a stream that
     /// changed shape: a kyto bug, reported, never a panic).
-    pub(crate) fn fold(&mut self, pass: u32, block: &CellBlock) -> Result<(), KytoError> {
-        match self {
-            Self::Totals(totals) => {
+    pub(crate) fn fold(
+        &self,
+        pass: u32,
+        leaf: &mut Partial,
+        block: &CellBlock,
+    ) -> Result<(), KytoError> {
+        match (self, leaf) {
+            (Self::Totals(_), Partial::Totals(totals)) => {
                 let mut row_totals = Vec::new();
                 match block.data() {
                     CellValues::F32(values) => {
@@ -167,11 +216,12 @@ impl Accumulator {
                 totals.extend(row_totals.into_iter().filter(|total| *total > 0.0));
                 Ok(())
             }
-            Self::Genes {
-                flavor,
-                moments,
-                clipped,
-            } => {
+            (
+                Self::Genes {
+                    flavor, clipped, ..
+                },
+                Partial::Moments(moments),
+            ) => {
                 if block.n_genes() as usize != moments.sums.len() {
                     return Err(KytoError::InvalidCellBlock {
                         context: "highly_variable_genes statistics pass".to_owned(),
@@ -182,28 +232,54 @@ impl Accumulator {
                         ),
                     });
                 }
+                let mut gene_values = GeneValues::new(block);
                 if pass == 0 {
                     let expm1 = *flavor == HvgFlavor::Seurat;
-                    add_moments(
-                        moments,
-                        block,
-                        |value| {
-                            if expm1 { value.exp_m1() } else { value }
-                        },
-                    );
-                } else {
-                    let clipped = clipped.get_or_insert_with(|| ClippedMoments {
-                        clip: seurat_v3_clip(moments),
-                        moments: GeneMoments::new(moments.sums.len()),
+                    add_moments_by_gene(moments, &mut gene_values, |_, value| {
+                        if expm1 { value.exp_m1() } else { value }
                     });
+                } else {
+                    let Some(clipped) = clipped else {
+                        unreachable!("end_pass(0) of seurat_v3 sets the clip")
+                    };
                     let clip = &clipped.clip;
-                    let mut gene_values = GeneValues::new(block);
-                    add_moments_by_gene(&mut clipped.moments, &mut gene_values, |gene, value| {
+                    add_moments_by_gene(moments, &mut gene_values, |gene, value| {
                         value.min(clip[gene])
                     });
                 }
                 Ok(())
             }
+            _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
+        }
+    }
+
+    /// End pass `pass` with its reduction over every leaf (`None` for a stream without
+    /// cells): keep it, and for `seurat_v3`'s first pass set the second pass's clip.
+    pub(crate) fn end_pass(&mut self, pass: u32, reduced: Option<Partial>) {
+        let reduced = reduced.unwrap_or_else(|| self.leaf());
+        match (self, reduced) {
+            (Self::Totals(totals), Partial::Totals(reduced)) => *totals = reduced,
+            (
+                Self::Genes {
+                    flavor,
+                    moments,
+                    clipped,
+                },
+                Partial::Moments(reduced),
+            ) => {
+                if pass == 0 {
+                    *moments = reduced;
+                    if *flavor == HvgFlavor::SeuratV3 {
+                        *clipped = Some(ClippedMoments {
+                            clip: seurat_v3_clip(moments),
+                            moments: GeneMoments::new(moments.sums.len()),
+                        });
+                    }
+                } else if let Some(clipped) = clipped {
+                    clipped.moments = reduced;
+                }
+            }
+            _ => unreachable!("a pass's reduction comes from Accumulator::leaf"),
         }
     }
 }
@@ -222,12 +298,6 @@ fn seurat_v3_clip(moments: &GeneMoments) -> Vec<f64> {
             reg_std * sqrt_n + mean
         })
         .collect()
-}
-
-/// Add each stored value of `block`, through `transform`, to its gene's moments.
-fn add_moments(moments: &mut GeneMoments, block: &CellBlock, transform: impl Fn(f64) -> f64) {
-    let mut gene_values = GeneValues::new(block);
-    add_moments_by_gene(moments, &mut gene_values, |_, value| transform(value));
 }
 
 fn add_moments_by_gene(
@@ -291,6 +361,17 @@ pub(crate) fn starts_with_median(maps: &[MapElementwise]) -> bool {
 mod tests {
     use super::*;
 
+    /// Run every pass of `stage` over `block`, one leaf a pass.
+    fn run_passes(stage: &CrossCellStage, n_genes: usize, block: &CellBlock) -> Accumulator {
+        let mut accumulator = stage.accumulator(n_genes);
+        for pass in 0..stage.passes {
+            let mut leaf = accumulator.leaf();
+            accumulator.fold(pass, &mut leaf, block).unwrap();
+            accumulator.end_pass(pass, Some(leaf));
+        }
+        accumulator
+    }
+
     #[test]
     fn median_is_numpys() {
         assert!(median(&mut []).is_nan());
@@ -311,8 +392,7 @@ mod tests {
                 flavor: HvgFlavor::CellRanger,
             },
         );
-        let mut accumulator = stage.accumulator(2);
-        accumulator.fold(0, &block).unwrap();
+        let accumulator = run_passes(&stage, 2, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), None) = stage.finish(accumulator)
         else {
             panic!("expected HVG statistics and no apply pass")
@@ -345,9 +425,7 @@ mod tests {
                 flavor: HvgFlavor::SeuratV3,
             },
         );
-        let mut accumulator = stage.accumulator(2);
-        accumulator.fold(0, &block).unwrap();
-        accumulator.fold(1, &block).unwrap();
+        let accumulator = run_passes(&stage, 2, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), None) = stage.finish(accumulator)
         else {
             panic!("expected HVG statistics")
@@ -369,8 +447,7 @@ mod tests {
                 flavor: HvgFlavor::Seurat,
             },
         );
-        let mut accumulator = stage.accumulator(1);
-        accumulator.fold(0, &block).unwrap();
+        let accumulator = run_passes(&stage, 1, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), _) = stage.finish(accumulator) else {
             panic!("expected HVG statistics")
         };

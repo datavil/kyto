@@ -246,8 +246,10 @@ fn nodes_writing_layers_hold_an_output_block() {
         scaled.block_memory(),
         (HELD_BLOCK + dense) + (HELD_BLOCK + dense) + 2 * dense
     );
-    // Its statistics: a mean and a variance per gene.
-    assert_eq!(scaled.resident_memory() - 56, N_GENES * 16);
+    // Its statistics: a mean and a variance per gene, and while its statistics pass
+    // runs, the same per leaf of its reduction (task 5.6): 2 blocks in flight and the
+    // tree's subtrees over 3 blocks (log2(3) + 1 = 2).
+    assert_eq!(scaled.resident_memory() - 56, N_GENES * 16 * (1 + 2 + 2));
 }
 
 #[test]

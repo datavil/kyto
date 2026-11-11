@@ -9,7 +9,8 @@
 //! before anything is read. [`Pipeline::run`] opens the scan's layers once, runs every
 //! cross-cell node's statistics passes in plan order (each pass streams the node's
 //! input again from the scan, through the stages below it; exactly the passes the
-//! physical plan gives the node), then starts the output's stream ([`BlockStream`],
+//! physical plan gives the node; its blocks reduced in a fixed tree in block order,
+//! task 5.6), then starts the output's stream ([`BlockStream`],
 //! carrying the [`Statistics`]) on a thread pool of exactly the threads asked for
 //! ([`ExecuteOptions`], R7), with the plan's `blocks_in_flight` blocks read and
 //! computed at once. A cross-cell node without an apply pass (HVG) leaves the blocks as
@@ -32,6 +33,7 @@ use zarrs::storage::ReadableStorageTraits;
 use crate::block_stream::{BlockStream, StreamSource};
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
+use crate::reduction::reduce_pass;
 use crate::statistics::Statistics;
 
 /// How a pipeline runs, apart from the plan.
@@ -274,23 +276,15 @@ impl Pipeline {
             let mut accumulator = cross_cell.accumulator(n_genes);
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
             for pass in 0..cross_cell.passes {
-                let mut stream = BlockStream::start(
-                    source(Arc::clone(&readers), &operators, input.clone()),
-                    Arc::clone(&thread_pool),
-                    Statistics::default(),
+                // A tree in block order over the store's cell blocks (task 5.6, R11).
+                let reduced = reduce_pass(
+                    &source(Arc::clone(&readers), &operators, input.clone()),
+                    &thread_pool,
+                    cross_cell.input_layer(),
+                    &accumulator,
+                    pass,
                 )?;
-                while let Some(block) = stream.next() {
-                    let block = block?;
-                    let layer = block.layers.get(cross_cell.input_layer()).ok_or_else(|| {
-                        KytoError::MissingMember {
-                            kind: "layer".to_owned(),
-                            name: cross_cell.input_layer().to_owned(),
-                            store: self.store.clone(),
-                        }
-                    })?;
-                    accumulator.fold(pass, layer)?;
-                    stream.recycle(block);
-                }
+                accumulator.end_pass(pass, reduced);
             }
             let (node_statistics, apply) = cross_cell.finish(accumulator);
             statistics.nodes.insert(cross_cell.node, node_statistics);

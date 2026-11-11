@@ -164,19 +164,32 @@ fn explained_statistics_passes(plan: &Plan, physical: &PhysicalPlan) -> Vec<(&'s
         .collect()
 }
 
-/// Per-gene moments of `layer` over `blocks` by hand, each value through `transform`.
+/// Cells, per-gene sums and per-gene sums of squares.
+type Moments = (u64, Vec<f64>, Vec<f64>);
+
+/// Per-gene moments of `layer` over `blocks` by hand, each value through `transform`,
+/// summed as task 5.6 promises: each store cell block's cells in cell order (a leaf),
+/// then the leaves in the tree [`tree`] describes.
 fn moments_by_hand(
     blocks: &[PipelineBlock],
     layer: &str,
     n_genes: usize,
     transform: impl Fn(usize, f64) -> f64,
 ) -> (u64, Vec<f64>, Vec<f64>) {
-    let mut sums = vec![0.0; n_genes];
-    let mut squares = vec![0.0; n_genes];
-    let mut cells = 0;
+    let mut leaves: Vec<(u64, Moments)> = Vec::new();
     for block in blocks {
+        if leaves
+            .last()
+            .is_none_or(|(cell_block, _)| *cell_block != block.cell_block)
+        {
+            leaves.push((
+                block.cell_block,
+                (0, vec![0.0; n_genes], vec![0.0; n_genes]),
+            ));
+        }
+        let (_, (cells, sums, squares)) = leaves.last_mut().unwrap();
         let layer = &block.layers[layer];
-        cells += block.cells.len() as u64;
+        *cells += block.cells.len() as u64;
         let values: Vec<f64> = match layer.data() {
             CellValues::F32(values) => values.iter().map(|&v| f64::from(v)).collect(),
             CellValues::U32(values) => values.iter().map(|&v| f64::from(v)).collect(),
@@ -187,7 +200,35 @@ fn moments_by_hand(
             squares[gene as usize] += value * value;
         }
     }
-    (cells, sums, squares)
+    let leaves: Vec<_> = leaves.into_iter().map(|(_, leaf)| leaf).collect();
+    if leaves.is_empty() {
+        return (0, vec![0.0; n_genes], vec![0.0; n_genes]);
+    }
+    tree(&leaves)
+}
+
+/// The leaves combined as task 5.6 documents: the tree of the first `p` leaves plus
+/// the tree of the rest, `p` the largest power of two below their number.
+fn tree(leaves: &[Moments]) -> Moments {
+    if leaves.len() == 1 {
+        return leaves[0].clone();
+    }
+    let mut split = 1;
+    while split * 2 < leaves.len() {
+        split *= 2;
+    }
+    let (left, right) = (tree(&leaves[..split]), tree(&leaves[split..]));
+    let add = |left: &[f64], right: &[f64]| -> Vec<f64> {
+        left.iter()
+            .zip(right)
+            .map(|(left, right)| left + right)
+            .collect()
+    };
+    (
+        left.0 + right.0,
+        add(&left.1, &right.1),
+        add(&left.2, &right.2),
+    )
 }
 
 fn assert_moments(moments: &GeneMoments, by_hand: &(u64, Vec<f64>, Vec<f64>)) {
