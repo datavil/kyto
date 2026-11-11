@@ -455,6 +455,14 @@ pub enum KytoError {
         /// The device requested.
         device: String,
     },
+    /// KY-E502: The CPU executor cannot start the threads it was asked for.
+    #[error("KY-E502: could not start {threads} executor threads: {problem}")]
+    ThreadStart {
+        /// The number of threads asked for.
+        threads: u64,
+        /// What the operating system said.
+        problem: String,
+    },
     /// KY-E601: A documented method is called before the task that implements it is done.
     #[error("KY-E601: '{method}' is not implemented yet: it arrives with task {task} of the implementation plan")]
     NotImplementedYet {
@@ -467,7 +475,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 48] = [
+    pub const CODES: [&'static str; 49] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -515,6 +523,7 @@ impl KytoError {
         "KY-E302",
         "KY-E401",
         "KY-E501",
+        "KY-E502",
         "KY-E601",
     ];
 
@@ -568,6 +577,7 @@ impl KytoError {
             Self::NoLineage { .. } => "KY-E302",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
+            Self::ThreadStart { .. } => "KY-E502",
             Self::NotImplementedYet { .. } => "KY-E601",
         }
     }
@@ -622,6 +632,7 @@ impl KytoError {
             Self::NoLineage { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
+            Self::ThreadStart { .. } => "DeviceError",
             Self::NotImplementedYet { .. } => "NotImplementedYetError",
         }
     }
@@ -769,6 +780,9 @@ impl KytoError {
             }
             Self::MissingKernel { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e501"
+            }
+            Self::ThreadStart { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e502"
             }
             Self::NotImplementedYet { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e601"
@@ -919,6 +933,9 @@ impl KytoError {
             }
             Self::MissingKernel { .. } => {
                 String::from("pass device='auto' to fall back to the CPU for this step, or device='cpu'")
+            }
+            Self::ThreadStart { .. } => {
+                String::from("pass fewer threads, or raise the process's limit on threads")
             }
             Self::NotImplementedYet { .. } => {
                 String::from("inspect the data without reading it through names(), schema() and estimate() until then")
@@ -1152,6 +1169,10 @@ impl KytoError {
             Self::MissingKernel { operation, device } => vec![
                 ("operation", FieldValue::Str(operation.clone())),
                 ("device", FieldValue::Str(device.clone())),
+            ],
+            Self::ThreadStart { threads, problem } => vec![
+                ("threads", FieldValue::Int(*threads)),
+                ("problem", FieldValue::Str(problem.clone())),
             ],
             Self::NotImplementedYet { method, task } => vec![
                 ("method", FieldValue::Str(method.clone())),
@@ -1387,6 +1408,10 @@ impl KytoError {
             Self::MissingKernel {
                 operation: "leiden".to_owned(),
                 device: "cuda".to_owned(),
+            },
+            Self::ThreadStart {
+                threads: 64,
+                problem: "Resource temporarily unavailable (os error 35)".to_owned(),
             },
             Self::NotImplementedYet {
                 method: "Matrix.to_scipy".to_owned(),

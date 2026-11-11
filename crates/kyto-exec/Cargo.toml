@@ -13,7 +13,18 @@ workspace = true
 [dependencies]
 kyto-store = { path = "../kyto-store" }
 kyto-error = { path = "../kyto-error" }
+# The executor runs a physical plan (task 4.5).
+kyto-plan = { path = "../kyto-plan" }
+# One thread pool per run, of the size asked for (task 5.2, R7); same version as kyto-store.
+rayon = "1.12.0"
+# Opens the scan's store (filesystem) and names the storage trait the tile reader reads
+# through; same version and features as kyto-store.
+zarrs = { version = "0.22.10", default-features = false, features = ["filesystem", "sharding", "zstd", "crc32c"] }
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).
 stats_alloc = "0.1.10"
+kyto-core = { path = "../kyto-core" }
+polars = { version = "0.55.2", default-features = false }
+proptest = "1.11.0"
+tempfile = "3.27.0"

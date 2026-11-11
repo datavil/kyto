@@ -1404,9 +1404,16 @@ dependencies = [
 name = "kyto-exec"
 version = "0.0.0"
 dependencies = [
+ "kyto-core",
  "kyto-error",
+ "kyto-plan",
  "kyto-store",
+ "polars",
+ "proptest",
+ "rayon",
  "stats_alloc",
+ "tempfile",
+ "zarrs",
 ]
 
 [[package]]

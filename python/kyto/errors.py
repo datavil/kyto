@@ -311,6 +311,7 @@ class DeviceError(KytoError, RuntimeError):
     Subclasses `KytoError` and `RuntimeError`. Raised with these codes:
 
     - ``KY-E501``: The requested device has no kernel for an operation.
+    - ``KY-E502``: The CPU executor cannot start the threads it was asked for.
 
     See `KytoError` for the parameters and attributes.
 
@@ -1042,6 +1043,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("operation", "str"),
             _Field("device", "str"),
+        ),
+    ),
+    "KY-E502": _Entry(
+        class_name="DeviceError",
+        message="could not start {threads} executor threads: {problem}",
+        hint="pass fewer threads, or raise the process's limit on threads",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e502",
+        fields=(
+            _Field("threads", "int"),
+            _Field("problem", "str"),
         ),
     ),
     "KY-E601": _Entry(

@@ -284,6 +284,7 @@ uv run --no-project python scripts/agents_commands.py
 
 ```bash
 uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references
+uv run cargo test --release -p kyto-exec --test thread_scaling -- --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
 ```
 
 - **Bench:** no commands yet. `criterion` and `pytest-benchmark` arrive with task 10.3,

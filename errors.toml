@@ -698,6 +698,18 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E502"
+variant = "ThreadStart"
+class = "DeviceError"
+summary = "The CPU executor cannot start the threads it was asked for."
+message = "could not start {threads} executor threads: {problem}"
+hint = "pass fewer threads, or raise the process's limit on threads"
+fields = [
+    { name = "threads", type = "int", doc = "The number of threads asked for.", example = 64 },
+    { name = "problem", type = "str", doc = "What the operating system said.", example = "Resource temporarily unavailable (os error 35)" },
+]
+
+[[errors]]
 code = "KY-E601"
 variant = "NotImplementedYet"
 class = "NotImplementedYetError"
