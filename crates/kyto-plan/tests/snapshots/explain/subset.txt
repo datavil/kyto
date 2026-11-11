@@ -1,0 +1,15 @@
+logical plan
+  node 5 SINK_H5AD "subset.h5ad" <- node 4
+  node 4 WITH_GENES "in_c1" = gene_column('mean') <- node 3
+  node 3 WITH_CELLS "g1" = gene_expression('G1', layer='counts') <- node 2
+  node 2 TAKE_CELLS ['c2', 'c1'] <- node 1
+  node 1 SELECT_GENES ['G3', 'G1'] <- node 0
+  node 0 SCAN "synthetic.kyto" (24 cells x 6 genes)
+optimized plan
+  output #5 reads [layer:counts, layer:log1p, cells:batch, cells:g1, cells:score, cells:total_counts, genes:highly_variable, genes:in_c1, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities]
+  #5 SINK_H5AD "subset.h5ad" <- #4 (node 5) [device=cpu passes=1 blocks=4096 cells]
+  #4 WITH_GENES "in_c1" = gene_column('mean') <- #3 (node 4) [device=cpu passes=0 in memory]
+  #3 WITH_CELLS "g1" = gene_expression('G1', layer='counts') <- #2 (node 3) [device=cpu passes=1 blocks=4096 cells]
+  #2 TAKE_CELLS ['c2', 'c1'] <- #1 (node 2) [device=cpu passes=1 blocks=4096 cells]
+  #1 SELECT_GENES ['G3', 'G1'] <- #0 (node 1) [device=cpu passes=1 blocks=4096 cells]
+  #0 SCAN "synthetic.kyto" (24 cells x 6 genes) reads [layer:counts, layer:log1p, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities] (node 0) [device=cpu passes=1 blocks=4096 cells]

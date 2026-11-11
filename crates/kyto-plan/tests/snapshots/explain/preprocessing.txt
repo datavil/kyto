@@ -1,0 +1,14 @@
+logical plan
+  node 5 PCA "scaled" -> "X_new" n_components=2 seed=0 <- node 4
+  node 4 SCALE "logn" -> "scaled" zero_center=true max_value=10 <- node 3
+  node 3 HIGHLY_VARIABLE_GENES "counts" flavor=seurat_v3 n_top_genes=3 batch_key="batch" <- node 2
+  node 2 LOG1P "norm" -> "logn" <- node 1
+  node 1 NORMALIZE_TOTAL "counts" -> "norm" target_sum=10000 <- node 0
+  node 0 SCAN "synthetic.kyto" (24 cells x 6 genes)
+optimized plan
+  output #4 reads [layer:counts, layer:log1p, layer:logn, layer:norm, layer:scaled, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:highly_variable_nbatches, genes:highly_variable_rank, genes:mean, genes:means, genes:symbol, genes:variances, genes:variances_norm, embedding:PCs, embedding:X_new, embedding:X_new_loadings, embedding:X_pca, graph:connectivities]
+  #4 PCA "scaled" -> "X_new" n_components=2 seed=0 <- #3 (node 5) [device=cpu passes=16 (statistics=16 apply=0) blocks=4096 cells]
+  #3 SCALE "logn" -> "scaled" zero_center=true max_value=10 <- #2 (node 4) [device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells]
+  #2 HIGHLY_VARIABLE_GENES "counts" flavor=seurat_v3 n_top_genes=3 batch_key="batch" <- #1 (node 3) [device=cpu passes=2 (statistics=2 apply=0) blocks=4096 cells]
+  #1 FUSED_ELEMENTWISE [NORMALIZE_TOTAL "counts" -> "norm" target_sum=10000; LOG1P "norm" -> "logn"] keeps ["logn", "norm"] <- #0 (node 1, 2) [device=cpu passes=1 blocks=4096 cells]
+  #0 SCAN "synthetic.kyto" (24 cells x 6 genes) reads [layer:counts, layer:log1p, cells:batch, cells:score, cells:total_counts, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities] (node 0) [device=cpu passes=1 blocks=4096 cells]

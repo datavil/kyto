@@ -1,0 +1,182 @@
+{
+  "logical": [
+    {
+      "id": 6,
+      "name": "LEIDEN",
+      "parameters": "\"connectivities\" -> \"leiden\" resolution=1 seed=0",
+      "input": 5
+    },
+    {
+      "id": 5,
+      "name": "NEIGHBORS",
+      "parameters": "\"X_new\" -> \"distances\", \"connectivities\" n_neighbors=15 metric=Euclidean search=Exact seed=0",
+      "input": 4
+    },
+    {
+      "id": 4,
+      "name": "PCA",
+      "parameters": "\"logn\" -> \"X_new\" n_components=2 seed=0",
+      "input": 3
+    },
+    {
+      "id": 3,
+      "name": "FILTER_CELLS",
+      "parameters": "cell_column('score') > -2.0",
+      "input": 2
+    },
+    {
+      "id": 2,
+      "name": "LOG1P",
+      "parameters": "\"norm\" -> \"logn\"",
+      "input": 1
+    },
+    {
+      "id": 1,
+      "name": "NORMALIZE_TOTAL",
+      "parameters": "\"counts\" -> \"norm\" target_sum=median",
+      "input": 0
+    },
+    {
+      "id": 0,
+      "name": "SCAN",
+      "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+      "input": null
+    }
+  ],
+  "optimized": {
+    "outputs": [
+      {
+        "node": 5,
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "layer:logn",
+          "layer:norm",
+          "cells:batch",
+          "cells:leiden",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_new",
+          "embedding:X_new_loadings",
+          "embedding:X_pca",
+          "graph:connectivities",
+          "graph:distances"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "index": 5,
+        "name": "LEIDEN",
+        "parameters": "\"connectivities\" -> \"leiden\" resolution=1 seed=0",
+        "reads": null,
+        "input": 4,
+        "origin": [
+          6
+        ],
+        "device": "cpu",
+        "passes": 0,
+        "statistics_passes": 0,
+        "apply_pass": false,
+        "blocks": "in_memory",
+        "block_cells": null
+      },
+      {
+        "index": 4,
+        "name": "NEIGHBORS",
+        "parameters": "\"X_new\" -> \"distances\", \"connectivities\" n_neighbors=15 metric=Euclidean search=Exact seed=0",
+        "reads": null,
+        "input": 3,
+        "origin": [
+          5
+        ],
+        "device": "cpu",
+        "passes": 0,
+        "statistics_passes": 0,
+        "apply_pass": false,
+        "blocks": "in_memory",
+        "block_cells": null
+      },
+      {
+        "index": 3,
+        "name": "PCA",
+        "parameters": "\"logn\" -> \"X_new\" n_components=2 seed=0",
+        "reads": null,
+        "input": 2,
+        "origin": [
+          4
+        ],
+        "device": "cpu",
+        "passes": 16,
+        "statistics_passes": 16,
+        "apply_pass": false,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 2,
+        "name": "FILTER_CELLS",
+        "parameters": "cell_column('score') > -2.0",
+        "reads": null,
+        "input": 1,
+        "origin": [
+          3
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 1,
+        "name": "FUSED_ELEMENTWISE",
+        "parameters": "[NORMALIZE_TOTAL \"counts\" -> \"norm\" target_sum=median; LOG1P \"norm\" -> \"logn\"] keeps [\"logn\", \"norm\"]",
+        "reads": null,
+        "input": 0,
+        "origin": [
+          1,
+          2
+        ],
+        "device": "cpu",
+        "passes": 2,
+        "statistics_passes": 1,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 0,
+        "name": "SCAN",
+        "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca"
+        ],
+        "input": null,
+        "origin": [
+          0
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      }
+    ]
+  }
+}

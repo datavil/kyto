@@ -24,7 +24,7 @@
 //! passes over the store for the whole plan or estimate bytes and memory (4.6,
 //! `estimate.rs`), pick
 //! among several devices (9.1: [`Device`] has only the CPU), or print the logical
-//! tree or JSON (4.7).
+//! tree or JSON (4.7, `explain.rs`).
 
 use std::fmt;
 use std::num::NonZeroU64;
@@ -291,12 +291,5 @@ impl Plan {
     /// all of its output. The plan itself is unchanged.
     pub fn physical(self: &Arc<Self>, options: PhysicalOptions) -> PhysicalPlan {
         PhysicalPlan::new(self.optimize(), options)
-    }
-
-    /// How this plan would run, as text: [`Plan::physical`] on the CPU, one line per
-    /// node with its device, passes and blocks. Reads nothing. Task 4.7 adds the
-    /// logical tree and a JSON form.
-    pub fn explain(self: &Arc<Self>) -> String {
-        self.physical(PhysicalOptions::default()).to_string()
     }
 }

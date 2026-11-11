@@ -21,11 +21,14 @@
 //! device, passes and blocks of each optimized node. The cost estimate (task 4.6):
 //! [`CostEstimate`] ([`PhysicalPlan::estimate`], [`Plan::estimate`]) gives the passes
 //! over the store, bytes read, peak memory and device without reading anything.
+//! Explain (task 4.7): [`Explain`] ([`Plan::explanation`], [`Plan::explain`], [`Plan::explain_json`]) shows
+//! the logical and optimized trees with resolved names, as text or JSON.
 #![forbid(unsafe_code)]
 
 mod cluster;
 mod cross_cell;
 mod estimate;
+mod explain;
 mod filter;
 mod handles;
 mod map_elementwise;
@@ -53,6 +56,7 @@ mod with_default_layer;
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
 pub use estimate::{ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES};
+pub use explain::{Explain, LogicalEntry, OptimizedEntry, OutputEntry};
 pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};

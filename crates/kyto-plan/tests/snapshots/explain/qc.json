@@ -1,0 +1,126 @@
+{
+  "logical": [
+    {
+      "id": 3,
+      "name": "FILTER_CELLS",
+      "parameters": "gene_expression('G1', layer='counts') > 0.0",
+      "input": 2
+    },
+    {
+      "id": 2,
+      "name": "FILTER_GENES",
+      "parameters": "gene_column('mean') > 0.5",
+      "input": 1
+    },
+    {
+      "id": 1,
+      "name": "WITH_DEFAULT_LAYER",
+      "parameters": "\"counts\"",
+      "input": 0
+    },
+    {
+      "id": 0,
+      "name": "SCAN",
+      "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+      "input": null
+    }
+  ],
+  "optimized": {
+    "outputs": [
+      {
+        "node": 3,
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "index": 3,
+        "name": "FILTER_CELLS",
+        "parameters": "gene_expression('G1', layer='counts') > 0.0",
+        "reads": null,
+        "input": 2,
+        "origin": [
+          3
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 2,
+        "name": "FILTER_GENES",
+        "parameters": "gene_column('mean') > 0.5",
+        "reads": null,
+        "input": 1,
+        "origin": [
+          2
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 1,
+        "name": "WITH_DEFAULT_LAYER",
+        "parameters": "\"counts\"",
+        "reads": null,
+        "input": 0,
+        "origin": [
+          1
+        ],
+        "device": "cpu",
+        "passes": 0,
+        "statistics_passes": 0,
+        "apply_pass": false,
+        "blocks": "none",
+        "block_cells": null
+      },
+      {
+        "index": 0,
+        "name": "SCAN",
+        "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ],
+        "input": null,
+        "origin": [
+          0
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      }
+    ]
+  }
+}

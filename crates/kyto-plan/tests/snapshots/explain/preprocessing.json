@@ -1,0 +1,164 @@
+{
+  "logical": [
+    {
+      "id": 5,
+      "name": "PCA",
+      "parameters": "\"scaled\" -> \"X_new\" n_components=2 seed=0",
+      "input": 4
+    },
+    {
+      "id": 4,
+      "name": "SCALE",
+      "parameters": "\"logn\" -> \"scaled\" zero_center=true max_value=10",
+      "input": 3
+    },
+    {
+      "id": 3,
+      "name": "HIGHLY_VARIABLE_GENES",
+      "parameters": "\"counts\" flavor=seurat_v3 n_top_genes=3 batch_key=\"batch\"",
+      "input": 2
+    },
+    {
+      "id": 2,
+      "name": "LOG1P",
+      "parameters": "\"norm\" -> \"logn\"",
+      "input": 1
+    },
+    {
+      "id": 1,
+      "name": "NORMALIZE_TOTAL",
+      "parameters": "\"counts\" -> \"norm\" target_sum=10000",
+      "input": 0
+    },
+    {
+      "id": 0,
+      "name": "SCAN",
+      "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+      "input": null
+    }
+  ],
+  "optimized": {
+    "outputs": [
+      {
+        "node": 4,
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "layer:logn",
+          "layer:norm",
+          "layer:scaled",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:highly_variable_nbatches",
+          "genes:highly_variable_rank",
+          "genes:mean",
+          "genes:means",
+          "genes:symbol",
+          "genes:variances",
+          "genes:variances_norm",
+          "embedding:PCs",
+          "embedding:X_new",
+          "embedding:X_new_loadings",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "index": 4,
+        "name": "PCA",
+        "parameters": "\"scaled\" -> \"X_new\" n_components=2 seed=0",
+        "reads": null,
+        "input": 3,
+        "origin": [
+          5
+        ],
+        "device": "cpu",
+        "passes": 16,
+        "statistics_passes": 16,
+        "apply_pass": false,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 3,
+        "name": "SCALE",
+        "parameters": "\"logn\" -> \"scaled\" zero_center=true max_value=10",
+        "reads": null,
+        "input": 2,
+        "origin": [
+          4
+        ],
+        "device": "cpu",
+        "passes": 2,
+        "statistics_passes": 1,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 2,
+        "name": "HIGHLY_VARIABLE_GENES",
+        "parameters": "\"counts\" flavor=seurat_v3 n_top_genes=3 batch_key=\"batch\"",
+        "reads": null,
+        "input": 1,
+        "origin": [
+          3
+        ],
+        "device": "cpu",
+        "passes": 2,
+        "statistics_passes": 2,
+        "apply_pass": false,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 1,
+        "name": "FUSED_ELEMENTWISE",
+        "parameters": "[NORMALIZE_TOTAL \"counts\" -> \"norm\" target_sum=10000; LOG1P \"norm\" -> \"logn\"] keeps [\"logn\", \"norm\"]",
+        "reads": null,
+        "input": 0,
+        "origin": [
+          1,
+          2
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 0,
+        "name": "SCAN",
+        "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ],
+        "input": null,
+        "origin": [
+          0
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      }
+    ]
+  }
+}

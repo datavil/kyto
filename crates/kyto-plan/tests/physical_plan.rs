@@ -3,7 +3,8 @@
 //! One plan per node kind and operation variant (every rule off, so no node is left
 //! out or fused): each node's line in the physical plan names its device and passes,
 //! with the passes its rule gives. Then snapshots: a standard pipeline with every
-//! rule off and on (the fused pass), `Plan::explain`, and outputs sharing a sub-plan.
+//! rule off and on (the fused pass), `Plan::physical` (the optimized section of
+//! `explain()`, task 4.7: `tests/explain.rs`), and outputs sharing a sub-plan.
 #![allow(clippy::unwrap_used)]
 
 mod support;
@@ -262,8 +263,8 @@ fn every_node_kind_has_a_device_and_passes() {
         assert_eq!(got_statistics, statistics, "{case}");
         assert_eq!(u32::from(apply), passes - statistics, "{case}");
         assert_eq!(got_blocks, blocks, "{case}");
-        // `explain()` shows them on every line.
-        let text = plan.explain();
+        // The physical plan (`explain()`'s optimized section) shows them on every line.
+        let text = plan.physical(PhysicalOptions::default()).to_string();
         assert_eq!(text.lines().count(), plan.nodes().count() + 1, "{case}");
         for line in text.lines().skip(1) {
             assert!(
@@ -306,7 +307,7 @@ fn passes_and_blocks_print_on_each_line() {
         .neighbors(neighbors())
         .unwrap();
     assert_eq!(
-        plan.explain(),
+        plan.physical(PhysicalOptions::default()).to_string(),
         r#"output #3 reads [layer:counts, layer:log1p, layer:norm, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca, graph:connectivities, graph:distances]
 #3 NEIGHBORS "X_pca" -> "distances", "connectivities" n_neighbors=15 metric=Euclidean search=Exact seed=0 <- #2 (node 3) [device=cpu passes=0 in memory]
 #2 WITH_DEFAULT_LAYER "norm" <- #1 (node 2) [device=cpu passes=0 no data]
@@ -388,7 +389,7 @@ fn fused_pass_without_median_is_one_pass() {
         .unwrap()
         .log1p(Some("norm"), "logn")
         .unwrap();
-    let text = plan.explain();
+    let text = plan.physical(PhysicalOptions::default()).to_string();
     let fused = text
         .lines()
         .find(|line| line.contains("FUSED_ELEMENTWISE"))

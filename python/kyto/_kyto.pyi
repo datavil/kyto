@@ -158,31 +158,64 @@ class Atlas:
         FILTER_GENES gene_column('feature_type') == 'Gene Expression'
         SCAN "..." (2 cells x 3 genes)
         """
-    def explain(self) -> str:
-        """How the plan would run: its physical plan, as text (task 4.5).
+    @overload
+    def explain(self, *, format: Literal["text"] = "text") -> str:
+        """How the plan would run: its logical and optimized trees (task 4.7).
 
-        The plan is optimized with every rule (for a terminal reading all of its output),
-        then each node is given a device, a number of passes over its input's blocks
-        and how it meets the data. The first line says what the output reads; then one
-        line per node from the last down to the scan, each ending in brackets:
-        ``device`` (``cpu``), ``passes`` (with the ``statistics`` passes over all cells
-        and the ``apply`` pass when there are statistics passes), and ``blocks=N cells``
-        (streamed in blocks of the store's cell block size), ``in memory`` or ``no
-        data``. Nothing is read. Task 4.7 adds the logical tree and ``format=``.
+        The logical tree lists the plan's steps from the last down to the scan, each with
+        its node ID and its parameters, every name resolved in full as the plan stored it
+        (R6: a ``feature`` or a gene read by symbol shows the gene ID and layer it
+        names). The optimized tree is the plan optimized with every rule (for a terminal
+        reading all of its output): one line for what the output reads, then one line per
+        node from the top down to the scan, each with the logical nodes it came from
+        (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
+        (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
+        all cells and the ``apply`` pass when there are statistics passes), and
+        ``blocks=N cells`` (streamed in blocks of the store's cell block size), ``in
+        memory`` or ``no data``. ``estimate()`` gives the cost of the whole plan. Nothing
+        is read.
+
+        Parameters
+        ----------
+        format : {"text", "json"}, default="text"
+            ``"text"``: the two trees as text, under ``logical plan`` and ``optimized
+            plan``. ``"json"``: the same as a dict with ``logical`` (one dict per step:
+            ``id``, ``name``, ``parameters``, ``input``) and ``optimized`` (``outputs``:
+            ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
+            ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
+            ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
+            ``"in_memory"`` or ``"none"``) and ``block_cells``), in the text's order.
 
         Returns
         -------
-        str
-            The physical plan, one line per node (a new string; the plan is unchanged).
+        str or dict
+            A ``str`` for ``format="text"``, a ``dict`` for ``format="json"``; new
+            objects each call (the plan is unchanged).
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``format`` is not ``"text"`` or ``"json"``.
 
         Examples
         --------
         >>> genes = gene_column("feature_type") == "Gene Expression"
         >>> print(scan(store).filter_genes(genes).explain())
-        output #1 reads [...]
-        #1 FILTER_GENES ... [device=cpu passes=1 blocks=4096 cells]
-        #0 SCAN ... [device=cpu passes=1 blocks=4096 cells]
+        logical plan
+          node 1 FILTER_GENES gene_column('feature_type') == 'Gene Expression' <- node 0
+          node 0 SCAN "..." (2 cells x 3 genes)
+        optimized plan
+          output #1 reads [...]
+          #1 FILTER_GENES ... <- #0 (node 1) [device=cpu passes=1 blocks=4096 cells]
+          #0 SCAN ... (node 0) [device=cpu passes=1 blocks=4096 cells]
+        >>> explained = scan(store).filter_genes(genes).explain(format="json")
+        >>> [step["name"] for step in explained["logical"]]
+        ['FILTER_GENES', 'SCAN']
+        >>> explained["optimized"]["nodes"][0]["passes"]
+        1
         """
+    @overload
+    def explain(self, *, format: Literal["json"]) -> Explanation: ...
     def estimate(self) -> CostEstimate:
         """What running the plan would cost, from its schema alone (task 4.6).
 
@@ -365,8 +398,9 @@ class Atlas:
         kyto.errors.MissingMemberError: KY-E109: no modality named 'adt' in the store at '...'...
         """
 
-# The dicts that handle `schema()` and `estimate()` return (task 3.6). Type-checking
-# only: they do not exist at run time.
+# The dicts that handle `schema()` and `estimate()` return (task 3.6), and
+# `Atlas.explain(format="json")` (task 4.7). Type-checking only: they do not exist
+# at run time.
 
 class ColumnLineage(TypedDict):
     """The ``lineage`` of a stored derived column (format.md section 8)."""
@@ -440,6 +474,48 @@ class CostEstimate(TypedDict):
     bytes_read: int
     peak_memory: int
     device: Literal["cpu"]
+
+class ExplainedStep(TypedDict):
+    """One logical step of ``Atlas.explain(format="json")``."""
+
+    id: int
+    name: str
+    parameters: str
+    input: int | None
+
+class ExplainedOutput(TypedDict):
+    """What a terminal reads from the optimized plan (``Atlas.explain``)."""
+
+    node: int
+    reads: list[str]
+
+class ExplainedNode(TypedDict):
+    """One optimized node of ``Atlas.explain(format="json")`` and how it runs."""
+
+    index: int
+    name: str
+    parameters: str
+    reads: list[str] | None
+    input: int | None
+    origin: list[int]
+    device: Literal["cpu"]
+    passes: int
+    statistics_passes: int
+    apply_pass: bool
+    blocks: Literal["cells", "in_memory", "none"]
+    block_cells: int | None
+
+class ExplainedPlan(TypedDict):
+    """The optimized plan of ``Atlas.explain(format="json")``."""
+
+    outputs: list[ExplainedOutput]
+    nodes: list[ExplainedNode]
+
+class Explanation(TypedDict):
+    """What ``Atlas.explain(format="json")`` returns: the logical and optimized trees."""
+
+    logical: list[ExplainedStep]
+    optimized: ExplainedPlan
 
 class Estimate(TypedDict):
     """What a handle's data looks like, from metadata alone; ``None`` if not known."""

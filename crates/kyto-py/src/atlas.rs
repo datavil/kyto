@@ -18,7 +18,7 @@ use kyto_core::GeneIds;
 use kyto_error::KytoError;
 use kyto_plan::Plan;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyString};
 use pyo3::{IntoPyObjectExt, PyAny};
 
 use crate::errors::to_py_err;
@@ -378,31 +378,77 @@ impl Atlas {
         self.plan.to_json()
     }
 
-    /// How the plan would run: its physical plan, as text (task 4.5).
+    /// How the plan would run: its logical and optimized trees (task 4.7).
     ///
-    /// The plan is optimized with every rule (for a terminal reading all of its output),
-    /// then each node is given a device, a number of passes over its input's blocks
-    /// and how it meets the data. The first line says what the output reads; then one
-    /// line per node from the last down to the scan, each ending in brackets:
-    /// ``device`` (``cpu``), ``passes`` (with the ``statistics`` passes over all cells
-    /// and the ``apply`` pass when there are statistics passes), and ``blocks=N cells``
-    /// (streamed in blocks of the store's cell block size), ``in memory`` or ``no
-    /// data``. Nothing is read. Task 4.7 adds the logical tree and ``format=``.
+    /// The logical tree lists the plan's steps from the last down to the scan, each with
+    /// its node ID and its parameters, every name resolved in full as the plan stored it
+    /// (R6: a ``feature`` or a gene read by symbol shows the gene ID and layer it
+    /// names). The optimized tree is the plan optimized with every rule (for a terminal
+    /// reading all of its output): one line for what the output reads, then one line per
+    /// node from the top down to the scan, each with the logical nodes it came from
+    /// (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
+    /// (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
+    /// all cells and the ``apply`` pass when there are statistics passes), and
+    /// ``blocks=N cells`` (streamed in blocks of the store's cell block size), ``in
+    /// memory`` or ``no data``. ``estimate()`` gives the cost of the whole plan. Nothing
+    /// is read.
+    ///
+    /// Parameters
+    /// ----------
+    /// format : {"text", "json"}, default="text"
+    ///     ``"text"``: the two trees as text, under ``logical plan`` and ``optimized
+    ///     plan``. ``"json"``: the same as a dict with ``logical`` (one dict per step:
+    ///     ``id``, ``name``, ``parameters``, ``input``) and ``optimized`` (``outputs``:
+    ///     ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
+    ///     ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
+    ///     ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
+    ///     ``"in_memory"`` or ``"none"``) and ``block_cells``), in the text's order.
     ///
     /// Returns
     /// -------
-    /// str
-    ///     The physical plan, one line per node (a new string; the plan is unchanged).
+    /// str or dict
+    ///     A ``str`` for ``format="text"``, a ``dict`` for ``format="json"``; new
+    ///     objects each call (the plan is unchanged).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``format`` is not ``"text"`` or ``"json"``.
     ///
     /// Examples
     /// --------
     /// >>> genes = gene_column("feature_type") == "Gene Expression"
     /// >>> print(scan(store).filter_genes(genes).explain())
-    /// output #1 reads [...]
-    /// #1 FILTER_GENES ... [device=cpu passes=1 blocks=4096 cells]
-    /// #0 SCAN ... [device=cpu passes=1 blocks=4096 cells]
-    fn explain(&self) -> String {
-        self.plan.explain()
+    /// logical plan
+    ///   node 1 FILTER_GENES gene_column('feature_type') == 'Gene Expression' <- node 0
+    ///   node 0 SCAN "..." (2 cells x 3 genes)
+    /// optimized plan
+    ///   output #1 reads [...]
+    ///   #1 FILTER_GENES ... <- #0 (node 1) [device=cpu passes=1 blocks=4096 cells]
+    ///   #0 SCAN ... (node 0) [device=cpu passes=1 blocks=4096 cells]
+    /// >>> explained = scan(store).filter_genes(genes).explain(format="json")
+    /// >>> [step["name"] for step in explained["logical"]]
+    /// ['FILTER_GENES', 'SCAN']
+    /// >>> explained["optimized"]["nodes"][0]["passes"]
+    /// 1
+    #[pyo3(signature = (*, format = "text"))]
+    fn explain<'py>(&self, py: Python<'py>, format: &str) -> PyResult<Bound<'py, PyAny>> {
+        match format {
+            "text" => self.plan.explain().into_bound_py_any(py),
+            "json" => py
+                .import("json")?
+                .call_method1("loads", (self.plan.explain_json(),)),
+            _ => {
+                let error = KytoError::InvalidArgument {
+                    function: "explain".to_owned(),
+                    parameter: "format".to_owned(),
+                    value: PyString::new(py, format).repr()?.to_string(),
+                    problem: "it is not a format explain writes".to_owned(),
+                    accepted: "'text' or 'json'".to_owned(),
+                };
+                Err(to_py_err(py, &error))
+            }
+        }
     }
 
     /// What running the plan would cost, from its schema alone (task 4.6).

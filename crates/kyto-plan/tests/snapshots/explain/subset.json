@@ -1,0 +1,172 @@
+{
+  "logical": [
+    {
+      "id": 5,
+      "name": "SINK_H5AD",
+      "parameters": "\"subset.h5ad\"",
+      "input": 4
+    },
+    {
+      "id": 4,
+      "name": "WITH_GENES",
+      "parameters": "\"in_c1\" = gene_column('mean')",
+      "input": 3
+    },
+    {
+      "id": 3,
+      "name": "WITH_CELLS",
+      "parameters": "\"g1\" = gene_expression('G1', layer='counts')",
+      "input": 2
+    },
+    {
+      "id": 2,
+      "name": "TAKE_CELLS",
+      "parameters": "['c2', 'c1']",
+      "input": 1
+    },
+    {
+      "id": 1,
+      "name": "SELECT_GENES",
+      "parameters": "['G3', 'G1']",
+      "input": 0
+    },
+    {
+      "id": 0,
+      "name": "SCAN",
+      "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+      "input": null
+    }
+  ],
+  "optimized": {
+    "outputs": [
+      {
+        "node": 5,
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:g1",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:in_c1",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ]
+      }
+    ],
+    "nodes": [
+      {
+        "index": 5,
+        "name": "SINK_H5AD",
+        "parameters": "\"subset.h5ad\"",
+        "reads": null,
+        "input": 4,
+        "origin": [
+          5
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 4,
+        "name": "WITH_GENES",
+        "parameters": "\"in_c1\" = gene_column('mean')",
+        "reads": null,
+        "input": 3,
+        "origin": [
+          4
+        ],
+        "device": "cpu",
+        "passes": 0,
+        "statistics_passes": 0,
+        "apply_pass": false,
+        "blocks": "in_memory",
+        "block_cells": null
+      },
+      {
+        "index": 3,
+        "name": "WITH_CELLS",
+        "parameters": "\"g1\" = gene_expression('G1', layer='counts')",
+        "reads": null,
+        "input": 2,
+        "origin": [
+          3
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 2,
+        "name": "TAKE_CELLS",
+        "parameters": "['c2', 'c1']",
+        "reads": null,
+        "input": 1,
+        "origin": [
+          2
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 1,
+        "name": "SELECT_GENES",
+        "parameters": "['G3', 'G1']",
+        "reads": null,
+        "input": 0,
+        "origin": [
+          1
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      },
+      {
+        "index": 0,
+        "name": "SCAN",
+        "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
+        "reads": [
+          "layer:counts",
+          "layer:log1p",
+          "cells:batch",
+          "cells:score",
+          "cells:total_counts",
+          "genes:highly_variable",
+          "genes:mean",
+          "genes:symbol",
+          "embedding:PCs",
+          "embedding:X_pca",
+          "graph:connectivities"
+        ],
+        "input": null,
+        "origin": [
+          0
+        ],
+        "device": "cpu",
+        "passes": 1,
+        "statistics_passes": 0,
+        "apply_pass": true,
+        "blocks": "cells",
+        "block_cells": 4096
+      }
+    ]
+  }
+}

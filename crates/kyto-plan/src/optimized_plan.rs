@@ -250,19 +250,33 @@ pub(crate) struct NodeLine<'a>(pub(crate) usize, pub(crate) &'a OptimizedNode);
 impl fmt::Display for NodeLine<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let NodeLine(index, node) = *self;
-        write!(formatter, "#{index} {}", node.name())?;
-        match &node.operation {
-            Operation::Scan { plan, reads } => {
-                formatter.write_str(" ")?;
-                plan.node().describe(formatter)?;
-                write!(formatter, " reads {}", MemberList(reads))?;
-            }
-            Operation::Node(plan) => {
-                formatter.write_str(" ")?;
-                plan.node().describe(formatter)?;
-            }
+        write!(
+            formatter,
+            "#{index} {} {}",
+            node.name(),
+            NodeParameters(node)
+        )?;
+        if let Operation::Scan { reads, .. } = &node.operation {
+            write!(formatter, " reads {}", MemberList(reads))?;
+        }
+        if let Some(input) = node.input {
+            write!(formatter, " <- #{input}")?;
+        }
+        let origin: Vec<String> = node.origin.iter().map(ToString::to_string).collect();
+        write!(formatter, " (node {})", origin.join(", "))
+    }
+}
+
+/// A node's parameters, as its line shows them after its name: the logical node's
+/// (a scan's without what it reads), or a fused node's maps and kept layers.
+pub(crate) struct NodeParameters<'a>(pub(crate) &'a OptimizedNode);
+
+impl fmt::Display for NodeParameters<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0.operation {
+            Operation::Scan { plan, .. } | Operation::Node(plan) => plan.node().describe(formatter),
             Operation::Fused { maps, writes } => {
-                formatter.write_str(" [")?;
+                formatter.write_str("[")?;
                 for (position, map) in maps.iter().enumerate() {
                     if position > 0 {
                         formatter.write_str("; ")?;
@@ -271,14 +285,9 @@ impl fmt::Display for NodeLine<'_> {
                     map.describe(formatter)?;
                 }
                 let kept: Vec<String> = writes.iter().map(|layer| format!("{layer:?}")).collect();
-                write!(formatter, "] keeps [{}]", kept.join(", "))?;
+                write!(formatter, "] keeps [{}]", kept.join(", "))
             }
         }
-        if let Some(input) = node.input {
-            write!(formatter, " <- #{input}")?;
-        }
-        let origin: Vec<String> = node.origin.iter().map(ToString::to_string).collect();
-        write!(formatter, " (node {})", origin.join(", "))
     }
 }
 
