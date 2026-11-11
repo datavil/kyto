@@ -5,8 +5,9 @@
 //! copied or changed: R2), walk a plan from a node to its scan, and answer what a
 //! node's output schema, default layer and removed genes are from the state cached
 //! when it was built (so these answers do not walk the chain).
-//! Does not: validate across the whole DAG (4.2), serialize (4.3), optimize (4.4) or
-//! execute plans.
+//! Does not: serialize (4.3), optimize (4.4) or execute plans. Build-time validation
+//! (4.2) happens in each step's builder as the plan grows: names resolved, kinds
+//! checked, arguments and new names checked (`names.rs`), so a built plan is valid.
 //!
 //! The shape follows Polars' `DslPlan`: one enum variant per node, each node owning its
 //! input as `Arc<Plan>`, so building `b` from `a` costs one allocation and leaves `a`

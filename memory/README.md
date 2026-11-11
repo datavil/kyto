@@ -20,3 +20,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [MinIO for the remote store tests](minio_native_tests.md): native Homebrew `minio` here (formula disabled 2027-02-17), docker/podman in CI; SigV4 bucket creation; `Path::parse` for zarr keys.
 - [serde validation and R10](serde_errors_r10.md): no `try_from` with String errors; hand-written `Deserialize` with `missing_field`/`unknown_variant`; reject `null` optional keys for exact round trips.
 - [`.h5ad` float NaN becomes null](h5ad_float_nan_null.md): importer turns obs/var float NaN into null (user, 3.7); kyto writers keep NaN; a stored NaN round-trips through `.h5ad` as null.
+- [Ask Polars for result dtypes](polars_dtype_inference.md): hand-copied supertype and literal rules were wrong; `column_dtype` asks `collect_schema()` with stand-in leaf columns.

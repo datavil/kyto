@@ -3,38 +3,33 @@
 //!
 //! Does: hold the named expressions, each resolved against the input when built (R6;
 //! an expression sees the input's columns, not its siblings', as in Polars). Names
-//! must be non-empty, distinct, and not reserved (`cell_id` in the cell table,
-//! `gene_id` and `symbol` in the gene table: `KY-E215`). Its output schema replaces a column of the same name in place and
+//! must be distinct, valid column names (format.md §5.6: non-empty, no `:`) and not
+//! reserved (`cell_id` and `gene_id` in either table, `symbol` in the gene table:
+//! `KY-E215`). Its output schema replaces a column of the same name in place and
 //! appends the others, each with no lineage (computed by this plan, so never stale)
-//! and the dtype [`column_dtype`] declares. Changes no axis. Cell columns are
+//! and the dtype [`column_dtype`] declares (Polars' own inference). Changes no axis.
+//! Cell columns are
 //! per-cell; gene columns are cross-cell when they read more than gene metadata
 //! (`cell_profile`, gene embeddings), per-cell otherwise.
 //! Does not: evaluate anything (the executor, which casts each result to its declared
 //! dtype so data and schema agree).
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 
 use kyto_core::{
-    Axis, BinaryOp, CellExpr, ColumnDtype, ColumnSchema, Expr, ExprAxis, ExprNode, FloatDtype,
-    GeneExpr, LayerDtype, Literal, Source,
+    Axis, CellExpr, ColumnDtype, ColumnSchema, Expr, ExprAxis, ExprNode, FloatDtype, GeneExpr,
+    LayerDtype, Source,
 };
 use kyto_error::KytoError;
+use polars::prelude::{DataFrame, DataType, IntoLazy, Series, col};
 
 use crate::node::{CellScope, LogicalNode, Transform};
 use crate::plan::Plan;
 use crate::plan_schema::PlanSchema;
 use crate::select_genes::quoted;
-
-/// Reserved column names no plan writes, per table: the ID columns (format.md §5.2)
-/// and the gene symbols the scan read for `by='symbol'` (task 3.9).
-fn reserved(axis: Axis) -> &'static [&'static str] {
-    match axis {
-        Axis::Cells => &["cell_id"],
-        Axis::Genes => &["gene_id", "symbol"],
-    }
-}
 
 /// The named expressions of a [`WithColumns`], on one axis.
 #[derive(Debug, Clone, PartialEq)]
@@ -133,43 +128,83 @@ impl Transform for WithColumns {
 
 /// The dtype a column computed by `node` on the table of `axis` is declared with.
 ///
-/// Rules, close to Polars' (the executor casts to the declared dtype):
-/// - a column read keeps the column's dtype (`Enum` included); a matrix read the
-///   layer's (`float32`, `uint32`); an embedding component its dtype;
-/// - literals: `Boolean`, `Int64`, `Float64`, `String`;
-/// - comparisons, `&`, `|`, `~`, null tests and string tests are `Boolean`;
-/// - `+`, `-`, `*`: equal dtypes stay; an int literal takes the other side's dtype; a
-///   float literal takes a float side's dtype and makes an int side `Float64`; two
-///   different ints are `Int64`; any other mix is `Float64`;
-/// - `/` with a literal is `Float32` when the other side is `Float32`; otherwise
-///   `Float32` when no side is wider than `float32` and one is `Float32`, and
-///   `Float64` in every other case.
+/// A plain read keeps its dtype: a column's (`Enum` included), a matrix read the
+/// layer's (`float32` is `Float32`, `uint32` is `UInt32`), an embedding component its
+/// dtype. Any other expression gets the dtype Polars infers for it, asked of Polars
+/// itself with one empty stand-in column per leaf (`Enum` and `String` leaves stand in
+/// as `String`), so supertypes, literals that adapt or widen, and true division follow
+/// Polars exactly (`tests/column_dtype_polars.rs`). The executor casts each result to
+/// the declared dtype. `Float64` if Polars cannot say (resolution refuses such
+/// expressions first).
 pub fn column_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> ColumnDtype {
     match node {
         ExprNode::Source(source) => source_dtype(schema, axis, source),
-        ExprNode::Literal(literal) => literal_dtype(literal),
-        ExprNode::Not(_) | ExprNode::Str { .. } | ExprNode::Null { .. } => ColumnDtype::Boolean,
-        ExprNode::Binary { op, left, right } => match op {
-            BinaryOp::Eq
-            | BinaryOp::NotEq
-            | BinaryOp::Lt
-            | BinaryOp::LtEq
-            | BinaryOp::Gt
-            | BinaryOp::GtEq
-            | BinaryOp::And
-            | BinaryOp::Or => ColumnDtype::Boolean,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                let left_dtype = column_dtype(schema, axis, left);
-                let right_dtype = column_dtype(schema, axis, right);
-                let literal = |node: &ExprNode| matches!(node, ExprNode::Literal(_));
-                if *op == BinaryOp::Div {
-                    division_dtype((left_dtype, literal(left)), (right_dtype, literal(right)))
-                } else {
-                    arithmetic_dtype((left_dtype, literal(left)), (right_dtype, literal(right)))
-                }
-            }
-        },
+        _ => inferred_dtype(schema, axis, node).unwrap_or(ColumnDtype::Float64),
     }
+}
+
+/// The dtype Polars infers for `node`, each leaf read as an empty column of its dtype.
+fn inferred_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> Option<ColumnDtype> {
+    let leaves: RefCell<Vec<(Source, DataType)>> = RefCell::new(Vec::new());
+    let leaf = |source: &Source| {
+        let mut leaves = leaves.borrow_mut();
+        let position = match leaves.iter().position(|(known, _)| known == source) {
+            Some(position) => position,
+            None => {
+                let dtype = polars_dtype(source_dtype(schema, axis, source));
+                leaves.push((source.clone(), dtype));
+                leaves.len() - 1
+            }
+        };
+        Some(col(format!("leaf{position}")))
+    };
+    let lowered = node.to_polars_with(&leaf)?.alias("out");
+    let columns = leaves
+        .into_inner()
+        .into_iter()
+        .enumerate()
+        .map(|(position, (_, dtype))| {
+            Series::new_empty(format!("leaf{position}").into(), &dtype).into()
+        })
+        .collect();
+    let mut frame = DataFrame::new(0, columns).ok()?.lazy().select([lowered]);
+    let schema = frame.collect_schema().ok()?;
+    column_dtype_of(schema.get("out")?)
+}
+
+fn polars_dtype(dtype: ColumnDtype) -> DataType {
+    match dtype {
+        ColumnDtype::Boolean => DataType::Boolean,
+        ColumnDtype::Int8 => DataType::Int8,
+        ColumnDtype::Int16 => DataType::Int16,
+        ColumnDtype::Int32 => DataType::Int32,
+        ColumnDtype::Int64 => DataType::Int64,
+        ColumnDtype::UInt8 => DataType::UInt8,
+        ColumnDtype::UInt16 => DataType::UInt16,
+        ColumnDtype::UInt32 => DataType::UInt32,
+        ColumnDtype::UInt64 => DataType::UInt64,
+        ColumnDtype::Float32 => DataType::Float32,
+        ColumnDtype::Float64 => DataType::Float64,
+        ColumnDtype::String | ColumnDtype::Enum { .. } => DataType::String,
+    }
+}
+
+fn column_dtype_of(dtype: &DataType) -> Option<ColumnDtype> {
+    Some(match dtype {
+        DataType::Boolean => ColumnDtype::Boolean,
+        DataType::Int8 => ColumnDtype::Int8,
+        DataType::Int16 => ColumnDtype::Int16,
+        DataType::Int32 => ColumnDtype::Int32,
+        DataType::Int64 => ColumnDtype::Int64,
+        DataType::UInt8 => ColumnDtype::UInt8,
+        DataType::UInt16 => ColumnDtype::UInt16,
+        DataType::UInt32 => ColumnDtype::UInt32,
+        DataType::UInt64 => ColumnDtype::UInt64,
+        DataType::Float32 => ColumnDtype::Float32,
+        DataType::Float64 => ColumnDtype::Float64,
+        DataType::String => ColumnDtype::String,
+        _ => return None,
+    })
 }
 
 fn source_dtype(schema: &PlanSchema, axis: Axis, source: &Source) -> ColumnDtype {
@@ -195,88 +230,14 @@ fn source_dtype(schema: &PlanSchema, axis: Axis, source: &Source) -> ColumnDtype
     }
 }
 
-fn literal_dtype(literal: &Literal) -> ColumnDtype {
-    match literal {
-        Literal::Boolean(_) => ColumnDtype::Boolean,
-        Literal::Int(_) => ColumnDtype::Int64,
-        Literal::Float(_) => ColumnDtype::Float64,
-        Literal::String(_) => ColumnDtype::String,
-    }
-}
-
-fn is_float(dtype: ColumnDtype) -> bool {
-    matches!(dtype, ColumnDtype::Float32 | ColumnDtype::Float64)
-}
-
-fn arithmetic_dtype(left: (ColumnDtype, bool), right: (ColumnDtype, bool)) -> ColumnDtype {
-    let ((left, left_literal), (right, right_literal)) = (left, right);
-    if left == right {
-        return left;
-    }
-    // A literal adapts to the other side, as Polars' dynamic literals do.
-    for (literal, other, is_literal) in [(left, right, left_literal), (right, left, right_literal)]
-    {
-        if is_literal {
-            return match (literal, is_float(other)) {
-                (ColumnDtype::Int64, _) | (ColumnDtype::Float64, true) => other,
-                _ => ColumnDtype::Float64,
-            };
-        }
-    }
-    if is_float(left) || is_float(right) {
-        ColumnDtype::Float64
-    } else {
-        ColumnDtype::Int64
-    }
-}
-
-fn division_dtype(left: (ColumnDtype, bool), right: (ColumnDtype, bool)) -> ColumnDtype {
-    let ((left, left_literal), (right, right_literal)) = (left, right);
-    // A literal adapts to the other side, as in `arithmetic_dtype`.
-    match (left_literal, right_literal) {
-        (true, false) => {
-            return if right == ColumnDtype::Float32 {
-                right
-            } else {
-                ColumnDtype::Float64
-            };
-        }
-        (false, true) => {
-            return if left == ColumnDtype::Float32 {
-                left
-            } else {
-                ColumnDtype::Float64
-            };
-        }
-        _ => {}
-    }
-    let narrow = |dtype| {
-        matches!(
-            dtype,
-            ColumnDtype::Float32
-                | ColumnDtype::Int8
-                | ColumnDtype::Int16
-                | ColumnDtype::UInt8
-                | ColumnDtype::UInt16
-        )
-    };
-    if narrow(left)
-        && narrow(right)
-        && (left == ColumnDtype::Float32 || right == ColumnDtype::Float32)
-    {
-        ColumnDtype::Float32
-    } else {
-        ColumnDtype::Float64
-    }
-}
-
 impl Plan {
     /// This plan with cell columns added or replaced, each computed by its expression,
     /// resolved against this plan now (R6).
     ///
     /// # Errors
-    /// Any error of [`Plan::resolve`]; `KY-E215` for an empty, repeated or reserved
-    /// name; `KY-E216` if this plan ends in a sink.
+    /// Any error of [`Plan::resolve`]; `KY-E215` for a name that breaks format.md
+    /// §5.6 (empty, or with `:`), is reserved or is repeated; `KY-E216` if this plan
+    /// ends in a sink.
     pub fn with_cells(
         self: &Arc<Self>,
         columns: impl IntoIterator<Item = (String, CellExpr)>,
@@ -318,29 +279,14 @@ impl Plan {
         columns
             .into_iter()
             .map(|(name, expr)| {
-                let problem = if name.is_empty() {
-                    Some("a column name is never empty".to_owned())
-                } else if reserved(A::AXIS).contains(&name.as_str()) {
-                    Some(format!("'{name}' is reserved for the store"))
-                } else if !names.insert(name.clone()) {
-                    Some(format!("'{name}' is written twice"))
-                } else {
-                    None
-                };
-                if let Some(problem) = problem {
+                Self::check_column_name(method, "name", A::AXIS, &name)?;
+                if !names.insert(name.clone()) {
                     return Err(Self::invalid_argument(
                         method,
                         "name",
                         &quoted(&name),
-                        &problem,
-                        &format!(
-                            "a distinct, non-empty name other than {}",
-                            reserved(A::AXIS)
-                                .iter()
-                                .map(|name| format!("'{name}'"))
-                                .collect::<Vec<_>>()
-                                .join(" and ")
-                        ),
+                        &format!("'{name}' is written twice"),
+                        "a name used once per call",
                     ));
                 }
                 Ok((name, self.resolve(&expr)?))

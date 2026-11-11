@@ -11,7 +11,8 @@
 //! parsed [`FeatureName`] of `feature(...)` (task 3.4); the [`Resolver`] that checks every
 //! name against a plan's schema and [`GeneIds`] and stores it in full (task 3.5); the
 //! missing-value rules of R9 (task 3.7): null tests on expressions ([`NullTest`]) and
-//! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`).
+//! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`). The format's name rules
+//! ([`member_name_problem`], [`column_name_problem`]), shared by store and plan (task 4.2).
 #![forbid(unsafe_code)]
 
 mod expr;
@@ -20,6 +21,7 @@ mod expr_polars;
 mod expr_source;
 mod feature_name;
 mod gene_ids;
+mod member_name;
 mod removed_genes;
 mod resolve;
 mod schema;
@@ -33,6 +35,7 @@ pub use expr_dtype::ExprDtype;
 pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;
+pub use member_name::{MAX_MEMBER_NAME_BYTES, column_name_problem, member_name_problem};
 pub use removed_genes::RemovedGenes;
 pub use resolve::{META_PREFIX, Resolver, SYMBOL_COLUMN};
 pub use schema::{

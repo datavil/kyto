@@ -98,7 +98,8 @@ impl Plan {
     ///
     /// # Errors
     /// `KY-E109` if the plan has no cell graph of that name; `KY-E215` for a
-    /// resolution that is not positive and finite, or an empty or reserved `into`;
+    /// resolution that is not positive and finite, or an `into` that breaks
+    /// format.md §5.6 (empty, or with `:`) or is reserved (`cell_id`, `gene_id`);
     /// `KY-E216` if this plan ends in a sink.
     pub fn cluster(self: &Arc<Self>, params: Cluster) -> Result<Arc<Self>, KytoError> {
         let method = params.method.name();
@@ -108,16 +109,7 @@ impl Plan {
             .filter(|graph| graph.axis == Axis::Cells)
             .ok_or_else(|| self.missing_member("cell graph", &params.graph))?;
         Self::check_positive(method, "resolution", params.resolution)?;
-        Self::check_name(method, "into", &params.into)?;
-        if params.into == "cell_id" {
-            return Err(Self::invalid_argument(
-                method,
-                "into",
-                "'cell_id'",
-                "'cell_id' is reserved for the store",
-                "a name other than 'cell_id'",
-            ));
-        }
+        Self::check_column_name(method, "into", Axis::Cells, &params.into)?;
         Ok(self.extend(params, Self::Cluster))
     }
 }

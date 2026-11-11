@@ -14,6 +14,9 @@ workspace = true
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
 # Node parameters and output schemas derive serde for the plan JSON of task 4.3.
+# `column_dtype` asks Polars for the dtype of a computed column (task 4.2); same version
+# as kyto-core, which already brings it in.
+polars = { version = "0.55.2", default-features = false, features = ["lazy", "dtype-i8", "dtype-i16", "dtype-u8", "dtype-u16"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 
 [dev-dependencies]

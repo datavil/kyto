@@ -1414,6 +1414,7 @@ version = "0.0.0"
 dependencies = [
  "kyto-core",
  "kyto-error",
+ "polars",
  "serde",
  "serde_json",
 ]

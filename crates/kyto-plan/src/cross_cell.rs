@@ -30,6 +30,7 @@ use kyto_core::{
 use kyto_error::KytoError;
 use serde::{Deserialize, Serialize};
 
+use crate::names::MemberGroup;
 use crate::node::{CellScope, LogicalNode, Transform};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
@@ -285,7 +286,8 @@ impl Plan {
     /// # Errors
     /// `KY-E109` for a layer not in the plan; `KY-E211` for no layer and no default
     /// layer; `KY-E215` for a `max_value` that is not a positive finite number or an
-    /// empty `into`; `KY-E216` if this plan ends in a sink.
+    /// `into` that breaks format.md §2.1 or differs from a layer of the plan only in
+    /// case; `KY-E216` if this plan ends in a sink.
     pub fn scale(
         self: &Arc<Self>,
         layer: Option<&str>,
@@ -295,7 +297,7 @@ impl Plan {
     ) -> Result<Arc<Self>, KytoError> {
         self.check_open("scale")?;
         let layer = self.input_layer("scale", layer)?;
-        Self::check_name("scale", "into", into)?;
+        self.check_member_name("scale", "into", into, MemberGroup::Layers, into)?;
         if let Some(max_value) = max_value {
             Self::check_positive("scale", "max_value", max_value)?;
         }
@@ -358,7 +360,9 @@ impl Plan {
     /// # Errors
     /// `KY-E109` and `KY-E211` for the layer as [`Plan::scale`]; `KY-E215` for
     /// `n_components` of 0 or above the plan's bound of `min(n_cells, n_genes)`, or an
-    /// empty `into`; `KY-E216` if this plan ends in a sink.
+    /// `into` such that `into` or `<into>_loadings` breaks format.md §2.1 or differs
+    /// from an embedding of the plan only in case; `KY-E216` if this plan ends in a
+    /// sink.
     pub fn pca(
         self: &Arc<Self>,
         layer: Option<&str>,
@@ -368,7 +372,9 @@ impl Plan {
     ) -> Result<Arc<Self>, KytoError> {
         self.check_open("pca")?;
         let layer = self.input_layer("pca", layer)?;
-        Self::check_name("pca", "into", into)?;
+        for name in [into.to_owned(), loadings_name(into)] {
+            self.check_member_name("pca", "into", into, MemberGroup::Embeddings, &name)?;
+        }
         let schema = self.output_schema();
         let limit = schema
             .axis_len_bound(Axis::Cells)

@@ -20,15 +20,34 @@ impl<A: ExprAxis> Expr<A> {
     /// arithmetic with a null is null, `&` and `|` are three-valued (`null | true` is
     /// true), and a filter keeps only rows where the condition is true.
     pub fn to_polars(&self) -> Option<PolarsExpr> {
-        lower(self.node())
+        lower(self.node(), &column_leaf)
+    }
+}
+
+impl ExprNode {
+    /// The Polars expression of this node with each leaf [`Source`] given by `leaf`
+    /// (`None` from `leaf` makes the result `None`); operators lower as in
+    /// [`Expr::to_polars`]. The plan uses it to ask Polars which dtype an expression
+    /// over matrix or embedding reads has, with stand-in columns (task 4.2).
+    pub fn to_polars_with(
+        &self,
+        leaf: &dyn Fn(&Source) -> Option<PolarsExpr>,
+    ) -> Option<PolarsExpr> {
+        lower(self, leaf)
+    }
+}
+
+fn column_leaf(source: &Source) -> Option<PolarsExpr> {
+    match source {
+        Source::Column { name } => Some(col(name.as_str())),
+        _ => None,
     }
 }
 
 #[recursive::recursive]
-fn lower(node: &ExprNode) -> Option<PolarsExpr> {
+fn lower(node: &ExprNode, leaf: &dyn Fn(&Source) -> Option<PolarsExpr>) -> Option<PolarsExpr> {
     Some(match node {
-        ExprNode::Source(Source::Column { name }) => col(name.as_str()),
-        ExprNode::Source(_) => return None,
+        ExprNode::Source(source) => leaf(source)?,
         ExprNode::Literal(Literal::Boolean(value)) => lit(*value),
         ExprNode::Literal(Literal::Int(value)) => lit(*value),
         ExprNode::Literal(Literal::Float(value)) => lit(*value),
@@ -48,20 +67,20 @@ fn lower(node: &ExprNode) -> Option<PolarsExpr> {
                 BinaryOp::And => Operator::LogicalAnd,
                 BinaryOp::Or => Operator::LogicalOr,
             };
-            binary_expr(lower(left)?, operator, lower(right)?)
+            binary_expr(lower(left, leaf)?, operator, lower(right, leaf)?)
         }
-        ExprNode::Not(input) => lower(input)?.not(),
+        ExprNode::Not(input) => lower(input, leaf)?.not(),
         ExprNode::Str { function, input } => {
             // Categorical (`Enum`) columns hold text too; the `str` functions need String.
-            let strings = lower(input)?.cast(DataType::String).str();
+            let strings = lower(input, leaf)?.cast(DataType::String).str();
             match function {
                 StrFunction::StartsWith(prefix) => strings.starts_with(lit(prefix.as_str())),
                 StrFunction::EndsWith(suffix) => strings.ends_with(lit(suffix.as_str())),
             }
         }
         ExprNode::Null { test, input } => match test {
-            NullTest::IsNull => lower(input)?.is_null(),
-            NullTest::IsNotNull => lower(input)?.is_not_null(),
+            NullTest::IsNull => lower(input, leaf)?.is_null(),
+            NullTest::IsNotNull => lower(input, leaf)?.is_not_null(),
         },
     })
 }

@@ -18,6 +18,7 @@ use kyto_core::{Axis, FloatDtype, GraphSchema};
 use kyto_error::KytoError;
 use serde::{Deserialize, Serialize};
 
+use crate::names::MemberGroup;
 use crate::node::{CellScope, LogicalNode, Transform};
 use crate::plan::Plan;
 use crate::plan_schema::PlanSchema;
@@ -126,7 +127,8 @@ impl Plan {
     /// # Errors
     /// `KY-E109` if the plan has no cell embedding of that name; `KY-E215` for
     /// `n_neighbors` below 2, `n_components` of 0 or above the embedding's width, or
-    /// an empty `key`; `KY-E216` if this plan ends in a sink.
+    /// an empty `key` or one making graph names that break format.md §2.1 or differ
+    /// from a graph of the plan only in case; `KY-E216` if this plan ends in a sink.
     pub fn neighbors(self: &Arc<Self>, params: Neighbors) -> Result<Arc<Self>, KytoError> {
         self.check_open("neighbors")?;
         let embedding = self
@@ -159,6 +161,11 @@ impl Plan {
         }
         if let Some(key) = &params.key {
             Self::check_name("neighbors", "key", key)?;
+        }
+        let (distances, connectivities) = params.graph_names();
+        for name in [distances, connectivities] {
+            let given = params.key.as_deref().unwrap_or(&name);
+            self.check_member_name("neighbors", "key", given, MemberGroup::Graphs, &name)?;
         }
         Ok(self.extend(params, Self::Neighbors))
     }

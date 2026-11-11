@@ -18,6 +18,7 @@ use kyto_core::{Axis, LayerDtype, LayerSchema};
 use kyto_error::KytoError;
 use serde::{Deserialize, Serialize};
 
+use crate::names::MemberGroup;
 use crate::node::{CellScope, LogicalNode, Transform};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
@@ -129,8 +130,8 @@ impl Plan {
     /// `target_sum` (the median total over cells when `None`), written to `into`.
     ///
     /// # Errors
-    /// `KY-E215` for a `target_sum` that is not a positive finite number or an empty
-    /// `into`; and those of [`Plan::log1p`].
+    /// `KY-E215` for a `target_sum` that is not a positive finite number; and those of
+    /// [`Plan::log1p`].
     pub fn normalize_total(
         self: &Arc<Self>,
         target_sum: Option<f64>,
@@ -148,7 +149,8 @@ impl Plan {
     ///
     /// # Errors
     /// `KY-E109` for a layer not in the plan; `KY-E211` for no layer and no default
-    /// layer; `KY-E215` for an empty `into`; `KY-E216` if this plan ends in a sink.
+    /// layer; `KY-E215` for an `into` that breaks format.md §2.1 or differs from a
+    /// layer of the plan only in case; `KY-E216` if this plan ends in a sink.
     pub fn log1p(
         self: &Arc<Self>,
         layer: Option<&str>,
@@ -166,7 +168,7 @@ impl Plan {
         let method = op.method();
         self.check_open(method)?;
         let layer = self.input_layer(method, layer)?;
-        Self::check_name(method, "into", into)?;
+        self.check_member_name(method, "into", into, MemberGroup::Layers, into)?;
         let node = MapElementwise {
             op,
             layer,
