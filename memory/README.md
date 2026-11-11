@@ -24,3 +24,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [Exact JSON floats and deep expression trees](plan_json_floats_and_depth.md): `serde_json` needs `float_roundtrip`; NaN/inf as text; flat `ExprJson` for 1000-deep trees; `from_json` replays the builders, so a new node needs a `Step`.
 - [Checking optimizer rules before an executor](optimizer_reference_evaluator.md): shared-semantics reference evaluator, mutation-check proptests (delete saved seeds), fuse before and after predicate pushdown.
 - [Measuring peak memory](measuring_peak_memory.md): `peak_alloc` global allocator in its own test binary; the reader's Vec doubling, zarrs whole-chunk decodes and the 1 MiB `tile_offsets` open are real and modelled.
+- [Counting allocations](counting_allocations.md): `stats_alloc` global allocator, one test per binary (it sees every thread), macOS lock allocates once, assert a bounded count with a flat tail.

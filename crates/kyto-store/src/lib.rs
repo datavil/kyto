@@ -16,6 +16,7 @@
 //! writer also writes it from.
 #![forbid(unsafe_code)]
 
+mod aligned_buffer;
 mod atomic_dir;
 mod atomic_file;
 mod cell_block;
@@ -54,7 +55,8 @@ mod value;
 mod write_options;
 mod zarr_arrays;
 
-pub use cell_block::{CellBlock, CellValues, DenseValues};
+pub use aligned_buffer::{AlignedBuffer, BUFFER_ALIGNMENT};
+pub use cell_block::{CellBlock, CellBlockParts, CellData, CellValues, DenseValues};
 pub use csr::CsrMatrix;
 pub use export_h5ad::{DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad};
 pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};

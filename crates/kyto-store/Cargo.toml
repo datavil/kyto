@@ -15,6 +15,8 @@ kyto-error = { path = "../kyto-error" }
 kyto-core = { path = "../kyto-core" }
 polars = { version = "0.55.2", default-features = false, features = ["parquet", "dtype-categorical", "dtype-i8", "dtype-i16", "dtype-u8", "dtype-u16"] }
 rayon = "1.12.0"
+# 64-byte aligned CellBlock buffers without `unsafe` (task 5.1).
+bytemuck = { version = "1.25.2", features = ["derive"] }
 serde = "1.0.229"
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 zstd-safe = { version = "7.2.4", default-features = false }

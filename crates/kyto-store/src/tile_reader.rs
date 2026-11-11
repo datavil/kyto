@@ -19,6 +19,7 @@ use zarrs::array::Array;
 use zarrs::array_subset::ArraySubset;
 use zarrs::storage::ReadableStorageTraits;
 
+use crate::aligned_buffer::AlignedBuffer;
 use crate::cell_block::{CellBlock, CellData};
 use crate::layer_open::{OpenedLayer, ValueDtype, open_layer};
 use crate::selection::{AxisSelection, BlockPick, block_picks};
@@ -178,7 +179,7 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         &self,
         cell_pick: &BlockPick,
         gene_picks: &[BlockPick],
-    ) -> Result<(Vec<u64>, Vec<u32>, Vec<T>), KytoError> {
+    ) -> Result<(AlignedBuffer<u64>, AlignedBuffer<u32>, AlignedBuffer<T>), KytoError> {
         // Collect every result in gene block order, then take the first error, so the
         // error reported does not depend on the thread count (R11).
         let tiles = gene_picks
@@ -188,9 +189,10 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let rows = cell_pick.locals();
-        let mut indptr = Vec::with_capacity(rows.len() + 1);
-        let mut indices = Vec::new();
-        let mut data = Vec::new();
+        // Joined arrays grow by push, as 4.6's estimate models (its Open (2)).
+        let mut indptr = AlignedBuffer::with_capacity(rows.len() + 1);
+        let mut indices = AlignedBuffer::new();
+        let mut data = AlignedBuffer::new();
         indptr.push(0);
         for &row in &rows {
             let row = row as usize;

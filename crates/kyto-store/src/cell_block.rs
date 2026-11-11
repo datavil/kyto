@@ -1,18 +1,24 @@
 //! The executor's in-memory batch of CSR rows over the selected genes (plan 5.1,
 //! format.md §4.8).
 //!
-//! Does: hold one block of rows as `indptr: u64`, `indices: u32` and `data: f32 | u32`,
-//! read through slices; densify it, or one gene of it, with every absent entry 0 (R9,
+//! Does: hold one block of rows as `indptr: u64`, `indices: u32` and `data: f32 | u32`
+//! in 64-byte aligned buffers ([`AlignedBuffer`]), read through slices; hand its
+//! buffers back ([`CellBlock::into_parts`]) and take filled ones
+//! ([`CellBlock::from_parts`]), so a pool (kyto-exec `CellBlockPool`, task 5.1) reuses
+//! them block after block; densify it, or one gene of it, with every absent entry 0 (R9,
 //! task 3.7). Every dense read of layer values goes through these, so the rule lives in
 //! one place.
-//! Does not: pool or align its buffers (task 5.1 adds that behind the same accessors),
-//! or know which cells its rows are (the tile reader's `SelectedBlock` says).
+//! Does not: pool buffers itself (kyto-exec does), or know which cells its rows are (the
+//! tile reader's `SelectedBlock` says).
 //!
 //! It lives in kyto-store because the tile reader (2.4) builds it and the streaming
 //! writer (2.5) consumes it; the executor (kyto-exec) depends on kyto-store, not the
 //! other way round.
 
 use kyto_error::KytoError;
+
+use crate::aligned_buffer::AlignedBuffer;
+use crate::layer_open::ValueDtype;
 
 /// The values of a [`CellBlock`], borrowed: `float32` or `uint32`, as the layer stores
 /// them (format.md §4.2).
@@ -64,16 +70,85 @@ impl DenseValues {
     }
 }
 
-/// Owned values of a [`CellBlock`].
+/// Owned values of a [`CellBlock`], in a 64-byte aligned buffer.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum CellData {
+pub enum CellData {
     /// `float32` values.
-    F32(Vec<f32>),
+    F32(AlignedBuffer<f32>),
     /// `uint32` values.
-    U32(Vec<u32>),
+    U32(AlignedBuffer<u32>),
+}
+
+impl CellData {
+    /// An empty buffer of `dtype` values; allocates nothing.
+    pub fn new(dtype: ValueDtype) -> Self {
+        match dtype {
+            ValueDtype::F32 => Self::F32(AlignedBuffer::new()),
+            ValueDtype::U32 => Self::U32(AlignedBuffer::new()),
+        }
+    }
+
+    /// The dtype of the values.
+    pub fn dtype(&self) -> ValueDtype {
+        match self {
+            Self::F32(_) => ValueDtype::F32,
+            Self::U32(_) => ValueDtype::U32,
+        }
+    }
+
+    /// Number of values.
+    pub fn len(&self) -> usize {
+        match self {
+            Self::F32(values) => values.len(),
+            Self::U32(values) => values.len(),
+        }
+    }
+
+    /// True when there are no values.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The same allocation, emptied, holding `dtype` values (no copy, no allocation).
+    pub fn into_cleared(self, dtype: ValueDtype) -> Self {
+        let storage: AlignedBuffer<u32> = match self {
+            Self::F32(values) => values.into_cleared(),
+            Self::U32(values) => values.into_cleared(),
+        };
+        match dtype {
+            ValueDtype::F32 => Self::F32(storage.into_cleared()),
+            ValueDtype::U32 => Self::U32(storage),
+        }
+    }
+}
+
+/// The buffers of a [`CellBlock`], to fill and turn into one with
+/// [`CellBlock::from_parts`], or taken back with [`CellBlock::into_parts`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellBlockParts {
+    /// Row pointers: `n_rows + 1` entries, starting at 0, ending at the nnz.
+    pub indptr: AlignedBuffer<u64>,
+    /// Position in the gene selection of each entry.
+    pub indices: AlignedBuffer<u32>,
+    /// Value of each entry.
+    pub data: CellData,
+}
+
+impl CellBlockParts {
+    /// Empty buffers for a block of `dtype` values; allocates nothing.
+    pub fn new(dtype: ValueDtype) -> Self {
+        Self {
+            indptr: AlignedBuffer::new(),
+            indices: AlignedBuffer::new(),
+            data: CellData::new(dtype),
+        }
+    }
 }
 
 /// A batch of CSR rows over a gene selection (plan 5.1).
+///
+/// Its three buffers start on a 64-byte boundary ([`AlignedBuffer`]), and
+/// [`CellBlock::into_parts`] gives them back for reuse.
 ///
 /// Row `r` holds entries `indptr[r]..indptr[r + 1]` of `indices` and `data`. `indices`
 /// are positions in the gene selection (not table positions), strictly increasing
@@ -83,8 +158,8 @@ pub(crate) enum CellData {
 /// subtraction), and the store writer drops them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellBlock {
-    indptr: Vec<u64>,
-    indices: Vec<u32>,
+    indptr: AlignedBuffer<u64>,
+    indices: AlignedBuffer<u32>,
     data: CellData,
     n_genes: u64,
 }
@@ -92,7 +167,12 @@ pub struct CellBlock {
 impl CellBlock {
     /// Build a block from valid parts: `indptr` starts at 0, does not decrease and ends
     /// at `indices.len()`, which equals the number of values.
-    pub(crate) fn new(indptr: Vec<u64>, indices: Vec<u32>, data: CellData, n_genes: u64) -> Self {
+    pub(crate) fn new(
+        indptr: AlignedBuffer<u64>,
+        indices: AlignedBuffer<u32>,
+        data: CellData,
+        n_genes: u64,
+    ) -> Self {
         Self {
             indptr,
             indices,
@@ -103,7 +183,8 @@ impl CellBlock {
 
     /// Build a `float32` block from CSR parts, checking them.
     ///
-    /// Takes ownership of the vectors (no copy).
+    /// Copies the vectors into 64-byte aligned buffers; [`CellBlock::from_parts`] takes
+    /// filled buffers without a copy.
     ///
     /// # Errors
     /// `KY-E117` if `indptr` is empty, does not start at 0, decreases or does not end
@@ -122,12 +203,17 @@ impl CellBlock {
             data.len(),
             n_genes,
         )?;
-        Ok(Self::new(indptr, indices, CellData::F32(data), n_genes))
+        Ok(Self::new(
+            AlignedBuffer::from(&indptr[..]),
+            AlignedBuffer::from(&indices[..]),
+            CellData::F32(AlignedBuffer::from(&data[..])),
+            n_genes,
+        ))
     }
 
     /// Build a `uint32` block from CSR parts, checking them.
     ///
-    /// Takes ownership of the vectors (no copy).
+    /// Copies the vectors, as [`CellBlock::from_f32`] does.
     ///
     /// # Errors
     /// `KY-E117` as for [`CellBlock::from_f32`].
@@ -144,25 +230,62 @@ impl CellBlock {
             data.len(),
             n_genes,
         )?;
-        Ok(Self::new(indptr, indices, CellData::U32(data), n_genes))
+        Ok(Self::new(
+            AlignedBuffer::from(&indptr[..]),
+            AlignedBuffer::from(&indices[..]),
+            CellData::U32(AlignedBuffer::from(&data[..])),
+            n_genes,
+        ))
+    }
+
+    /// Build a block from filled buffers, checking them as [`CellBlock::from_f32`] does.
+    ///
+    /// Takes ownership of the buffers (no copy, no allocation), so a pool's buffers
+    /// pass through without allocating.
+    ///
+    /// # Errors
+    /// `KY-E117` as for [`CellBlock::from_f32`].
+    pub fn from_parts(parts: CellBlockParts, n_genes: u64) -> Result<Self, KytoError> {
+        check_parts(
+            "CellBlock::from_parts",
+            parts.indptr.as_slice(),
+            parts.indices.as_slice(),
+            parts.data.len(),
+            n_genes,
+        )?;
+        Ok(Self::new(parts.indptr, parts.indices, parts.data, n_genes))
+    }
+
+    /// The block's buffers, values kept (no copy), to reuse or rebuild a block from.
+    pub fn into_parts(self) -> CellBlockParts {
+        CellBlockParts {
+            indptr: self.indptr,
+            indices: self.indices,
+            data: self.data,
+        }
     }
 
     /// Row pointers, length [`CellBlock::n_rows`] + 1, starting at 0.
     pub fn indptr(&self) -> &[u64] {
-        &self.indptr
+        self.indptr.as_slice()
     }
 
     /// Position in the gene selection of each entry.
     pub fn indices(&self) -> &[u32] {
-        &self.indices
+        self.indices.as_slice()
     }
 
     /// Value of each entry.
     pub fn data(&self) -> CellValues<'_> {
         match &self.data {
-            CellData::F32(values) => CellValues::F32(values),
-            CellData::U32(values) => CellValues::U32(values),
+            CellData::F32(values) => CellValues::F32(values.as_slice()),
+            CellData::U32(values) => CellValues::U32(values.as_slice()),
         }
+    }
+
+    /// The dtype of the values.
+    pub fn dtype(&self) -> ValueDtype {
+        self.data.dtype()
     }
 
     /// Number of rows (cells).
@@ -192,8 +315,8 @@ impl CellBlock {
     /// address (`isize::MAX`), or if the allocation fails.
     pub fn to_dense(&self) -> Result<DenseValues, KytoError> {
         Ok(match &self.data {
-            CellData::F32(values) => DenseValues::F32(self.scatter(values)?),
-            CellData::U32(values) => DenseValues::U32(self.scatter(values)?),
+            CellData::F32(values) => DenseValues::F32(self.scatter(values.as_slice())?),
+            CellData::U32(values) => DenseValues::U32(self.scatter(values.as_slice())?),
         })
     }
 
@@ -213,15 +336,16 @@ impl CellBlock {
             });
         }
         Ok(match &self.data {
-            CellData::F32(values) => DenseValues::F32(self.gather(values, position)),
-            CellData::U32(values) => DenseValues::U32(self.gather(values, position)),
+            CellData::F32(values) => DenseValues::F32(self.gather(values.as_slice(), position)),
+            CellData::U32(values) => DenseValues::U32(self.gather(values.as_slice(), position)),
         })
     }
 
     /// The bounds of row `row` in `indices` and `data`.
     fn row_range(&self, row: usize) -> std::ops::Range<usize> {
         // indptr was checked: it does not decrease and ends at indices.len().
-        self.indptr[row] as usize..self.indptr[row + 1] as usize
+        let indptr = self.indptr.as_slice();
+        indptr[row] as usize..indptr[row + 1] as usize
     }
 
     /// `values` written into a zeroed row-major `n_rows x n_genes` array.
@@ -253,7 +377,10 @@ impl CellBlock {
         for row in 0..self.n_rows() {
             let range = self.row_range(row);
             let start = row * n_genes;
-            for (&gene, &value) in self.indices[range.clone()].iter().zip(&values[range]) {
+            for (&gene, &value) in self.indices.as_slice()[range.clone()]
+                .iter()
+                .zip(&values[range])
+            {
                 dense[start + gene as usize] = value;
             }
         }
@@ -266,7 +393,7 @@ impl CellBlock {
             .map(|row| {
                 let range = self.row_range(row);
                 // Indices are strictly increasing within a row.
-                match self.indices[range.clone()].binary_search(&position) {
+                match self.indices.as_slice()[range.clone()].binary_search(&position) {
                     Ok(offset) => values[range.start + offset],
                     Err(_) => T::default(),
                 }

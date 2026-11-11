@@ -13,7 +13,8 @@
 
 use kyto_error::KytoError;
 
-use crate::cell_block::CellBlock;
+use crate::aligned_buffer::AlignedBuffer;
+use crate::cell_block::{CellBlock, CellBlockParts, CellData};
 use crate::layer_open::ValueDtype;
 
 /// An input matrix, read by rows in increasing order.
@@ -35,10 +36,10 @@ pub(crate) struct BlockBuilder<'a> {
     n_genes: u64,
     next_row: u64,
     source: &'a str,
-    indptr: Vec<u64>,
-    indices: Vec<u32>,
-    floats: Vec<f32>,
-    integers: Vec<u32>,
+    indptr: AlignedBuffer<u64>,
+    indices: AlignedBuffer<u32>,
+    floats: AlignedBuffer<f32>,
+    integers: AlignedBuffer<u32>,
     f32_sums: bool,
 }
 
@@ -51,10 +52,10 @@ impl<'a> BlockBuilder<'a> {
             n_genes,
             next_row: first_row,
             source,
-            indptr: vec![0],
-            indices: Vec::new(),
-            floats: Vec::new(),
-            integers: Vec::new(),
+            indptr: AlignedBuffer::from(&[0][..]),
+            indices: AlignedBuffer::new(),
+            floats: AlignedBuffer::new(),
+            integers: AlignedBuffer::new(),
             f32_sums: false,
         }
     }
@@ -140,14 +141,16 @@ impl<'a> BlockBuilder<'a> {
     /// # Errors
     /// `KY-E117` only on an internal bug (the parts are canonical by construction).
     pub(crate) fn finish(self) -> Result<CellBlock, KytoError> {
-        match self.dtype {
-            ValueDtype::F32 => {
-                CellBlock::from_f32(self.indptr, self.indices, self.floats, self.n_genes)
-            }
-            ValueDtype::U32 => {
-                CellBlock::from_u32(self.indptr, self.indices, self.integers, self.n_genes)
-            }
-        }
+        let data = match self.dtype {
+            ValueDtype::F32 => CellData::F32(self.floats),
+            ValueDtype::U32 => CellData::U32(self.integers),
+        };
+        let parts = CellBlockParts {
+            indptr: self.indptr,
+            indices: self.indices,
+            data,
+        };
+        CellBlock::from_parts(parts, self.n_genes)
     }
 }
 

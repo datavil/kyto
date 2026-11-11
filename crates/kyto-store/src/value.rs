@@ -10,7 +10,7 @@ use zarrs::array::{DataType, Element, ElementOwned, FillValue};
 ///
 /// The trait is sealed: v0 allows no other dtype (format.md §4.2).
 pub trait LayerValue:
-    Element + ElementOwned + Copy + PartialEq + std::fmt::Debug + Send + Sync + sealed::Sealed
+    Element + ElementOwned + bytemuck::Pod + PartialEq + std::fmt::Debug + Send + Sync + sealed::Sealed
 {
     /// The Zarr v3 dtype name of the layer's `data` array.
     const ZARR_DTYPE: &'static str;
