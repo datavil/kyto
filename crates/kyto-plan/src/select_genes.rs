@@ -132,6 +132,7 @@ impl Plan {
                     name: gene_id.clone(),
                     expression: format!("select_genes([..., {}, ...])", quoted(gene_id)),
                     problem: "no gene of the store has this gene_id".to_owned(),
+                    suggestions: self.resolver().gene_suggestions(gene_id).into(),
                 });
             }
             if let Some(removed_by) = state.removed_genes.removed_by(gene_id) {

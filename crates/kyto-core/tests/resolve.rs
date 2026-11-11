@@ -193,6 +193,7 @@ fn unknown(error: &KytoError) -> (String, String, String, String) {
             name,
             expression,
             problem,
+            ..
         } => (
             kind.clone(),
             name.clone(),
@@ -237,7 +238,7 @@ fn unknown_feature_names_say_why() {
     assert_eq!(
         error.to_string(),
         "KY-E210: unknown feature 'CD3' in feature('CD3'): it is not a column of the cell \
-         table or a gene ID"
+         table or a gene ID; did you mean 'CD3E', 'CD4'?"
     );
 }
 

@@ -209,6 +209,7 @@ impl GeneStepKind {
                             expression: format!("select_genes([{} IDs])", ids.len()),
                             problem: "an earlier step (a gene filter or selection) removed it"
                                 .to_owned(),
+                            suggestions: Box::default(),
                         })
                     })
                     .collect::<Result<Vec<_>, KytoError>>()?;
@@ -271,6 +272,7 @@ where
                                     kind: "layer".to_owned(),
                                     name: layer.clone(),
                                     store: source.store.clone(),
+                                    suggestions: Box::default(),
                                 })?;
                         *slot = Some(dense_row(values, row));
                     }

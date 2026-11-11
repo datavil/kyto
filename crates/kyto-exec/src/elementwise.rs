@@ -85,6 +85,7 @@ impl ElementwiseMaps {
                     kind: "layer".to_owned(),
                     name: map.layer().to_owned(),
                     store: store.to_owned(),
+                    suggestions: Box::default(),
                 })?;
             let op = match map.op() {
                 ElementwiseOp::NormalizeTotal { target_sum: None } => {

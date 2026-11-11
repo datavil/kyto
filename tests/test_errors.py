@@ -121,6 +121,24 @@ def test_ambiguous_name_message() -> None:
     assert error.fields["candidates"] == ("log1p:CD3", "meta:CD3")
 
 
+def test_suggestions_render_only_when_there_are_some() -> None:
+    # Task 8.2: a `suggestions` field renders as "; did you mean ...?" or as nothing.
+    def message(suggestions: list[str]) -> str:
+        return kyto.MissingMemberError(
+            "KY-E109",
+            kind="layer",
+            name="count",
+            store="pbmc.kyto",
+            suggestions=suggestions,
+        ).message
+
+    base = "no layer named 'count' in the store at 'pbmc.kyto'"
+    assert message([]) == base
+    assert (
+        message(["counts", "count_x"]) == f"{base}; did you mean 'counts', 'count_x'?"
+    )
+
+
 def test_memory_limit_error_is_a_memory_error() -> None:
     with pytest.raises(MemoryError, match="KY-E401: the plan needs at least 9 bytes"):
         raise kyto.MemoryLimitError("KY-E401", required_bytes=9, limit_bytes=4)
@@ -247,6 +265,7 @@ def test_generated_python_is_ruff_formatted(text: str) -> None:
         ('variant = "Thing"', 'variant = "thing"', "CamelCase"),
         ('name = "name"', 'name = "source"', "not reserved"),
         ('name = "name"', 'name = "from"', "not reserved"),
+        ('type = "list[str]"', 'type = "suggestions"', "in the message only"),
     ],
 )
 def test_validator_rejects(old: str, new: str, reason: str) -> None:

@@ -43,7 +43,7 @@ FieldValue: TypeAlias = str | int | tuple[str, ...]
 
 class _Field(NamedTuple):
     name: str
-    type: Literal["str", "int", "list[str]"]
+    type: Literal["str", "int", "list[str]", "suggestions"]
 
 
 class _Entry(NamedTuple):
@@ -61,7 +61,7 @@ def _check(code: str, field: _Field, value: object) -> FieldValue:
     if field.type == "int" and type(value) is int and 0 <= value < 2**64:
         return value
     if (
-        field.type == "list[str]"
+        field.type in ("list[str]", "suggestions")
         and isinstance(value, Sequence)
         and not isinstance(value, str)
     ):
@@ -71,14 +71,25 @@ def _check(code: str, field: _Field, value: object) -> FieldValue:
     raise TypeError(f"{code}: field '{field.name}' must be {field.type}")
 
 
-def _render(template: str, fields: Mapping[str, FieldValue]) -> str:
-    """Fill a template; lists render as 'a', 'b' (the same as Rust)."""
-    text = {
-        name: ", ".join(f"'{item}'" for item in value)
-        if isinstance(value, tuple)
-        else str(value)
-        for name, value in fields.items()
-    }
+def _text(field: _Field, value: FieldValue) -> str:
+    """One field as a template shows it (the same as Rust).
+
+    Lists render as 'a', 'b'; suggestions as "; did you mean 'a', 'b'?", or as
+    nothing when there are none.
+    """
+    if not isinstance(value, tuple):
+        return str(value)
+    items = ", ".join(f"'{item}'" for item in value)
+    if field.type != "suggestions":
+        return items
+    return f"; did you mean {items}?" if items else ""
+
+
+def _render(
+    template: str, fields: tuple[_Field, ...], values: Mapping[str, FieldValue]
+) -> str:
+    """Fill a template with the values of `fields`."""
+    text = {field.name: _text(field, values[field.name]) for field in fields}
     return template.format_map(text)
 
 
@@ -142,8 +153,8 @@ class KytoError(Exception):
         }
         self.code = code
         self.fields = MappingProxyType(values)
-        self.message = _render(entry.message, values)
-        self.hint = _render(entry.hint, values)
+        self.message = _render(entry.message, entry.fields, values)
+        self.hint = _render(entry.hint, entry.fields, values)
         self.docs_url = entry.docs_url
         super().__init__(
             f"{code}: {self.message}\nhint: {self.hint}\ndocs: {self.docs_url}"
@@ -429,7 +440,7 @@ class MissingMemberError(KytoError, LookupError):
 
     Examples
     --------
-    >>> error = MissingMemberError("KY-E109", kind="layer", name="count", store="pbmc.kyto")
+    >>> error = MissingMemberError("KY-E109", kind="layer", name="count", store="pbmc.kyto", suggestions=["counts"])
     >>> error.code
     'KY-E109'
     >>> isinstance(error, LookupError)
@@ -650,13 +661,14 @@ _REGISTRY: Final[dict[str, _Entry]] = {
     ),
     "KY-E109": _Entry(
         class_name="MissingMemberError",
-        message="no {kind} named '{name}' in the store at '{store}'",
+        message="no {kind} named '{name}' in the store at '{store}'{suggestions}",
         hint="check the name against the store's schema; names are case-sensitive when read",
         docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e109",
         fields=(
             _Field("kind", "str"),
             _Field("name", "str"),
             _Field("store", "str"),
+            _Field("suggestions", "suggestions"),
         ),
     ),
     "KY-E110": _Entry(
@@ -928,14 +940,15 @@ _REGISTRY: Final[dict[str, _Entry]] = {
     ),
     "KY-E210": _Entry(
         class_name="ResolutionError",
-        message="unknown {kind} '{name}' in {expression}: {problem}",
-        hint="names are matched exactly, case included; check '{name}' against the store's schema",
+        message="unknown {kind} '{name}' in {expression}: {problem}{suggestions}",
+        hint="names are matched exactly, case included; check '{name}' against the store's schema, and read a gene by its symbol with gene_expression(symbol, by='symbol')",
         docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e210",
         fields=(
             _Field("kind", "str"),
             _Field("name", "str"),
             _Field("expression", "str"),
             _Field("problem", "str"),
+            _Field("suggestions", "suggestions"),
         ),
     ),
     "KY-E211": _Entry(

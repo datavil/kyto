@@ -72,13 +72,16 @@ def test_symbols_are_not_ids_and_ids_are_not_symbols(atlas: _kyto.Atlas) -> None
     with pytest.raises(kyto.KytoError) as raised:
         atlas.resolve(kyto.gene_expression("CD3E"))
     assert _first_line(raised, "KY-E210").startswith("KY-E210: unknown gene 'CD3E'")
-    for symbol in ["ENSG00000198851", "cd3e", "TBCE-1"]:
+    # Close symbols are suggested (task 8.2), case-insensitively; TBCE only once.
+    suggested = {"ENSG00000198851": "", "cd3e": "CD3E", "TBCE-1": "TBCE"}
+    for symbol, suggestion in suggested.items():
         with pytest.raises(kyto.KytoError) as raised:
             atlas.resolve(kyto.gene_expression(symbol, by="symbol"))
+        did_you_mean = f"; did you mean '{suggestion}'?" if suggestion else ""
         assert _first_line(raised, "KY-E210") == (
             f"KY-E210: unknown gene symbol '{symbol}' in "
             f"gene_expression('{symbol}', by='symbol'): "
-            "no gene of the store has this symbol"
+            f"no gene of the store has this symbol{did_you_mean}"
         )
 
 

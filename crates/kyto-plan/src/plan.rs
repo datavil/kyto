@@ -263,6 +263,11 @@ impl Plan {
     /// `KY-E201`, `KY-E203`, `KY-E204`, `KY-E205`, `KY-E210`, `KY-E211`, `KY-E109`,
     /// `KY-E301` or `KY-E302`, as [`Resolver::resolve`] lists them.
     pub fn resolve<A: ExprAxis>(&self, expr: &Expr<A>) -> Result<Expr<A>, KytoError> {
+        self.resolver().resolve(expr)
+    }
+
+    /// The resolver of this plan's names (see [`Plan::resolve`]).
+    pub(crate) fn resolver(&self) -> Resolver<'_> {
         let state = self.state();
         let mut resolver = Resolver::new(
             state.schema.atlas(),
@@ -278,7 +283,7 @@ impl Plan {
         if let Some(changed_by) = state.cell_axis_changed_by {
             resolver = resolver.with_cell_axis_changed_by(changed_by);
         }
-        resolver.resolve(expr)
+        resolver
     }
 
     /// The new plan of node `params` over this one, wrapped by `wrap` (the variant).
@@ -303,12 +308,53 @@ impl Plan {
         }
     }
 
-    /// `KY-E109` for a member of kind `kind` named `name` that the plan does not have.
+    /// `KY-E109` for a member of kind `kind` named `name` that the plan does not have,
+    /// with the plan's members of that kind closest to `name` (task 8.2).
     pub(crate) fn missing_member(&self, kind: &str, name: &str) -> KytoError {
+        let schema = self.schema();
+        let on_axis = |member_axis: Axis| match kind.split_once(' ') {
+            Some(("cell", _)) => member_axis == Axis::Cells,
+            Some(("gene", _)) => member_axis == Axis::Genes,
+            _ => true,
+        };
+        let names: Vec<&str> = match kind {
+            "layer" => schema
+                .layers
+                .iter()
+                .map(|member| member.name.as_str())
+                .collect(),
+            "embedding" | "cell embedding" | "gene embedding" => (schema.embeddings.iter())
+                .filter(|member| on_axis(member.axis))
+                .map(|member| member.name.as_str())
+                .collect(),
+            "graph" | "cell graph" | "gene graph" => (schema.graphs.iter())
+                .filter(|member| on_axis(member.axis))
+                .map(|member| member.name.as_str())
+                .collect(),
+            "modality" => schema
+                .modalities
+                .iter()
+                .map(|member| member.name.as_str())
+                .collect(),
+            "cell column" => schema
+                .cells
+                .columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect(),
+            "gene column" => schema
+                .genes
+                .columns
+                .iter()
+                .map(|column| column.name.as_str())
+                .collect(),
+            _ => Vec::new(),
+        };
         KytoError::MissingMember {
             kind: kind.to_owned(),
             name: name.to_owned(),
             store: self.state().source.to_string(),
+            suggestions: kyto_core::suggest(name, names).into(),
         }
     }
 

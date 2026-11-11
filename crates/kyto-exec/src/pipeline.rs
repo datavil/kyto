@@ -379,6 +379,7 @@ impl Pipeline {
                                     problem:
                                         "an earlier step (a cell filter or take_cells) removed it"
                                             .to_owned(),
+                                    suggestions: Box::default(),
                                 });
                             };
                             values.push((profile, found));
@@ -729,6 +730,7 @@ impl RunTables {
                     name: id.clone(),
                     expression: expression.to_owned(),
                     problem: "the store has no cell with this ID".to_owned(),
+                    suggestions: Box::default(),
                 })
             })
             .collect()
@@ -782,6 +784,7 @@ impl RunTables {
                                 expression: format!("expression({gene_id:?}, layer={layer:?})"),
                                 problem: "an earlier step (a gene filter or selection) removed it"
                                     .to_owned(),
+                                suggestions: Box::default(),
                             })?;
                     Ok(CellLeaf::Gene {
                         layer: layer.clone(),

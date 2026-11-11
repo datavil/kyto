@@ -35,9 +35,19 @@ pub fn quoted_list(items: &[String]) -> String {
         .join(", ")
 }
 
+/// Render close matches as `; did you mean 'a', 'b'?`, or as nothing when there are
+/// none (task 8.2). Messages place it right after the unknown name's sentence.
+pub fn did_you_mean(suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        String::new()
+    } else {
+        format!("; did you mean {}?", quoted_list(suggestions))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FieldValue, KytoError, quoted_list};
+    use super::{FieldValue, KytoError, did_you_mean, quoted_list};
     use std::collections::HashSet;
 
     #[test]
@@ -100,6 +110,39 @@ mod tests {
         );
         assert!(error.hint().contains("at least 10 bytes"));
         assert_eq!(error.fields()[1], ("limit_bytes", FieldValue::Int(4)));
+    }
+
+    #[test]
+    fn suggestions_render_only_when_there_are_some() {
+        assert_eq!(did_you_mean(&[]), "");
+        assert_eq!(
+            did_you_mean(&["CD3E".to_owned(), "CD3D".to_owned()]),
+            "; did you mean 'CD3E', 'CD3D'?"
+        );
+        let error = KytoError::MissingMember {
+            kind: "layer".to_owned(),
+            name: "count".to_owned(),
+            store: "pbmc.kyto".to_owned(),
+            suggestions: Box::new(["counts".to_owned()]),
+        };
+        assert_eq!(
+            error.to_string(),
+            "KY-E109: no layer named 'count' in the store at 'pbmc.kyto'; did you mean 'counts'?"
+        );
+        let error = KytoError::MissingMember {
+            kind: "layer".to_owned(),
+            name: "x".to_owned(),
+            store: "pbmc.kyto".to_owned(),
+            suggestions: Box::default(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "KY-E109: no layer named 'x' in the store at 'pbmc.kyto'"
+        );
+        assert_eq!(
+            error.fields()[3],
+            ("suggestions", FieldValue::StrList(Vec::new()))
+        );
     }
 
     #[test]

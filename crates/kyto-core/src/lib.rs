@@ -14,7 +14,7 @@
 //! the [`RemovedGenes`] a resolver refuses to read (`KY-E203`). The format's name rules
 //! ([`member_name_problem`], [`column_name_problem`]), shared by store and plan (task 4.2). The JSON form of an expression, [`ExprJson`]
 //! (task 4.3, for the plan JSON). Per-cell QC metrics as expression leaves, [`QcMetric`]
-//! (task 6.1).
+//! (task 6.1). Close-match suggestions for unknown names, [`suggest`] (task 8.2).
 #![forbid(unsafe_code)]
 
 mod expr;
@@ -30,6 +30,7 @@ mod removed_genes;
 mod resolve;
 mod schema;
 mod schema_column;
+mod suggest;
 
 pub use expr::{
     BinaryOp, CellAxis, CellExpr, Expr, ExprAxis, ExprNode, GeneAxis, GeneExpr, Literal,
@@ -49,3 +50,4 @@ pub use schema::{
     FloatDtype, GraphSchema, LayerDtype, LayerSchema, ModalitySchema, TableSchema, Tiling,
 };
 pub use schema_column::{ColumnDtype, ColumnSchema, Lineage};
+pub use suggest::{MAX_SUGGESTIONS, MIN_SIMILARITY, closest, similarity, suggest};

@@ -137,6 +137,7 @@ where
                                 kind: "layer".to_owned(),
                                 name: input_layer.to_owned(),
                                 store: source.store.clone(),
+                                suggestions: Box::default(),
                             }
                         })?;
                         accumulator.fold(pass, &mut leaf, layer)?;

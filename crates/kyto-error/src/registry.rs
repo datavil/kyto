@@ -1,6 +1,6 @@
 //! The registered kyto errors. GENERATED from errors.toml by scripts/error_registry.py. Do not edit.
 
-use crate::{FieldValue, quoted_list};
+use crate::{FieldValue, did_you_mean, quoted_list};
 
 /// Every kyto error: one variant per registered `KY-Exxx` code in `errors.toml`.
 ///
@@ -86,7 +86,7 @@ pub enum KytoError {
         requested: String,
     },
     /// KY-E109: A layer, embedding, graph or modality is not in the store.
-    #[error("KY-E109: no {kind} named '{name}' in the store at '{store}'")]
+    #[error("KY-E109: no {kind} named '{name}' in the store at '{store}'{}", did_you_mean(.suggestions))]
     MissingMember {
         /// The member kind: `layer`, `embedding`, `graph` or `modality`.
         kind: String,
@@ -94,6 +94,8 @@ pub enum KytoError {
         name: String,
         /// The store path.
         store: String,
+        /// Up to three members of that kind whose names are closest to `name` (Jaro-Winkler, task 8.2), best first; empty when none is close.
+        suggestions: Box<[String]>,
     },
     /// KY-E110: The file system or the Zarr layer failed while reading or writing a store.
     #[error("KY-E110: could not {operation} '{path}': {detail}")]
@@ -334,7 +336,7 @@ pub enum KytoError {
         component: String,
     },
     /// KY-E210: A name does not match any column, gene, cell, embedding component or feature of the plan.
-    #[error("KY-E210: unknown {kind} '{name}' in {expression}: {problem}")]
+    #[error("KY-E210: unknown {kind} '{name}' in {expression}: {problem}{}", did_you_mean(.suggestions))]
     UnknownName {
         /// What the name should name: `cell column`, `gene column`, `gene`, `gene symbol`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.
         kind: String,
@@ -344,6 +346,8 @@ pub enum KytoError {
         expression: String,
         /// Why nothing matches.
         problem: String,
+        /// Up to three names of the same kind closest to `name` (Jaro-Winkler, task 8.2), best first, written as `name` was; a gene symbol offered for a gene ID or a feature name reads `CD3E (gene symbol)`. Empty when none is close.
+        suggestions: Box<[String]>,
     },
     /// KY-E211: A gene or cell is read from the default layer, but the plan has none.
     #[error("KY-E211: {expression} reads the default layer, but the plan has none")]
@@ -910,7 +914,7 @@ impl KytoError {
                 format!("pass the component as an int from 0, such as {constructor}('{name}', 0) for the first one")
             }
             Self::UnknownName { name, .. } => {
-                format!("names are matched exactly, case included; check '{name}' against the store's schema")
+                format!("names are matched exactly, case included; check '{name}' against the store's schema, and read a gene by its symbol with gene_expression(symbol, by='symbol')")
             }
             Self::NoDefaultLayer { layers, .. } => {
                 format!("set one with .with_default_layer(...) before resolving, or name the layer; the store has {}", quoted_list(layers))
@@ -1002,10 +1006,11 @@ impl KytoError {
                 ("stored", FieldValue::Str(stored.clone())),
                 ("requested", FieldValue::Str(requested.clone())),
             ],
-            Self::MissingMember { kind, name, store } => vec![
+            Self::MissingMember { kind, name, store, suggestions } => vec![
                 ("kind", FieldValue::Str(kind.clone())),
                 ("name", FieldValue::Str(name.clone())),
                 ("store", FieldValue::Str(store.clone())),
+                ("suggestions", FieldValue::StrList(suggestions.to_vec())),
             ],
             Self::StoreIo { operation, path, detail } => vec![
                 ("operation", FieldValue::Str(operation.clone())),
@@ -1126,11 +1131,12 @@ impl KytoError {
                 ("got", FieldValue::Str(got.clone())),
                 ("component", FieldValue::Str(component.clone())),
             ],
-            Self::UnknownName { kind, name, expression, problem } => vec![
+            Self::UnknownName { kind, name, expression, problem, suggestions } => vec![
                 ("kind", FieldValue::Str(kind.clone())),
                 ("name", FieldValue::Str(name.clone())),
                 ("expression", FieldValue::Str(expression.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
+                ("suggestions", FieldValue::StrList(suggestions.to_vec())),
             ],
             Self::NoDefaultLayer { expression, layers } => vec![
                 ("expression", FieldValue::Str(expression.clone())),
@@ -1249,6 +1255,7 @@ impl KytoError {
                 kind: "layer".to_owned(),
                 name: "count".to_owned(),
                 store: "pbmc.kyto".to_owned(),
+                suggestions: vec!["counts".to_owned()].into_boxed_slice(),
             },
             Self::StoreIo {
                 operation: "write array".to_owned(),
@@ -1373,7 +1380,8 @@ impl KytoError {
                 kind: "feature".to_owned(),
                 name: "CD3".to_owned(),
                 expression: "feature('CD3')".to_owned(),
-                problem: "it is not a cell column or a gene ID".to_owned(),
+                problem: "it is not a column of the cell table or a gene ID".to_owned(),
+                suggestions: vec!["CD3E (gene symbol)".to_owned(), "CD3D (gene symbol)".to_owned(), "CD3G (gene symbol)".to_owned()].into_boxed_slice(),
             },
             Self::NoDefaultLayer {
                 expression: "feature('CD3E')".to_owned(),

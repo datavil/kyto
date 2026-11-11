@@ -166,6 +166,7 @@ impl CellStep {
                 take.found.load(Ordering::Relaxed),
                 take.positions.len()
             ),
+            suggestions: Box::default(),
         })
     }
 
@@ -282,6 +283,7 @@ impl CellStep {
                     kind: "layer".to_owned(),
                     name: name.to_owned(),
                     store: self.store.clone(),
+                    suggestions: Box::default(),
                 })
         };
         Ok(match leaf {

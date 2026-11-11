@@ -18,8 +18,9 @@
 //! (`KY-E302`). It also turns a gene named by symbol (`by='symbol'`, task 3.9) into
 //! its gene ID: a symbol must match exactly one gene not removed upstream (`KY-E204`
 //! lists the IDs otherwise).
-//! Does not: suggest close matches for unknown names or symbols (task 8.2), or check
-//! that a cell ID exists (the plan holds no cell IDs).
+//! Every unknown column, gene, symbol, layer, embedding or `feature(...)` name gets
+//! up to three close matches of its kind (task 8.2, [`crate::suggest`]).
+//! Does not: check that a cell ID exists (the plan holds no cell IDs).
 
 use std::collections::BTreeMap;
 
@@ -34,6 +35,7 @@ use crate::qc_metric::gene_set_error;
 use crate::removed_genes::RemovedGenes;
 use crate::schema::{AtlasSchema, Axis, EmbeddingSchema, TableSchema};
 use crate::schema_column::{ColumnDtype, ColumnSchema};
+use crate::suggest::{closest, suggest};
 use crate::{BinaryOp, CellAxis, GeneAxis};
 
 /// The gene table column that holds gene symbols (format.md §5.2, task 3.9).
@@ -41,6 +43,9 @@ pub const SYMBOL_COLUMN: &str = "symbol";
 
 /// The prefix of a cell table column in a full feature name: `meta:cluster`.
 pub const META_PREFIX: &str = "meta";
+
+/// Added to a gene symbol suggested where a gene ID or a feature name was expected.
+const SYMBOL_LABEL: &str = " (gene symbol)";
 
 /// Resolves expressions against one plan: its schema, its store's gene IDs, the genes
 /// removed upstream and its default layer. Holds borrowed state only and changes
@@ -344,7 +349,7 @@ impl<'a> Resolver<'a> {
     fn gene_by_symbol(
         &self,
         symbol: &str,
-        unknown: &impl Fn(String, &str, String) -> KytoError,
+        unknown: &impl Fn(String, &str, String, Vec<String>) -> KytoError,
     ) -> Result<String, KytoError> {
         if !self.gene_ids.has_symbols() {
             let problem = match self.column(Axis::Genes, SYMBOL_COLUMN) {
@@ -356,7 +361,12 @@ impl<'a> Resolver<'a> {
                     "the gene table has no '{SYMBOL_COLUMN}' column, so genes cannot be looked up by symbol; select the gene by ID with by='id'"
                 ),
             };
-            return Err(unknown("gene symbol".to_owned(), symbol, problem));
+            return Err(unknown(
+                "gene symbol".to_owned(),
+                symbol,
+                problem,
+                Vec::new(),
+            ));
         }
         let carriers = self.gene_ids.with_symbol(symbol);
         // Genes removed upstream are not candidates (task 4.1): after
@@ -376,6 +386,7 @@ impl<'a> Resolver<'a> {
                 "gene symbol".to_owned(),
                 symbol,
                 format!("no gene of the store has this {SYMBOL_COLUMN}"),
+                self.symbol_suggestions(symbol),
             )),
             ([], Some(removed)) => Ok((*removed).to_owned()),
             ([gene_id], _) => Ok((*gene_id).to_owned()),
@@ -413,6 +424,11 @@ impl<'a> Resolver<'a> {
                 kind: "layer".to_owned(),
                 name: layer.to_owned(),
                 store: self.store.to_owned(),
+                suggestions: suggest(
+                    layer,
+                    self.schema.layers.iter().map(|layer| layer.name.as_str()),
+                )
+                .into(),
             }),
             None => {
                 self.default_layer
@@ -428,11 +444,14 @@ impl<'a> Resolver<'a> {
     /// The resolved leaf reading `source` on axis `A`.
     fn source<A: ExprAxis>(&self, source: &Source) -> Result<Expr<A>, KytoError> {
         let code = || source_code::<A>(source);
-        let unknown = |kind: String, name: &str, problem: String| KytoError::UnknownName {
-            kind,
-            name: name.to_owned(),
-            expression: code(),
-            problem,
+        let unknown = |kind: String, name: &str, problem: String, suggestions: Vec<String>| {
+            KytoError::UnknownName {
+                kind,
+                name: name.to_owned(),
+                expression: code(),
+                problem,
+                suggestions: suggestions.into(),
+            }
         };
         let (resolved, dtype) = match source {
             Source::Column { name } => {
@@ -442,6 +461,7 @@ impl<'a> Resolver<'a> {
                         format!("{word} column"),
                         name,
                         format!("the {word} table has no column with this name"),
+                        self.column_suggestions(A::AXIS, name),
                     )
                 })?;
                 self.check_not_stale(A::AXIS, column)?;
@@ -454,6 +474,7 @@ impl<'a> Resolver<'a> {
                         format!("{word} column"),
                         name,
                         format!("the {word} table has no column with this name"),
+                        self.column_suggestions(A::AXIS, name),
                     )
                 })?;
                 if column.lineage.is_none() {
@@ -471,6 +492,7 @@ impl<'a> Resolver<'a> {
                         "gene".to_owned(),
                         gene_id,
                         "no gene of the store has this gene_id".to_owned(),
+                        self.gene_suggestions(gene_id),
                     ));
                 }
                 self.check_not_removed(gene_id)?;
@@ -501,6 +523,7 @@ impl<'a> Resolver<'a> {
                         "cell".to_owned(),
                         cell_id,
                         "cell IDs are never empty".to_owned(),
+                        Vec::new(),
                     ));
                 }
                 let layer = self.layer(layer.as_deref(), &code())?;
@@ -519,6 +542,14 @@ impl<'a> Resolver<'a> {
                         kind: "embedding".to_owned(),
                         name: name.clone(),
                         store: self.store.to_owned(),
+                        suggestions: suggest(
+                            name,
+                            self.schema
+                                .embeddings
+                                .iter()
+                                .map(|embedding| embedding.name.as_str()),
+                        )
+                        .into(),
                     })?;
                 if embedding.axis != A::AXIS {
                     let other = match embedding.axis {
@@ -532,6 +563,7 @@ impl<'a> Resolver<'a> {
                             "'{name}' is a {} embedding; read it with {other}('{name}', {component})",
                             axis_word(embedding.axis)
                         ),
+                        Vec::new(),
                     ));
                 }
                 if *component >= embedding.width {
@@ -539,6 +571,7 @@ impl<'a> Resolver<'a> {
                         "embedding component".to_owned(),
                         &component.to_string(),
                         format!("'{name}' {}", component_range(embedding)),
+                        Vec::new(),
                     ));
                 }
                 (source.clone(), ExprDtype::Numeric)
@@ -549,6 +582,7 @@ impl<'a> Resolver<'a> {
                         "QC metric".to_owned(),
                         metric.function(),
                         "QC metrics are cell expressions".to_owned(),
+                        Vec::new(),
                     ));
                 }
                 let layer = self.layer(layer.as_deref(), &code())?;
@@ -581,14 +615,18 @@ impl<'a> Resolver<'a> {
         name: &FeatureName,
         expression: &str,
     ) -> Result<(Source, ExprDtype), KytoError> {
-        let unknown = |problem: String| KytoError::UnknownName {
+        let unknown = |problem: String, suggestions: Vec<String>| KytoError::UnknownName {
             kind: "feature".to_owned(),
             name: name.to_string(),
             expression: expression.to_owned(),
             problem,
+            suggestions: suggestions.into(),
         };
         if A::AXIS != CellAxis::AXIS {
-            return Err(unknown("feature(...) names cell features only".to_owned()));
+            return Err(unknown(
+                "feature(...) names cell features only".to_owned(),
+                Vec::new(),
+            ));
         }
         let mut candidates = Vec::new();
         // A short gene name without a default layer could be read from every layer.
@@ -645,7 +683,10 @@ impl<'a> Resolver<'a> {
             });
         }
         match candidates.len() {
-            0 => Err(unknown(self.no_feature_problem(name))),
+            0 => Err(unknown(
+                self.no_feature_problem(name),
+                self.feature_suggestions(name),
+            )),
             1 => {
                 let candidate = candidates.remove(0);
                 match &candidate {
@@ -694,6 +735,111 @@ impl<'a> Resolver<'a> {
                 }
             })
             .collect()
+    }
+
+    /// The gene IDs of the store not removed upstream, in table order, with their
+    /// symbols (`None` without a usable `symbol` column).
+    fn kept_genes(&self) -> impl Iterator<Item = (&'a str, Option<&'a str>)> {
+        let symbols = self.gene_ids.symbols();
+        let removed = self.removed_genes;
+        self.gene_ids
+            .ordered()
+            .iter()
+            .enumerate()
+            .map(move |(index, gene_id)| {
+                let symbol = symbols.as_ref().and_then(|symbols| symbols[index]);
+                (gene_id.as_str(), symbol)
+            })
+            .filter(move |(gene_id, _)| {
+                removed.is_none_or(|removed| removed.removed_by(gene_id).is_none())
+            })
+    }
+
+    /// Close matches for an unknown column of the `axis` table (task 8.2).
+    fn column_suggestions(&self, axis: Axis, name: &str) -> Vec<String> {
+        suggest(
+            name,
+            self.table(axis)
+                .columns
+                .iter()
+                .map(|column| column.name.as_str()),
+        )
+    }
+
+    /// Close matches for an unknown gene ID (task 8.2): the IDs of the genes not
+    /// removed upstream, then their symbols (`CD3E (gene symbol)`) where a symbol is
+    /// not also an ID; up to three, best first.
+    pub fn gene_suggestions(&self, gene_id: &str) -> Vec<String> {
+        closest(gene_id, self.gene_candidates(""))
+    }
+
+    /// The candidates of [`Self::gene_suggestions`], each label after `prefix`.
+    fn gene_candidates(&self, prefix: &str) -> Vec<(&'a str, String)> {
+        let ids = self
+            .kept_genes()
+            .map(|(gene_id, _)| (gene_id, format!("{prefix}{gene_id}")));
+        let symbols = self.kept_genes().filter_map(|(_, symbol)| {
+            symbol
+                .filter(|symbol| !self.gene_ids.contains(symbol))
+                .map(|symbol| (symbol, format!("{symbol}{SYMBOL_LABEL}")))
+        });
+        ids.chain(symbols).collect()
+    }
+
+    /// Close matches for an unknown symbol: the symbols of the genes kept.
+    fn symbol_suggestions(&self, symbol: &str) -> Vec<String> {
+        suggest(symbol, self.kept_genes().filter_map(|(_, symbol)| symbol))
+    }
+
+    /// Close matches for a `feature(...)` name that matches nothing, written the way
+    /// it was: a short name gets cell columns, gene IDs and gene symbols; a full name
+    /// gets the names under its prefix, or, when the prefix is not `meta`, a layer or
+    /// a cell embedding, the same name under the closest prefixes.
+    fn feature_suggestions(&self, name: &FeatureName) -> Vec<String> {
+        match name {
+            FeatureName::Short { name } => {
+                let columns = self
+                    .schema
+                    .cells
+                    .columns
+                    .iter()
+                    .map(|column| (column.name.as_str(), column.name.clone()));
+                closest(name, columns.chain(self.gene_candidates("")))
+            }
+            FeatureName::Full { prefix, name } => {
+                let mut candidates: Vec<(&str, String)> = Vec::new();
+                if prefix == META_PREFIX {
+                    candidates.extend(self.schema.cells.columns.iter().map(|column| {
+                        (
+                            column.name.as_str(),
+                            format!("{META_PREFIX}:{}", column.name),
+                        )
+                    }));
+                }
+                if self.has_layer(prefix) {
+                    candidates.extend(
+                        self.kept_genes()
+                            .map(|(gene_id, _)| (gene_id, format!("{prefix}:{gene_id}"))),
+                    );
+                }
+                if !candidates.is_empty() || self.cell_embedding(prefix).is_some() {
+                    return closest(name, candidates);
+                }
+                let prefixes = std::iter::once(META_PREFIX)
+                    .chain(self.schema.layers.iter().map(|layer| layer.name.as_str()))
+                    .chain(
+                        self.schema
+                            .embeddings
+                            .iter()
+                            .filter(|embedding| embedding.axis == Axis::Cells)
+                            .map(|embedding| embedding.name.as_str()),
+                    );
+                closest(
+                    prefix,
+                    prefixes.map(|candidate| (candidate, format!("{candidate}:{name}"))),
+                )
+            }
+        }
     }
 
     /// Why a `feature(...)` name matches nothing.

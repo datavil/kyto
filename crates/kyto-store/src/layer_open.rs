@@ -100,10 +100,13 @@ pub(crate) fn open_layer<S: ?Sized + ReadableStorageTraits + 'static>(
         .size_key(&group_key)
         .map_err(|error| store_io("open", &group_path, error))?;
     if exists.is_none() {
+        // The storage layer holds no list of layers to suggest from; the plan checks
+        // layer names first, with suggestions (task 8.2).
         return Err(KytoError::MissingMember {
             kind: "layer".to_owned(),
             name: name.to_owned(),
             store: store.to_owned(),
+            suggestions: Box::default(),
         });
     }
     let corrupt = |problem: String| KytoError::CorruptLayer {

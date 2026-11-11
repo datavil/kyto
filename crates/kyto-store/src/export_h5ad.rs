@@ -88,6 +88,11 @@ pub fn sink_h5ad(store: &Path, target: &Path, options: &SinkH5adOptions) -> Resu
             kind: "layer".to_owned(),
             name: name.clone(),
             store: store_text,
+            suggestions: kyto_core::suggest(
+                name,
+                schema.layers.iter().map(|layer| layer.name.as_str()),
+            )
+            .into(),
         });
     }
     // Fail early: the target before anything is read or written.

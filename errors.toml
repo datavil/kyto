@@ -13,9 +13,12 @@
 #   KY-E6xx not implemented yet (a documented method whose task is not done)
 #
 # Templates: `{field}` inserts a field. Field types are `str`, `int` (a non-negative
-# integer, u64 in Rust) and `list[str]` (rendered as 'a', 'b', 'c'). Write the quotes
-# around a `str` field in the template yourself ('{name}'); a `list[str]` field brings
-# its own. No other braces, no double quotes, no backslashes.
+# integer, u64 in Rust), `list[str]` (rendered as 'a', 'b', 'c') and `suggestions`
+# (close matches for an unknown name, task 8.2: a list of strings rendered as
+# ; did you mean 'a', 'b', 'c'? or as nothing when empty; place it right after the
+# sentence naming the unknown name, with no space before it). Write the quotes around
+# a `str` field in the template yourself ('{name}'); list fields bring their own. No
+# other braces, no double quotes, no backslashes.
 #
 # Each error says what was wrong, where, what was accepted and how to fix it
 # (AGENTS.md, "Errors are first-class"). `example` values feed the round-trip tests.
@@ -209,12 +212,13 @@ code = "KY-E109"
 variant = "MissingMember"
 class = "MissingMemberError"
 summary = "A layer, embedding, graph or modality is not in the store."
-message = "no {kind} named '{name}' in the store at '{store}'"
+message = "no {kind} named '{name}' in the store at '{store}'{suggestions}"
 hint = "check the name against the store's schema; names are case-sensitive when read"
 fields = [
     { name = "kind", type = "str", doc = "The member kind: `layer`, `embedding`, `graph` or `modality`.", example = "layer" },
     { name = "name", type = "str", doc = "The name asked for.", example = "count" },
     { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+    { name = "suggestions", type = "suggestions", doc = "Up to three members of that kind whose names are closest to `name` (Jaro-Winkler, task 8.2), best first; empty when none is close.", example = ["counts"] },
 ]
 
 [[errors]]
@@ -541,13 +545,14 @@ code = "KY-E210"
 variant = "UnknownName"
 class = "ResolutionError"
 summary = "A name does not match any column, gene, cell, embedding component or feature of the plan."
-message = "unknown {kind} '{name}' in {expression}: {problem}"
-hint = "names are matched exactly, case included; check '{name}' against the store's schema"
+message = "unknown {kind} '{name}' in {expression}: {problem}{suggestions}"
+hint = "names are matched exactly, case included; check '{name}' against the store's schema, and read a gene by its symbol with gene_expression(symbol, by='symbol')"
 fields = [
     { name = "kind", type = "str", doc = "What the name should name: `cell column`, `gene column`, `gene`, `gene symbol`, `cell`, `cell embedding`, `gene embedding`, `embedding component` or `feature`.", example = "feature" },
     { name = "name", type = "str", doc = "The name as written.", example = "CD3" },
     { name = "expression", type = "str", doc = "The expression it was written in, as code.", example = "feature('CD3')" },
-    { name = "problem", type = "str", doc = "Why nothing matches.", example = "it is not a cell column or a gene ID" },
+    { name = "problem", type = "str", doc = "Why nothing matches.", example = "it is not a column of the cell table or a gene ID" },
+    { name = "suggestions", type = "suggestions", doc = "Up to three names of the same kind closest to `name` (Jaro-Winkler, task 8.2), best first, written as `name` was; a gene symbol offered for a gene ID or a feature name reads `CD3E (gene symbol)`. Empty when none is close.", example = ["CD3E (gene symbol)", "CD3D (gene symbol)", "CD3G (gene symbol)"] },
 ]
 
 [[errors]]

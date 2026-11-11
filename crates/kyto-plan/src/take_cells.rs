@@ -83,6 +83,7 @@ impl Plan {
                 name: String::new(),
                 expression: "take_cells([..., '', ...])".to_owned(),
                 problem: "cell IDs are never empty".to_owned(),
+                suggestions: Box::default(),
             });
         }
         check_unique("take_cells", "cell_ids", &cell_ids)?;

@@ -37,8 +37,10 @@ RUST_FILE = ROOT / "crates" / "kyto-error" / "src" / "registry.rs"
 PYTHON_FILE = ROOT / "python" / "kyto" / "errors.py"
 STUB_FILE = ROOT / "python" / "kyto" / "errors.pyi"
 
-FieldType = Literal["str", "int", "list[str]"]
-FIELD_TYPES: tuple[FieldType, ...] = ("str", "int", "list[str]")
+FieldType = Literal["str", "int", "list[str]", "suggestions"]
+FIELD_TYPES: tuple[FieldType, ...] = ("str", "int", "list[str]", "suggestions")
+# Field types holding a list of strings (`Vec<String>` in Rust, a tuple in Python).
+LIST_TYPES: frozenset[FieldType] = frozenset({"list[str]", "suggestions"})
 BUILTIN_BASES = (
     "ValueError",
     "TypeError",
@@ -59,7 +61,8 @@ RESERVED_FIELDS = frozenset(
     | {"priv", "typeof", "unsized", "virtual", "Self"}
     # thiserror treats `source` and `backtrace` specially; the rest shadow names the
     # generated Rust calls.
-    | {"source", "backtrace", "quoted_list", "vec", "format", "String", "FieldValue"}
+    | {"source", "backtrace", "quoted_list", "did_you_mean", "vec", "format", "String"}
+    | {"FieldValue"}
     # Python keywords cannot be keyword arguments.
     | set(keyword.kwlist)
     | set(keyword.softkwlist)
@@ -276,6 +279,16 @@ def parse(text: str) -> Registry:
         names = {item.name for item in fields}
         message, in_message = _template(table["message"], names, f"{where}.message")
         hint, in_hint = _template(table["hint"], names, f"{where}.hint")
+        misplaced = sorted(
+            item.name
+            for item in fields
+            if item.type == "suggestions"
+            and (item.name in in_hint or item.name not in in_message)
+        )
+        if misplaced:
+            raise RegistryError(
+                f"{where}: suggestions fields {misplaced} belong in the message only"
+            )
         unused = sorted(names - in_message - in_hint)
         if unused:
             raise RegistryError(f"{where}: fields {unused} appear in no template")
@@ -303,7 +316,8 @@ def _rust_format(template: str, fields: tuple[Field, ...], prefix: str) -> str:
     """Return the format string and arguments for a template, `prefix` before lists.
 
     `str` and `int` fields are captured inline (`{name}`); `list[str]` fields become
-    positional `{}` arguments rendered by `quoted_list`.
+    positional `{}` arguments rendered by `quoted_list`, `suggestions` fields by
+    `did_you_mean`.
     """
     types = {item.name: item.type for item in fields}
     arguments: list[str] = []
@@ -312,6 +326,9 @@ def _rust_format(template: str, fields: tuple[Field, ...], prefix: str) -> str:
         name = match.group(1)
         if types[name] == "list[str]":
             arguments.append(f"quoted_list({prefix}{name})")
+            return "{}"
+        if types[name] == "suggestions":
+            arguments.append(f"did_you_mean({prefix}{name})")
             return "{}"
         return match.group(0)
 
@@ -341,7 +358,7 @@ def render_rust(registry: Registry) -> str:
     out: list[str] = [
         f"//! The registered kyto errors. {GENERATED_NOTE}",
         "",
-        "use crate::{FieldValue, quoted_list};",
+        "use crate::{FieldValue, did_you_mean, quoted_list};",
         "",
         "/// Every kyto error: one variant per registered `KY-Exxx` code in `errors.toml`.",
         "///",
@@ -356,9 +373,13 @@ def render_rust(registry: Registry) -> str:
         if entry.fields:
             out.append(f"    {entry.variant} {{")
             for item in entry.fields:
-                rust_type = {"str": "String", "int": "u64", "list[str]": "Vec<String>"}[
-                    item.type
-                ]
+                rust_type = {
+                    "str": "String",
+                    "int": "u64",
+                    "list[str]": "Vec<String>",
+                    # Boxed: keeps KytoError within clippy's result_large_err size.
+                    "suggestions": "Box<[String]>",
+                }[item.type]
                 out.append(f"        /// {item.doc}")
                 out.append(f"        {item.name}: {rust_type},")
             out.append("    },")
@@ -428,12 +449,20 @@ def render_rust(registry: Registry) -> str:
         "    pub fn fields(&self) -> Vec<(&'static str, FieldValue)> {",
         "        match self {",
     ]
-    kinds = {"str": "Str", "int": "Int", "list[str]": "StrList"}
+    kinds = {
+        "str": "Str",
+        "int": "Int",
+        "list[str]": "StrList",
+        "suggestions": "StrList",
+    }
     for entry in registry.entries:
         pattern = _rust_pattern(entry, {item.name for item in entry.fields})
         out.append(f"            {pattern} => vec![")
         for item in entry.fields:
-            value = f"*{item.name}" if item.type == "int" else f"{item.name}.clone()"
+            value = {
+                "int": f"*{item.name}",
+                "suggestions": f"{item.name}.to_vec()",
+            }.get(item.type, f"{item.name}.clone()")
             out.append(
                 f'                ("{item.name}", FieldValue::{kinds[item.type]}({value})),'
             )
@@ -451,6 +480,8 @@ def render_rust(registry: Registry) -> str:
         out.append(f"            Self::{entry.variant} {{")
         for item in entry.fields:
             literal = _rust_literal(item.example, item.type)
+            if item.type == "suggestions":
+                literal += ".into_boxed_slice()"
             out.append(f"                {item.name}: {literal},")
         out.append("            },")
     out += ["        ]", "    }", "}", ""]
@@ -554,7 +585,7 @@ def render_python(registry: Registry) -> str:
         "",
         "class _Field(NamedTuple):",
         "    name: str",
-        '    type: Literal["str", "int", "list[str]"]',
+        '    type: Literal["str", "int", "list[str]", "suggestions"]',
         "",
         "",
         "class _Entry(NamedTuple):",
@@ -572,7 +603,7 @@ def render_python(registry: Registry) -> str:
         '    if field.type == "int" and type(value) is int and 0 <= value < 2**64:',
         "        return value",
         "    if (",
-        '        field.type == "list[str]"',
+        '        field.type in ("list[str]", "suggestions")',
         "        and isinstance(value, Sequence)",
         "        and not isinstance(value, str)",
         "    ):",
@@ -582,14 +613,25 @@ def render_python(registry: Registry) -> str:
         "    raise TypeError(f\"{code}: field '{field.name}' must be {field.type}\")",
         "",
         "",
-        "def _render(template: str, fields: Mapping[str, FieldValue]) -> str:",
-        '    """Fill a template; lists render as \'a\', \'b\' (the same as Rust)."""',
-        "    text = {",
-        '        name: ", ".join(f"\'{item}\'" for item in value)',
-        "        if isinstance(value, tuple)",
-        "        else str(value)",
-        "        for name, value in fields.items()",
-        "    }",
+        "def _text(field: _Field, value: FieldValue) -> str:",
+        '    """One field as a template shows it (the same as Rust).',
+        "",
+        "    Lists render as 'a', 'b'; suggestions as \"; did you mean 'a', 'b'?\", or as",
+        "    nothing when there are none.",
+        '    """',
+        "    if not isinstance(value, tuple):",
+        "        return str(value)",
+        '    items = ", ".join(f"\'{item}\'" for item in value)',
+        '    if field.type != "suggestions":',
+        "        return items",
+        '    return f"; did you mean {items}?" if items else ""',
+        "",
+        "",
+        "def _render(",
+        "    template: str, fields: tuple[_Field, ...], values: Mapping[str, FieldValue]",
+        ") -> str:",
+        '    """Fill a template with the values of `fields`."""',
+        "    text = {field.name: _text(field, values[field.name]) for field in fields}",
         "    return template.format_map(text)",
         "",
         "",
@@ -653,8 +695,8 @@ def render_python(registry: Registry) -> str:
         "        }",
         "        self.code = code",
         "        self.fields = MappingProxyType(values)",
-        "        self.message = _render(entry.message, values)",
-        "        self.hint = _render(entry.hint, values)",
+        "        self.message = _render(entry.message, entry.fields, values)",
+        "        self.hint = _render(entry.hint, entry.fields, values)",
         "        self.docs_url = entry.docs_url",
         "        super().__init__(",
         '            f"{code}: {self.message}\\nhint: {self.hint}\\ndocs: {self.docs_url}"',

@@ -156,7 +156,7 @@ fn missing_members_are_ky_e109() {
     assert_eq!(
         texts,
         [
-            "KY-E109: no layer named 'Counts' in the store at 'pbmc.kyto'",
+            "KY-E109: no layer named 'Counts' in the store at 'pbmc.kyto'; did you mean 'counts'?",
             "KY-E109: no embedding named 'connectivities' in the store at 'pbmc.kyto'",
             "KY-E109: no graph named 'X_pca' in the store at 'pbmc.kyto'",
             "KY-E109: no modality named 'adt' in the store at 'pbmc.kyto'",
