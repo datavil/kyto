@@ -10,8 +10,10 @@
 //! `RunControl`, waits for the worker (the run has stopped and its buffers are freed
 //! before this returns; the rayon pool's threads exit just after) and is re-raised as it is. Other Python threads run while
 //! the plan computes.
-//! Does not: return the data or write a sink (the terminals are 7.2/7.3: each drains
-//! its stream through [`run_plan`]), or apply a memory limit (5.5's `fit_memory_limit`
+//! A plan ending in a sink writes it (task 5.9; never over an existing target: the
+//! public `sink_zarr`/`sink_h5ad` and their `overwrite` are 7.3).
+//! Does not: return the data (the terminals are 7.2/7.3: each drains its stream
+//! through [`run_plan`]), or apply a memory limit (5.5's `fit_memory_limit`
 //! is for 7.2's `collect(memory_limit=...)`).
 
 use std::num::NonZeroUsize;
@@ -103,7 +105,11 @@ pub fn run_plan(
 }
 
 /// Run `pipeline` and drain its stream, recycling every block; the cell rows streamed.
+/// A sink writes its target instead (task 5.9); the cells written.
 fn drain(pipeline: &Pipeline, options: ExecuteOptions) -> Result<u64, KytoError> {
+    if pipeline.is_sink() {
+        return pipeline.sink(options, false);
+    }
     let mut stream = pipeline.run(options)?;
     let mut cells = 0_u64;
     while let Some(block) = stream.next() {

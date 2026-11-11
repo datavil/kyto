@@ -835,9 +835,9 @@ fn removed_genes_and_cells_are_coded_errors() {
     assert!(error.to_string().contains("c5"), "{error}");
 }
 
-/// Embedding leaves and recomputed columns wait for 5.9; sinks too.
+/// Sinks lower since 5.9 (`sinks.rs` runs them).
 #[test]
-fn what_waits_for_5_9_is_refused_before_reading() {
+fn a_sink_lowers() {
     let base = scan(&fixture().path);
     let plan = base
         .sink(kyto_plan::Sink::Zarr {
@@ -849,9 +849,7 @@ fn what_waits_for_5_9_is_refused_before_reading() {
         OptimizeOptions::ALL,
         PhysicalOptions::default(),
     );
-    let error = Pipeline::new(&physical, 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601");
-    assert!(error.to_string().contains("5.9"), "{error}");
+    assert!(Pipeline::new(&physical, 0).unwrap().is_sink());
 }
 
 /// Polars runs a one-row column as a scalar, through another float kernel (`x / c`, not

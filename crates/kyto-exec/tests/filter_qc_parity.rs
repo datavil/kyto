@@ -10,7 +10,9 @@
 //! match to 1e-6 relative (6.1's tolerance); the `log1p` layer has the same CSR
 //! structure and every value matches to 1e-6 relative (kyto's `log1p` is correctly
 //! rounded, numpy's `float32` one may be 1 ulp off, deviations.md). The same bits at 1
-//! and all threads and at blocks of 37 cells (R11).
+//! and all threads and at blocks of 37 cells (R11). Task 5.9: the same plan ending in
+//! `sink_zarr`, and in `sink_h5ad` converted back (2.6), writes exactly what the stream
+//! gives, so the written store and file match scanpy too.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -24,8 +26,10 @@ use kyto_core::{
     BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, QcMetric, StrFunction, Tiling,
 };
 use kyto_exec::{CellValues, ExecuteOptions, Pipeline};
-use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
-use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
+use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, Sink, physical_plan};
+use kyto_store::{
+    ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids, read_layer, read_table,
+};
 use polars::prelude::DataType;
 
 /// Writes `load_fixture(name)` as `.h5ad`, then scanpy's QC, subset, normalize and log
@@ -235,6 +239,71 @@ fn run(plan: &Arc<Plan>, store: &Path, threads: usize, max_block_cells: Option<u
     result
 }
 
+/// Run `plan` into `sink` and read the result back as [`run`] gives it (an `.h5ad`
+/// converted to a store first, its `X` named `log1p`).
+fn sunk(plan: &Arc<Plan>, sink: Sink, work: &Path) -> Result {
+    let sink_plan = plan
+        .with_default_layer("log1p")
+        .unwrap()
+        .sink(sink.clone())
+        .unwrap();
+    let physical = physical_plan(
+        &[Output::all(&sink_plan)],
+        OptimizeOptions::ALL,
+        PhysicalOptions::default(),
+    );
+    Pipeline::new(&physical, 0)
+        .unwrap()
+        .sink(ExecuteOptions::new(NonZeroUsize::new(2).unwrap()), false)
+        .unwrap();
+    let store = match &sink {
+        Sink::Zarr { path } => Path::new(path).to_path_buf(),
+        Sink::H5ad { path } => {
+            let name = Path::new(path).file_name().unwrap().to_string_lossy();
+            let store = work.join(format!("{name}.kyto"));
+            let options = ConvertOptions {
+                layer: "log1p".to_owned(),
+                ..ConvertOptions::default()
+            };
+            convert(Path::new(path), &store, &options).unwrap();
+            store
+        }
+    };
+    let schema = open_atlas_schema(&store).unwrap();
+    let cells = read_table(&store, TableAxis::Cells).unwrap();
+    let qc = QC_COLUMNS
+        .map(|name| {
+            let column = cells
+                .column(name)
+                .unwrap()
+                .cast(&DataType::Float64)
+                .unwrap();
+            column
+                .f64()
+                .unwrap()
+                .iter()
+                .map(|value| value.unwrap().to_bits())
+                .collect()
+        })
+        .to_vec();
+    let log1p = read_layer::<f32>(
+        &store,
+        "log1p",
+        schema.n_cells,
+        schema.n_genes,
+        schema.tiling,
+    )
+    .unwrap();
+    Result {
+        cells: read_ids(&store, TableAxis::Cells, schema.n_cells).unwrap(),
+        genes: read_ids(&store, TableAxis::Genes, schema.n_genes).unwrap(),
+        qc,
+        indptr: log1p.indptr,
+        indices: log1p.indices,
+        values: log1p.data,
+    }
+}
+
 fn assert_close(what: &str, kyto: f64, scanpy: f64) {
     if scanpy.is_nan() {
         assert!(kyto.is_nan(), "{what}: {kyto} vs NaN");
@@ -328,6 +397,23 @@ fn filter_qc_normalize_log1p_match_scanpy_on_fixtures() {
                 run(&plan, &store, threads, max_block_cells),
                 kyto,
                 "{name} at {threads} threads, blocks {max_block_cells:?}"
+            );
+        }
+        // Task 5.9: sinks write what the stream gives.
+        let zarr = work.path().join(format!("{name}-sunk.kyto"));
+        let h5ad = work.path().join(format!("{name}-sunk.h5ad"));
+        for target in [
+            Sink::Zarr {
+                path: zarr.display().to_string(),
+            },
+            Sink::H5ad {
+                path: h5ad.display().to_string(),
+            },
+        ] {
+            assert_eq!(
+                sunk(&plan, target.clone(), work.path()),
+                kyto,
+                "{name} {target:?}"
             );
         }
     }

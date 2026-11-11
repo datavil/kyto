@@ -32,6 +32,8 @@ kyto-core = { path = "../kyto-core" }
 # Expressions run on the cell and gene tables through Polars; same version as kyto-core,
 # the features kyto-algo used for the QC gene sets.
 polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "dtype-categorical"] }
+# Sinks (task 5.9): an `.h5ad` sink writes a temporary store next to the target first.
+tempfile = "3.27.0"
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).
@@ -41,7 +43,6 @@ peak_alloc = "0.3.0"
 proptest = "1.11.0"
 # The 4.4 reference evaluator's dataset schema (`kyto-plan/tests/support`, task 5.8).
 serde_json = "1.0.154"
-tempfile = "3.27.0"
 # Kernel benches (task 5.3): `cargo bench -p kyto-exec --bench kernels`.
 criterion = { version = "0.8.2", default-features = false }
 

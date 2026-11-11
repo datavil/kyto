@@ -12,7 +12,7 @@
 //! cast to the dtypes the plan declares. Every block is computed alone, so the result
 //! does not depend on threads or block sizes (R11).
 //! Does not: reorder cells (`take_cells` keeps store order, plan 5.8), read embeddings
-//! or recompute stored columns (`KY-E601` when the pipeline is built, plan 5.9), or
+//! or recompute stored columns (`KY-E601` when the pipeline is built, plan 5.11), or
 //! resolve names (the plan did).
 
 use std::sync::Arc;

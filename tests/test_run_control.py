@@ -195,7 +195,7 @@ def test_execute_without_progress_and_on_any_threads(store: Path) -> None:
     assert atlas._execute(threads=3, progress=None) == N_CELLS
 
 
-def test_arguments_and_unsupported_plans_are_coded(store: Path) -> None:
+def test_arguments_and_unsupported_plans_are_coded(store: Path, tmp_path: Path) -> None:
     atlas = _kyto.scan(store)
     with pytest.raises(kyto.PlanError) as raised:
         atlas._execute(threads=0)
@@ -208,19 +208,23 @@ def test_arguments_and_unsupported_plans_are_coded(store: Path) -> None:
     # A gene filter runs since task 5.8 (every cell streams, over one gene).
     filtered = atlas.filter_genes(gene_column("gene_id") == "g1")
     assert filtered._execute(threads=1) == N_CELLS
-    # A sink waits for task 5.9 (built from plan JSON: Python has no sink method yet).
+    # A sink writes its target since task 5.9 (built from plan JSON: Python has no sink
+    # method yet), never over an existing one.
+    target = tmp_path / "out.kyto"
     plan = json.loads(filtered.to_json())
     plan["nodes"].append(
         {
             "id": len(plan["nodes"]),
             "input": len(plan["nodes"]) - 1,
-            "step": {"method": "sink_zarr", "path": "out.kyto"},
+            "step": {"method": "sink_zarr", "path": str(target)},
         }
     )
-    with pytest.raises(kyto.NotImplementedYetError) as raised:
-        kyto.from_json(json.dumps(plan))._execute(threads=1)
-    assert raised.value.code == "KY-E601"
-    assert "5.9" in str(raised.value)
+    sink = kyto.from_json(json.dumps(plan))
+    assert sink._execute(threads=1) == N_CELLS
+    assert json.loads((target / "schema.json").read_text())["n_genes"] == 1
+    with pytest.raises(kyto.KytoError) as raised:
+        sink._execute(threads=1)
+    assert raised.value.code == "KY-E118"
 
 
 def test_docstring_example_runs(tmp_path: Path) -> None:

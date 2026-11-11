@@ -20,6 +20,8 @@
 //! Filters, `select_genes`, `take_cells` and computed columns (task 5.8) run in the
 //! stream: cell steps on every block (with per-cell QC metrics, [`CellQc`], task 6.1),
 //! gene steps once before the output's stream, leaving the genes present ([`Genes`]).
+//! A plan ending in a sink (task 5.9) is written by [`Pipeline::sink`]: its stream into
+//! kyto-store's `StoreWriter` (an `.h5ad` through a temporary store and `sink_h5ad`).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -39,6 +41,7 @@ mod pipeline_block;
 mod qc;
 mod reduction;
 mod run_control;
+mod sink;
 mod statistics;
 
 pub use block_stream::BlockStream;

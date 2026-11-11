@@ -21,9 +21,11 @@
 //! computed at once. A cross-cell node without an apply pass (HVG) leaves the blocks as
 //! they are. The output's stream reads the store only when the output reads a layer
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
-//! Does not: `scale`, `pca`, HVG batches, neighbours, clusterings, sinks, expression
-//! leaves reading embeddings or recomputing stored columns (see the error each one
-//! gives), or memory limits (5.5). Tables of a remote store (`run_on` other storage)
+//! A plan ending in a sink keeps what it writes ([`crate::sink`], task 5.9;
+//! [`Pipeline::sink`] runs it).
+//! Does not: `scale`, `pca`, HVG batches, neighbours, clusterings, expression leaves
+//! reading embeddings or recomputing stored columns (see the error each one gives), or
+//! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
 
 use std::collections::BTreeSet;
@@ -51,6 +53,7 @@ use crate::operator::Operator;
 use crate::qc::{CellQc, GeneSet};
 use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
+use crate::sink::SinkSpec;
 use crate::statistics::Statistics;
 
 /// How a pipeline runs, apart from the plan.
@@ -117,6 +120,8 @@ pub struct Pipeline {
     /// Cells per streamed block: the scan's execution's (the store's `C`, or fewer
     /// under a memory limit, task 5.5).
     pub(crate) block_cells: NonZeroU64,
+    /// What the plan's sink writes, when the output ends in one (task 5.9).
+    pub(crate) sink: Option<SinkSpec>,
 }
 
 impl Pipeline {
@@ -145,6 +150,7 @@ impl Pipeline {
         let mut next = Some(output_entry.node());
         let mut scan = None;
         let mut block_cells = None;
+        let mut sink = None;
         while let Some(index) = next {
             let node = &nodes[index];
             let passes = executions[index].statistics_passes();
@@ -171,6 +177,9 @@ impl Pipeline {
                             Some(writes),
                         )));
                     }
+                }
+                Operation::Node(logical) if matches!(**logical, Plan::Sink(_)) => {
+                    sink = Some(SinkSpec::new(logical)?);
                 }
                 Operation::Node(logical) => {
                     if let Some(stage) = lower_node(logical, index, passes)? {
@@ -213,7 +222,13 @@ impl Pipeline {
             output_layers,
             blocks_in_flight,
             block_cells,
+            sink,
         })
+    }
+
+    /// Whether the output ends in a sink, written by [`Pipeline::sink`] (task 5.9).
+    pub fn is_sink(&self) -> bool {
+        self.sink.is_some()
     }
 
     /// The layers the scan reads, in name order.
@@ -519,8 +534,9 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                 },
             }))
         }
-        // Sinks write a store or an .h5ad file from the stream (plan 5.9).
-        Plan::Scan(_) | Plan::Sink(_) => Err(not_yet(plan.node().method(), "5.9")),
+        // A sink is lowered by `Pipeline::new` (`SinkSpec`); a scan is the arena's
+        // `Operation::Scan`.
+        Plan::Scan(_) | Plan::Sink(_) => Ok(None),
     }
 }
 
@@ -597,7 +613,7 @@ fn refuse_unwritten_gene_columns(stages: &[Stage]) -> Result<(), KytoError> {
 
 /// A resolved cell expression of `method`, whose leaves the stream computes: table
 /// columns, gene values and QC metrics. `KY-E601` for embeddings and recomputed
-/// columns (plan 5.9).
+/// columns (plan 5.11).
 fn cell_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
     let prepared = Prepared::new(expr.node());
     for leaf in &prepared.leaves {
@@ -613,7 +629,7 @@ fn cell_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared
 }
 
 /// A resolved gene expression of `method`, whose leaves the run computes: table
-/// columns and cell profiles. `KY-E601` for embeddings (plan 5.9).
+/// columns and cell profiles. `KY-E601` for embeddings (plan 5.11).
 fn gene_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
     let prepared = Prepared::new(expr.node());
     for leaf in &prepared.leaves {
@@ -630,7 +646,7 @@ fn unsupported_leaf(leaf: &Source, method: &str) -> KytoError {
         Source::Recompute { .. } => "a recomputed column (`.recompute()`)",
         _ => "an unresolved name",
     };
-    not_yet(&format!("{what} in {method}"), "5.9")
+    not_yet(&format!("{what} in {method}"), "5.11")
 }
 
 /// The cell and gene tables of a run, read when a step first needs them, and the

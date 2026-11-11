@@ -10,7 +10,7 @@
 //! [`GeneSelection`], the operator that remaps every later block's genes (dropping
 //! the others, in the selection's order). `select_genes` keeps the order it lists
 //! (4.1 Open (2)); a filter keeps the table order.
-//! Does not: read gene embeddings (`KY-E601`, plan 5.9), or check names (the plan did;
+//! Does not: read gene embeddings (`KY-E601`, plan 5.11), or check names (the plan did;
 //! a gene a filter removed is `KY-E210` here, at run time).
 
 use std::collections::BTreeSet;

@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use kyto_core::LayerSchema;
+use kyto_core::{LayerSchema, Lineage};
 use kyto_error::KytoError;
 use polars::prelude::DataFrame;
 use rayon::prelude::*;
@@ -76,6 +76,8 @@ pub struct StoreWriter {
     started_at: SystemTime,
     /// Enum columns to record as ordered in `schema.json` (format.md §8).
     ordered: Vec<(TableAxis, String)>,
+    /// Lineage to record for derived columns in `schema.json` (format.md §8).
+    lineage: Vec<(TableAxis, String, Lineage)>,
     /// Set when a write failed: the arrays are then incomplete, so later calls fail.
     failed: bool,
 }
@@ -160,6 +162,7 @@ impl StoreWriter {
             n_cells: 0,
             started_at,
             ordered: Vec::new(),
+            lineage: Vec::new(),
             failed: false,
         })
     }
@@ -170,6 +173,14 @@ impl StoreWriter {
     /// Enum is unordered. Checked by [`StoreWriter::finish`].
     pub fn mark_ordered(&mut self, axis: TableAxis, column: &str) {
         self.ordered.push((axis, column.to_owned()));
+    }
+
+    /// Record `lineage` for the column `column` of the `axis` table in `schema.json`
+    /// (format.md §8): a stored derived column, as the executor's sink carries it over
+    /// from the store it read (task 5.9). Without this call no column has lineage.
+    /// Checked by [`StoreWriter::finish`].
+    pub fn set_lineage(&mut self, axis: TableAxis, column: &str, lineage: Lineage) {
+        self.lineage.push((axis, column.to_owned(), lineage));
     }
 
     /// Matrix rows pushed so far.
@@ -299,6 +310,13 @@ impl StoreWriter {
             };
             set_ordered(*axis, columns, name)?;
         }
+        for (axis, name, lineage) in &self.lineage {
+            let columns = match axis {
+                TableAxis::Cells => &mut cell_columns,
+                TableAxis::Genes => &mut gene_columns,
+            };
+            set_lineage(*axis, columns, name, lineage)?;
+        }
         let provenance = provenance_json(source, self.started_at, SystemTime::now());
         write_json(&store.join("provenance.json"), &provenance)?;
         let schema = atlas_schema(
@@ -406,6 +424,30 @@ fn set_ordered(axis: TableAxis, columns: &mut [ColumnSchema], name: &str) -> Res
         problem,
         accepted: "mark only Enum columns of the table as ordered".to_owned(),
     })
+}
+
+/// Record `lineage` for the column `name`.
+///
+/// # Errors
+/// `KY-E112` if the table has no such column.
+fn set_lineage(
+    axis: TableAxis,
+    columns: &mut [ColumnSchema],
+    name: &str,
+    lineage: &Lineage,
+) -> Result<(), KytoError> {
+    match columns.iter_mut().find(|column| column.name == name) {
+        Some(column) => {
+            column.lineage = Some(lineage.clone());
+            Ok(())
+        }
+        None => Err(KytoError::InvalidTableColumn {
+            axis: axis.as_str().to_owned(),
+            column: name.to_owned(),
+            problem: "does not exist, so it cannot record lineage".to_owned(),
+            accepted: "record lineage only for columns of the table".to_owned(),
+        }),
+    }
 }
 
 /// Write a JSON file with keys in insertion order (format.md §10.3) and a final newline.
