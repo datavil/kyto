@@ -112,6 +112,10 @@ Goal: a Zarr v3 store where reading a few genes costs about the same as reading 
   - Done when: the reader test suite passes against a local MinIO container.
   - Done: `kyto_store::RemoteStorage::open(url, options)` (`s3://`, `gs://`, `http(s)://`) implements zarrs `ReadableStorageTraits` over `object_store` 0.13 (the version polars already uses), so the 2.4 `LayerReader` reads remote stores unchanged: projection and predicate tile skipping as before, every read a ranged GET (suffix ranges for shard indexes), up to 32 ranges of one call in flight, tiles in parallel across rayon threads, on a tokio runtime the storage owns (R7). Options are `object_store` config keys; S3 and GCS also read their standard env chain (`AWS_*`, `GOOGLE_*`), options win. New error `KY-E125`: bad URL or scheme, unknown option key, bucket options that would override the URL's bucket, a query, fragment or credentials in the URL, a rejected configuration; option values are never echoed. Not bound to Python yet (no reader is). Every test of `crates/kyto-store/tests/it/tile_reader.rs` (and `remote_storage.rs`) runs on the local, HTTP (in-process range server, always) and S3 backends; `scripts/remote_store_tests.py` (in the gate) starts MinIO, natively from a `minio` binary on PATH or from a pinned image in docker/podman, and runs them with S3; without either it prints SKIPPED (`KYTO_REQUIRE_MINIO=1`, set in the CI lint job, makes that a failure). Passed here against native MinIO RELEASE.2025-10-15T17-29-55Z (user decision, Nov 7, 2026: native binary instead of a container, no container runtime on this Mac).
   - Open: GCS is unit-tested for configuration only; no live test (no emulator in the gate). The Homebrew `minio` formula used on this Mac is deprecated (upstream archived) and will be disabled on 2027-02-17; after that, install MinIO otherwise or use docker/podman. The pinned container image tag (`RELEASE.2025-04-22T22-12-26Z`) is unverified until the next CI run. Remote reads of the tables and `schema.json` (still `Path`-based) come with the store-level open of the data model tasks.
+- [ ] **2.9 Combining samples.** `ky.concat(sources, target, *, label="sample", keys=None, join="inner", on_duplicate_ids="error", overwrite=False)` streams several stores or importer sources (2.6) into one new store, adding a cell column (`label`) that names each cell's source (`keys`, default the source names). Gene tables are matched by gene ID, `join="inner"` or `"outer"` as `anndata.concat`; an outer join's missing genes are absent sparse values (R9). Cell IDs that repeat across sources follow `on_duplicate_ids` (2.6). (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
+  - Depends: 2.5, 2.6
+  - Done when: two fixtures combined equal `anndata.concat([a, b], label="sample", keys=[...], join=...)` (matrix, cell and gene tables) for both joins, and the combined store streams with memory bounded by one block per source.
+  - Open: (1) A lazy multi-store scan (a plan that reads several stores without writing one) is not planned; the combined store is written once.
 
 ## 3. Data model (`kyto-core`)
 
@@ -311,6 +315,9 @@ Goal: the standard scanpy workflow, streamed, with each step checked against sca
 - [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
+- [ ] **6.12 Doublet detection.** Scrublet as `scanpy.pp.scrublet`: simulated doublets from random pairs of observed cells, the shared normalize/log/PCA, a kNN classifier score per cell, the automatic threshold, and `batch_key` (each batch separately). Adds `doublet_score` and `predicted_doublet` cell columns (`into=`). `seed` required (R7). (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
+  - Depends: 6.5, 6.6
+  - Done when: with the same simulated doublets, scores match `scanpy.pp.scrublet` to 1e-5 on the fixtures; with kyto's own seeded simulation, predicted calls agree with scanpy's on at least 95% of cells and identical across runs with one seed.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -337,6 +344,10 @@ Goal: a small, chainable surface where every method has one return type and a ty
 - [ ] **7.7 Repr.** One line, never triggers compute: `<Atlas plan: 7 nodes · cells: ? · genes: 2000 · layers: counts, log1p>`.
   - Depends: 4.6
   - Done when: a test asserts `repr()` performs zero I/O.
+- [ ] **7.8 Plotting through cellestial.** kyto draws no plots; results go to cellestial (decided by the user, Nov 13, 2026). Check what cellestial reads (AnnData, Polars frames or both) and give kyto the hand-off it needs, through 2.7's `.h5ad` export or 7.3/7.5's terminals, without adding `obs`/`var`-style access to kyto (R4). Document one example per plot the clustering tutorial uses (QC violins and scatter, UMAP coloured by sample, cluster and gene, marker dotplot). (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
+  - Depends: 7.3, 7.5
+  - Done when: the documented examples run in the doctests and produce each plot from a kyto result.
+  - Open: (1) cellestial's input format is to be confirmed when the task starts.
 
 ## 8. Agent-friendliness
 
@@ -416,6 +427,9 @@ Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels wi
 - [ ] **10.6 Release.** abi3 wheels via maturin, PyPI trusted publishing, semantic versioning, and a stated policy for reading older `format_version` stores.
   - Depends: 1.4, 10.5
   - Done when: `pip install kyto` works on Linux, macOS and Windows from a tagged release.
+- [ ] **10.7 Clustering tutorial end to end.** scanpy's basic clustering tutorial (https://scanpy.scverse.org/en/stable/tutorials/basics/clustering.html) written in kyto and run as a test: two samples combined, QC metrics (mitochondrial, ribosomal, haemoglobin), doublet detection, cell and gene filters, `normalize_total`, `log1p`, highly variable genes by sample, PCA, neighbours, UMAP, Leiden at several resolutions, marker genes, and the plots through cellestial. (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
+  - Depends: 2.9, 5.11, 6.6–6.10, 6.12, 7.1–7.5, 7.8
+  - Done when: the notebook runs end to end in the gate, and its results are compared with scanpy's run of the tutorial (QC columns and HVG sets equal; PCA variance to 1e-3; Leiden adjusted Rand index and UMAP trustworthiness reported).
 
 ## 11. Milestones
 
@@ -430,6 +444,6 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M0 Skeleton | 1.1–1.6, 8.1 |
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
-| M3 Full analysis | 6.4–6.10, 8.4–8.7, 10.4 |
+| M3 Full analysis | 2.9, 6.4–6.10, 6.12, 7.8, 8.4–8.7, 10.4, 10.7 |
 | M4 GPU backend | 9.1–9.7 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
