@@ -26,6 +26,9 @@
 //! batches, `seurat_v3`'s loess fit, [`loess_fitted`]) and write their gene columns
 //! into the gene table later steps read. `scale` (task 6.4) takes per-gene moments
 //! from one pass and z-scores the layer in its apply pass ([`ScaleStatistics`]).
+//! `neighbors` (task 6.6) searches the embedding of the `pca` below it, exactly or
+//! through an HNSW index, and leaves its distance graph as [`NeighborStatistics`]
+//! ([`nearest_neighbors`] runs the same search on any embedding).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -42,6 +45,8 @@ mod hvg_pass;
 mod kernels;
 mod loess;
 mod memory_limit;
+mod neighbors;
+mod neighbors_hnsw;
 mod operator;
 mod pca;
 mod pca_dense;
@@ -61,6 +66,10 @@ pub use kernels::{KernelValue, Kernels, SUM_LANES, combine_lanes, log1p};
 pub use loess::loess_fitted;
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
+};
+pub use neighbors::{NeighborGraph, NeighborStatistics, nearest_neighbors};
+pub use neighbors_hnsw::{
+    CANDIDATES_PER_NEIGHBOR, HNSW_EF_CONSTRUCTION, HNSW_EF_SEARCH, HNSW_MAX_CONNECTIONS,
 };
 pub use pca::PcaStatistics;
 pub use pipeline::{ExecuteOptions, Pipeline};

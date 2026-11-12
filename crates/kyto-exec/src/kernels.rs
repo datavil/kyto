@@ -1,5 +1,7 @@
 //! SIMD kernels over the values of CSR rows: row sums, row sums of squares, row nnz,
-//! row scaling, row division (task 6.2) and `log1p` (task 5.3).
+//! row scaling, row division (task 6.2) and `log1p` (task 5.3); and over dense rows:
+//! squared distances and dot products from one row to many (nearest neighbours, task
+//! 6.6).
 //!
 //! Does: run each kernel through `pulp`'s runtime dispatch ([`Kernels::detected`]: AVX-512
 //! with `x86-v4`, AVX2 + FMA with `x86-v3`, NEON on aarch64) or on pulp's scalar
@@ -13,6 +15,8 @@
 //!   accumulator `j % SUM_LANES`, then a fixed tree ([`combine_lanes`]); this is not the
 //!   left-to-right sum, so an `f32` row may differ from it in the last bits (a `u32` row
 //!   sums exactly in `f64` in any order, up to 2^53);
+//! - a squared distance or dot product of two dense rows runs the same way: component
+//!   `j`'s difference (or product) in `f64` into lane `j % SUM_LANES`, then the tree;
 //! - `log1p` is kyto's own ([`log1p`]), computed in `f64` from the `f32` value and
 //!   rounded once to `f32`, as `f32::ln_1p` (the platform's libm) cannot be vectorized
 //!   and is not the same function on every platform.
@@ -218,6 +222,47 @@ impl Kernels {
         });
     }
 
+    /// The squared Euclidean distance from `query` to each row of `points` (row-major,
+    /// `query.len()` values a row), written to `out` (one per row): each difference and
+    /// square in `f64`, summed in [`SUM_LANES`] lanes (module doc). An empty `query`
+    /// gives 0 (task 6.6).
+    ///
+    /// # Panics
+    /// If `points` is not `out.len()` rows of `query.len()` values.
+    pub fn squared_distances(&self, query: &[f32], points: &[f32], out: &mut [f64]) {
+        assert_eq!(
+            points.len(),
+            out.len().saturating_mul(query.len()),
+            "points are out.len() rows of query.len() values"
+        );
+        self.arch.dispatch(RowPairs {
+            query,
+            points,
+            out,
+            dot: false,
+        });
+    }
+
+    /// The dot product of `query` with each row of `points` (row-major, `query.len()`
+    /// values a row), written to `out` (one per row): each product in `f64`, summed in
+    /// [`SUM_LANES`] lanes (module doc). An empty `query` gives 0 (task 6.6).
+    ///
+    /// # Panics
+    /// If `points` is not `out.len()` rows of `query.len()` values.
+    pub fn dot_products(&self, query: &[f32], points: &[f32], out: &mut [f64]) {
+        assert_eq!(
+            points.len(),
+            out.len().saturating_mul(query.len()),
+            "points are out.len() rows of query.len() values"
+        );
+        self.arch.dispatch(RowPairs {
+            query,
+            points,
+            out,
+            dot: true,
+        });
+    }
+
     /// [`log1p`] of each value (a `u32` rounded to `f32` first), written to `out`.
     ///
     /// # Panics
@@ -363,6 +408,71 @@ impl<T: KernelValue> WithSimd for DivideRows<'_, T> {
             let row = &self.values[range.clone()];
             for (out, &value) in self.out[range].iter_mut().zip(row) {
                 *out = value.to_f32() / divisor;
+            }
+        }
+    }
+}
+
+/// The lane sum of `query` against one row of the same length: of products if `dot`,
+/// else of squared differences.
+#[inline(always)]
+fn pair_sum(query: &[f32], row: &[f32], dot: bool) -> f64 {
+    let mut lanes = [0.0_f64; SUM_LANES];
+    let (query_chunks, query_tail) = query.as_chunks::<SUM_LANES>();
+    let (row_chunks, row_tail) = row.as_chunks::<SUM_LANES>();
+    if dot {
+        for (left, right) in query_chunks.iter().zip(row_chunks) {
+            for lane in 0..SUM_LANES {
+                lanes[lane] += f64::from(left[lane]) * f64::from(right[lane]);
+            }
+        }
+        for (lane, (&left, &right)) in query_tail.iter().zip(row_tail).enumerate() {
+            lanes[lane] += f64::from(left) * f64::from(right);
+        }
+    } else {
+        for (left, right) in query_chunks.iter().zip(row_chunks) {
+            for lane in 0..SUM_LANES {
+                let difference = f64::from(left[lane]) - f64::from(right[lane]);
+                lanes[lane] += difference * difference;
+            }
+        }
+        for (lane, (&left, &right)) in query_tail.iter().zip(row_tail).enumerate() {
+            let difference = f64::from(left) - f64::from(right);
+            lanes[lane] += difference * difference;
+        }
+    }
+    combine_lanes(lanes)
+}
+
+struct RowPairs<'a> {
+    query: &'a [f32],
+    points: &'a [f32],
+    out: &'a mut [f64],
+    dot: bool,
+}
+
+impl WithSimd for RowPairs<'_> {
+    type Output = ();
+    #[inline(always)]
+    fn with_simd<S: Simd>(self, _simd: S) {
+        let Self {
+            query,
+            points,
+            out,
+            dot,
+        } = self;
+        if query.is_empty() {
+            out.fill(0.0);
+            return;
+        }
+        let rows = points.chunks_exact(query.len());
+        if dot {
+            for (out, row) in out.iter_mut().zip(rows) {
+                *out = pair_sum(query, row, true);
+            }
+        } else {
+            for (out, row) in out.iter_mut().zip(rows) {
+                *out = pair_sum(query, row, false);
             }
         }
     }

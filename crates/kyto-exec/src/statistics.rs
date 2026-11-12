@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use kyto_plan::HvgFlavor;
 
+use crate::neighbors::NeighborStatistics;
 use crate::pca::PcaStatistics;
 
 pub use crate::scale::ScaleStatistics;
@@ -287,6 +288,9 @@ pub enum NodeStatistics {
     Scale(Box<ScaleStatistics>),
     /// `pca`: the embedding, loadings and variances (task 6.5).
     Pca(Box<PcaStatistics>),
+    /// `neighbors`: the distance graph (task 6.6; no statistics passes, it searches
+    /// the embedding after the passes of the node that wrote it).
+    Neighbors(Box<NeighborStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

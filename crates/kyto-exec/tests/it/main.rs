@@ -13,6 +13,8 @@ mod hvg_parity;
 mod kernels;
 mod loess_parity;
 mod multi_pass;
+mod neighbors;
+mod neighbors_parity;
 mod normalize_log1p_parity;
 mod pca;
 mod pca_parity;

@@ -9,7 +9,9 @@
 //! `scale` (its apply pass writes the scaled layer, task 6.4), `pca` (its embedding,
 //! loadings and variances are statistics, task 6.5), and
 //! the steps of task 5.8: cell and gene filters, `select_genes`, `take_cells`,
-//! `with_cells` and `with_genes`), and refuse the rest with `KY-E601` naming the task
+//! `with_cells` and `with_genes`), `neighbors` on the embedding of a `pca` below it
+//! (task 6.6: searched once that node's passes are done, in memory, its graph a
+//! statistic), and refuse the rest with `KY-E601` naming the task
 //! that adds it, before anything is read. Cell steps run on every block
 //! (`cell_steps.rs`); gene steps run once, in plan order, between the statistics
 //! passes (`gene_steps.rs`: a step reading a cell's profile streams the store once to
@@ -27,7 +29,8 @@
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
 //! A plan ending in a sink keeps what it writes ([`crate::sink`], task 5.9;
 //! [`Pipeline::sink`] runs it).
-//! Does not: neighbours, clusterings, expression leaves
+//! Does not: clusterings, neighbours on an embedding read from the store or past a
+//! cell filter or `take_cells` above its `pca` (5.11), expression leaves
 //! reading embeddings or recomputing stored columns (see the error each one gives), or
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
@@ -40,7 +43,8 @@ use std::sync::Arc;
 use kyto_core::{Axis, ColumnDtype, Expr, ExprAxis, Source};
 use kyto_error::KytoError;
 use kyto_plan::{
-    Blocks, Columns, CrossCellOp, Member, Members, Operation, PhysicalPlan, Plan, Predicate,
+    Blocks, Columns, CrossCellOp, Member, Members, Neighbors, Operation, PhysicalPlan, Plan,
+    Predicate,
 };
 use kyto_store::{LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -54,6 +58,7 @@ use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
 use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
 use crate::hvg;
+use crate::neighbors::{self, NeighborStatistics};
 use crate::operator::Operator;
 use crate::qc::{CellQc, GeneSet};
 use crate::reduction::reduce_pass;
@@ -100,6 +105,18 @@ pub(crate) enum Stage {
     /// A gene filter, `select_genes` or `with_genes`, run once with the statistics
     /// passes the physical plan gives it (task 5.8).
     Genes { kind: GeneStepKind, passes: u32 },
+    /// `neighbors` (task 6.6), searched in memory once its embedding is computed.
+    Neighbors(NeighborStage),
+}
+
+/// A `neighbors` node and the node whose statistics hold its embedding.
+#[derive(Debug, Clone)]
+pub(crate) struct NeighborStage {
+    /// The node's index in the optimized plan.
+    node: usize,
+    params: Neighbors,
+    /// The `pca` node writing the embedding (resolved by `Pipeline::new`).
+    source: usize,
 }
 
 /// A cell step as the plan gives it, before its leaves are resolved against the genes
@@ -199,6 +216,7 @@ impl Pipeline {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
         stages.reverse();
+        resolve_embeddings(&mut stages, nodes)?;
         let root = scan.root();
         let schema = root.schema();
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
@@ -298,7 +316,7 @@ impl Pipeline {
         // Every statistics pass and the output's stream compute every cell once.
         let control = options.control.clone();
         let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
-            Stage::Maps(_) | Stage::Cells(_) => passes,
+            Stage::Maps(_) | Stage::Cells(_) | Stage::Neighbors(_) => passes,
             Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
             Stage::Genes { passes: more, .. } => passes.saturating_add(u64::from(*more)),
         });
@@ -393,6 +411,27 @@ impl Pipeline {
                     if let Some(selection) = kind.apply(genes, &values, &self.store)? {
                         operators.push(Operator::Genes(selection));
                     }
+                    continue;
+                }
+                Stage::Neighbors(stage) => {
+                    let Some(NodeStatistics::Pca(pca)) = statistics.nodes.get(&stage.source) else {
+                        unreachable!("Pipeline::new resolved the pca below neighbors")
+                    };
+                    let graph = thread_pool.install(|| {
+                        neighbors::search(
+                            pca.embedding(),
+                            pca.n_components(),
+                            &stage.params,
+                            &control,
+                        )
+                    })?;
+                    let found = NeighborStatistics {
+                        cells: Arc::clone(&pca.cells),
+                        distances: graph,
+                    };
+                    statistics
+                        .nodes
+                        .insert(stage.node, NodeStatistics::Neighbors(Box::new(found)));
                     continue;
                 }
                 Stage::CrossCell(cross_cell) => cross_cell,
@@ -524,7 +563,11 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                 ))))
             }
         },
-        Plan::Neighbors(_) => Err(not_yet(plan.node().method(), "6.6")),
+        Plan::Neighbors(node) => Ok(Some(Stage::Neighbors(NeighborStage {
+            node: index,
+            params: node.params().clone(),
+            source: usize::MAX,
+        }))),
         Plan::Cluster(_) => Err(not_yet(plan.node().method(), "6.8")),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
             Predicate::Cells(predicate) => Stage::Cells(CellStage::Filter(cell_expression(
@@ -803,6 +846,57 @@ fn layer_names(members: &Members) -> impl Iterator<Item = String> + '_ {
         Member::Layer(name) => Some(name.clone()),
         _ => None,
     })
+}
+
+/// Point every `neighbors` stage at the `pca` stage below it that writes its embedding
+/// (the nearest one: a later `pca` into the same name replaces it). `KY-E601` (5.11)
+/// for an embedding no stage writes (one read from the store), or a cell filter or
+/// `take_cells` between the two (the graph would need the embedding's rows of the
+/// kept cells).
+fn resolve_embeddings(
+    stages: &mut [Stage],
+    nodes: &[kyto_plan::OptimizedNode],
+) -> Result<(), KytoError> {
+    // (embedding, pca node, whether cells were removed since)
+    let mut written: Vec<(String, usize, bool)> = Vec::new();
+    for stage in stages {
+        match stage {
+            Stage::CrossCell(cross_cell) => {
+                if let Operation::Node(logical) = nodes[cross_cell.node].operation()
+                    && let Plan::CrossCell(node) = &**logical
+                    && let CrossCellOp::Pca { into, .. } = node.params().op()
+                {
+                    written.retain(|(name, _, _)| name != into);
+                    written.push((into.clone(), cross_cell.node, false));
+                }
+            }
+            Stage::Cells(CellStage::Filter(_) | CellStage::Take(_)) => {
+                for entry in &mut written {
+                    entry.2 = true;
+                }
+            }
+            Stage::Neighbors(neighbors) => {
+                let embedding = &neighbors.params.embedding;
+                match written.iter().find(|(name, _, _)| name == embedding) {
+                    Some((_, source, false)) => neighbors.source = *source,
+                    Some((_, _, true)) => {
+                        return Err(not_yet(
+                            "neighbors after a cell filter or take_cells above its pca",
+                            "5.11",
+                        ));
+                    }
+                    None => {
+                        return Err(not_yet(
+                            &format!("neighbors on embedding '{embedding}' read from the store"),
+                            "5.11",
+                        ));
+                    }
+                }
+            }
+            Stage::Maps(_) | Stage::Cells(_) | Stage::Genes { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 fn not_yet(method: &str, task: &str) -> KytoError {

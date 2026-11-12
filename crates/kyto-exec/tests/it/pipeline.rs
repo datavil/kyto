@@ -19,10 +19,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use kyto_core::{GeneIds, Tiling};
-use kyto_exec::{CellValues, ExecuteOptions, Pipeline, PipelineBlock};
+use kyto_exec::{
+    CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, nearest_neighbors,
+};
 use kyto_plan::{
-    Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions, Output, PhysicalOptions,
-    PhysicalPlan, Plan, physical_plan,
+    Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions,
+    Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan,
 };
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
@@ -293,8 +295,8 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     write_store(&store);
     let base = scan(&store);
     // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since
-    // 6.4, `pca` since 6.5.
-    let neighbors = base
+    // 6.4, `pca` since 6.5, `neighbors` since 6.6.
+    let leiden = base
         .pca(Some("counts"), "X_pca", 2, 0)
         .unwrap()
         .neighbors(Neighbors {
@@ -306,13 +308,21 @@ fn nodes_not_run_yet_are_refused_before_reading() {
             seed: 0,
             key: None,
         })
+        .unwrap()
+        .cluster(Cluster {
+            method: ClusterMethod::Leiden,
+            graph: "connectivities".to_owned(),
+            resolution: 1.0,
+            seed: 0,
+            into: "leiden".to_owned(),
+        })
         .unwrap();
-    let physical = PhysicalPlan::new(neighbors.optimize(), PhysicalOptions::default());
+    let physical = PhysicalPlan::new(leiden.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 0).unwrap_err();
     assert_eq!(error.code(), "KY-E601");
     let message = error.to_string();
     assert!(
-        message.contains("neighbors") && message.contains("6.6"),
+        message.contains("leiden") && message.contains("6.8"),
         "{message}"
     );
     let physical = PhysicalPlan::new(base.optimize(), PhysicalOptions::default());
@@ -458,4 +468,83 @@ fn highly_variable_genes_over_no_cell_is_refused() {
             assert!(error.to_string().contains("no cell"), "{error}");
         }
     }
+}
+
+/// The statistics of the first node `pick` takes, run on `threads` threads.
+fn node_statistics<T>(
+    plan: &Arc<Plan>,
+    member: Member,
+    threads_count: usize,
+    pick: impl Fn(&NodeStatistics) -> Option<T>,
+) -> T {
+    let output = Output::members(plan, [member]).unwrap();
+    let physical = physical_plan(&[output], OptimizeOptions::ALL, PhysicalOptions::default());
+    let stream = Pipeline::new(&physical, 0)
+        .unwrap()
+        .run(threads(threads_count))
+        .unwrap();
+    stream
+        .statistics()
+        .iter()
+        .find_map(|(_, statistics)| pick(statistics))
+        .unwrap()
+}
+
+#[test]
+fn neighbors_search_the_embedding_of_the_pca_below() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let pca = preprocess(&store)
+        .pca(Some("log1p"), "X_pca", 3, 0)
+        .unwrap();
+    let params = Neighbors {
+        embedding: "X_pca".to_owned(),
+        n_components: Some(2),
+        n_neighbors: 4,
+        metric: Metric::Euclidean,
+        search: NeighborSearch::Exact,
+        seed: 0,
+        key: None,
+    };
+    let plan = pca.neighbors(params.clone()).unwrap();
+    let embedding = node_statistics(
+        &plan,
+        Member::Embedding("X_pca".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Pca(pca) => Some((**pca).clone()),
+            _ => None,
+        },
+    );
+    let expected = nearest_neighbors(embedding.embedding(), 3, &params).unwrap();
+    for threads_count in [1, 4] {
+        let found = node_statistics(
+            &plan,
+            Member::Graph("distances".to_owned()),
+            threads_count,
+            |statistics| match statistics {
+                NodeStatistics::Neighbors(neighbors) => Some((**neighbors).clone()),
+                _ => None,
+            },
+        );
+        assert_eq!(found.cells(), embedding.cells());
+        assert_eq!(found.distances(), &expected);
+        assert_eq!(found.distances().indices().len(), N_CELLS * 3);
+    }
+
+    // The graph of the kept cells needs the embedding's rows of those cells (5.11).
+    let taken = pca
+        .take_cells((0..10).map(|cell| format!("c{cell}")))
+        .unwrap()
+        .neighbors(params)
+        .unwrap();
+    let physical = PhysicalPlan::new(taken.optimize(), PhysicalOptions::default());
+    let error = Pipeline::new(&physical, 0).unwrap_err();
+    assert_eq!(error.code(), "KY-E601");
+    let message = error.to_string();
+    assert!(
+        message.contains("take_cells") && message.contains("5.11"),
+        "{message}"
+    );
 }

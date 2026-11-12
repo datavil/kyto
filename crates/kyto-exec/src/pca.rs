@@ -42,7 +42,7 @@ use crate::pipeline_block::PipelineBlock;
 #[derive(Debug, Clone, PartialEq)]
 pub struct PcaStatistics {
     n_components: usize,
-    cells: Arc<Vec<u64>>,
+    pub(crate) cells: Arc<Vec<u64>>,
     embedding: Arc<Vec<f32>>,
     loadings: Arc<Vec<f32>>,
     variance: Vec<f64>,
@@ -607,7 +607,7 @@ fn omega_row(seed: u64, cell: u64, out: &mut [f64]) {
 }
 
 /// SplitMix64's output function.
-fn mix(mut value: u64) -> u64 {
+pub(crate) fn mix(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     value ^ (value >> 31)
