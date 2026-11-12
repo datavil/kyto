@@ -22,6 +22,9 @@
 //! gene steps once before the output's stream, leaving the genes present ([`Genes`]).
 //! A plan ending in a sink (task 5.9) is written by [`Pipeline::sink`]: its stream into
 //! kyto-store's `StoreWriter` (an `.h5ad` through a temporary store and `sink_h5ad`).
+//! Highly variable genes (task 6.3) take their moments from those passes (with
+//! batches, `seurat_v3`'s loess fit, [`loess_fitted`]) and write their gene columns
+//! into the gene table later steps read.
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -33,7 +36,10 @@ mod cross_cell;
 mod elementwise;
 mod expression;
 mod gene_steps;
+mod hvg;
+mod hvg_pass;
 mod kernels;
+mod loess;
 mod memory_limit;
 mod operator;
 mod pipeline;
@@ -48,6 +54,7 @@ pub use block_stream::BlockStream;
 pub use cell_block_pool::CellBlockPool;
 pub use gene_steps::Genes;
 pub use kernels::{KernelValue, Kernels, SUM_LANES, combine_lanes, log1p};
+pub use loess::loess_fitted;
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
 };
@@ -56,7 +63,8 @@ pub use pipeline_block::PipelineBlock;
 pub use qc::{CellQc, GeneSet, QcValues};
 pub use run_control::{Progress, RunControl};
 pub use statistics::{
-    ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, NodeStatistics, Statistics,
+    BatchStatistics, ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, HvgValues,
+    NodeStatistics, Statistics,
 };
 // The block type lives in kyto-store (the tile reader builds it, the writer consumes
 // it); the executor names it from here.

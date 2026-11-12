@@ -13,6 +13,10 @@
 //! block sizes. So a pass gives the same bits on any thread count, any
 //! `blocks_in_flight` and any memory limit; another cell block size (another tiling
 //! of the store, which is the input) changes the leaves and the last bits of the sums.
+//! A pass whose fold depends on the order of every cell before it (Welford's
+//! moments of `seurat_v3` with batches, as scanpy's `aggregate`, task 6.3) asks for
+//! one leaf ([`Accumulator::sequential`]): its blocks are folded one after another in
+//! cell order (reading and the maps stay parallel).
 //! Does not: choose what a leaf sums (see `cross_cell.rs`), or reduce within a block
 //! (the kernels' fixed lanes, task 5.3, do that for row sums).
 
@@ -98,6 +102,7 @@ where
             (source.window.get().saturating_add(1)).saturating_mul(layers_per_block),
         );
         let mut windows = Windows::open(source, &pool)?;
+        let sequential = accumulator.sequential(pass);
         let mut tree = BlockOrderTree::new(Partial::combine);
         // The last leaf of the window before, with its cell block: it goes on if the
         // next window starts with the same cell block (a split cell block).
@@ -106,11 +111,14 @@ where
             let blocks = items.into_iter().collect::<Result<Vec<_>, _>>()?;
             let mut groups: Vec<(u64, Vec<PipelineBlock>)> = Vec::new();
             for block in blocks {
+                // An order-dependent fold (Welford's moments, task 6.3) is one leaf: every
+                // block continues it, in cell order, as the parts of one cell block.
+                let leaf_key = if sequential { 0 } else { block.cell_block };
                 match groups.last_mut() {
-                    Some((cell_block, group)) if *cell_block == block.cell_block => {
+                    Some((key, group)) if *key == leaf_key => {
                         group.push(block);
                     }
-                    _ => groups.push((block.cell_block, vec![block])),
+                    _ => groups.push((leaf_key, vec![block])),
                 }
             }
             let mut starts = Vec::with_capacity(groups.len());
@@ -140,7 +148,7 @@ where
                                 suggestions: Box::default(),
                             }
                         })?;
-                        accumulator.fold(pass, &mut leaf, layer)?;
+                        accumulator.fold(pass, &mut leaf, layer, &block)?;
                         for (_, layer) in block.layers {
                             pool.recycle(layer);
                         }

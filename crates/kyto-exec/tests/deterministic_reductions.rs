@@ -105,7 +105,8 @@ fn scan(store: &Path) -> Arc<Plan> {
 }
 
 /// The plans of every statistics pass the executor runs, by name: HVG gene columns
-/// (statistics only) and a layer after a median `normalize_total`.
+/// (statistics only; `cell_ranger` on the wide-ranging store, `seurat_v3` on counts) and a layer after a median
+/// `normalize_total`.
 fn cases(base: &Arc<Plan>, layer: &str) -> Vec<(&'static str, Output)> {
     let median = base
         .normalize_total(None, Some(layer), "norm")
@@ -118,7 +119,7 @@ fn cases(base: &Arc<Plan>, layer: &str) -> Vec<(&'static str, Output)> {
             .unwrap();
         Output::members(&plan, [Member::GeneColumn("highly_variable".to_owned())]).unwrap()
     };
-    vec![
+    let mut cases = vec![
         (
             "median normalize_total, log1p",
             Output::members(&median, [Member::Layer("log1p".to_owned())]).unwrap(),
@@ -127,9 +128,16 @@ fn cases(base: &Arc<Plan>, layer: &str) -> Vec<(&'static str, Output)> {
             "seurat after a median",
             hvg(&median, "log1p", HvgFlavor::Seurat),
         ),
-        ("cell_ranger", hvg(base, layer, HvgFlavor::CellRanger)),
-        ("seurat_v3", hvg(base, layer, HvgFlavor::SeuratV3)),
-    ]
+    ];
+    // 6.3's refusals: seurat_v3 refuses non-counts (the wide-ranging store's `values`),
+    // cell_ranger refuses equal percentile edges (the fixtures' many genes seen in no
+    // cell, as scanpy); each runs where its columns can be computed.
+    if layer == "values" {
+        cases.push(("cell_ranger", hvg(base, layer, HvgFlavor::CellRanger)));
+    } else {
+        cases.push(("seurat_v3", hvg(base, layer, HvgFlavor::SeuratV3)));
+    }
+    cases
 }
 
 fn moments_bits(moments: &GeneMoments, hasher: &mut DefaultHasher) {

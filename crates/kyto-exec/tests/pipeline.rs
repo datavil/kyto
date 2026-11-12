@@ -21,8 +21,7 @@ use std::time::Duration;
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{CellValues, ExecuteOptions, Pipeline, PipelineBlock};
 use kyto_plan::{
-    HvgFlavor, Member, Operation, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan,
-    physical_plan,
+    Member, Operation, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan,
 };
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
@@ -293,16 +292,9 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     write_store(&store);
     let base = scan(&store);
     let scale = base.scale(Some("counts"), "scaled", true, None).unwrap();
-    let batched = base
-        .highly_variable_genes(Some("counts"), HvgFlavor::SeuratV3, None, Some("cell_id"))
-        .unwrap();
     // `select_genes` and the other 5.8 steps run now, sinks since 5.9.
     let pca = base.pca(Some("counts"), "X_pca", 2, 0).unwrap();
-    for (plan, method, task) in [
-        (&scale, "scale", "6.4"),
-        (&batched, "batch_key", "6.3"),
-        (&pca, "pca", "6.5"),
-    ] {
+    for (plan, method, task) in [(&scale, "scale", "6.4"), (&pca, "pca", "6.5")] {
         let physical = PhysicalPlan::new(plan.optimize(), PhysicalOptions::default());
         let error = Pipeline::new(&physical, 0).unwrap_err();
         assert_eq!(error.code(), "KY-E601");
@@ -416,4 +408,43 @@ fn blocks_in_flight_is_capped_by_the_cell_blocks() {
     assert_eq!(pipeline.blocks_in_flight().get(), 16);
     let (_, _, rows) = rows_of(&collect(&physical, threads(2)), "log1p");
     assert!(rows == expected_rows());
+}
+
+/// `highly_variable_genes` with no cell left (every cell filtered out) is refused,
+/// batched or not, every flavour (bug-hunter: batched `seurat_v3` panicked, batched
+/// `seurat` lost its batch columns).
+#[test]
+fn highly_variable_genes_over_no_cell_is_refused() {
+    use kyto_core::{BinaryOp, CellExpr, Expr, Literal};
+    use kyto_plan::HvgFlavor;
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let none = Expr::binary(
+        CellExpr::column("cell_id"),
+        BinaryOp::Eq,
+        Literal::String("no such cell".to_owned()),
+    )
+    .unwrap();
+    let empty = scan(&store).filter_cells(&none).unwrap();
+    for flavor in [
+        HvgFlavor::Seurat,
+        HvgFlavor::CellRanger,
+        HvgFlavor::SeuratV3,
+    ] {
+        for batch_key in [None, Some("cell_id")] {
+            let plan = empty
+                .highly_variable_genes(Some("counts"), flavor, Some(2), batch_key)
+                .unwrap();
+            let output =
+                Output::members(&plan, [Member::GeneColumn("highly_variable".to_owned())]).unwrap();
+            let physical =
+                physical_plan(&[output], OptimizeOptions::ALL, PhysicalOptions::default());
+            let Err(error) = Pipeline::new(&physical, 0).unwrap().run(threads(2)) else {
+                panic!("{flavor:?} {batch_key:?}: ran over no cell");
+            };
+            assert_eq!(error.code(), "KY-E215", "{flavor:?} {batch_key:?}: {error}");
+            assert!(error.to_string().contains("no cell"), "{error}");
+        }
+    }
 }

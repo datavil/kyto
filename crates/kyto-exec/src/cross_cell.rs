@@ -3,34 +3,33 @@
 //! found.
 //!
 //! Does: lower a median `normalize_total` (alone, or first in a fused pass) and
-//! `highly_variable_genes` (no batches) to a [`CrossCellStage`] that runs exactly the
-//! statistics passes the physical plan gives the node (task 4.5); fold the blocks of
-//! a pass into leaves ([`Partial`], one per store cell block, in cell order) that
-//! combine into the pass's result in a fixed tree in block order (task 5.6,
-//! `reduction.rs`, R11), kept by an [`Accumulator`]; and turn the
-//! result into [`NodeStatistics`] and, for `normalize_total`, the maps of its apply pass
-//! with the median as their target. Median `normalize_total`: one pass of cell totals
+//! `highly_variable_genes` (with or without batches, task 6.3) to a [`CrossCellStage`]
+//! that runs exactly the statistics passes the physical plan gives the node (task
+//! 4.5); fold the blocks of a pass into leaves ([`Partial`], one per store cell block,
+//! in cell order) that combine into the pass's result in a fixed tree in block order
+//! (task 5.6, `reduction.rs`, R11), kept by an [`Accumulator`]; and turn the result
+//! into [`NodeStatistics`] and, for `normalize_total`, the maps of its apply pass with
+//! the median as their target. Median `normalize_total`: one pass of cell totals
 //! (`f64`, [`Kernels::row_sums`], rounded to `f32` as scanpy keeps them, task 6.2),
 //! target = median of the positive totals as `np.median(counts[counts > 0])` on
-//! `float32` (NaN when there is none, as numpy). HVG `seurat` and
-//! `cell_ranger`: one pass of per-gene moments (of `expm1(value)` for `seurat`, as
-//! scanpy undoes the log first); `seurat_v3`: moments, then moments of
-//! `min(value, clip)` per gene with `clip = mean + sqrt(n) * reg_std`.
-//! Does not: fit `seurat_v3`'s loess (`reg_std` here is the gene's own standard
-//! deviation, 1 for a constant gene, a stand-in until 6.3), rank or flag genes (6.3),
-//! batches (6.3), `scale` (6.4) or `pca` (6.5), or run passes (see `reduction.rs`).
+//! `float32` (NaN when there is none, as numpy). HVG: see `hvg_pass.rs` (what its
+//! passes sum: `seurat` and `cell_ranger` one pass, `seurat_v3` two) and `hvg.rs`
+//! (the gene columns, computed by the pipeline once the passes ended).
+//! Does not: `scale` (6.4) or `pca` (6.5), or run passes (see `reduction.rs`).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use kyto_error::KytoError;
 use kyto_plan::{ElementwiseOp, HvgFlavor, MapElementwise};
 use kyto_store::{CellBlock, CellValues};
+use polars::prelude::DataFrame;
 
 use crate::elementwise::{ElementwiseMaps, cell_totals};
-use crate::kernels::{KernelValue, Kernels};
-use crate::statistics::{
-    ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, NodeStatistics,
-};
+use crate::hvg_pass::{BatchColumn, GroupPartial, HvgAccumulator};
+use crate::kernels::Kernels;
+use crate::pipeline_block::PipelineBlock;
+use crate::statistics::NodeStatistics;
 
 /// A cross-cell node of the stream, with the statistics passes the physical plan
 /// gives it.
@@ -52,8 +51,13 @@ pub(crate) enum CrossCellKind {
         maps: Vec<MapElementwise>,
         keep: Option<BTreeSet<String>>,
     },
-    /// `highly_variable_genes` of `layer`, without batches.
-    HighlyVariableGenes { layer: String, flavor: HvgFlavor },
+    /// `highly_variable_genes` of `layer`, per batch of the cell column `batch_key`.
+    HighlyVariableGenes {
+        layer: String,
+        flavor: HvgFlavor,
+        n_top_genes: Option<u64>,
+        batch_key: Option<String>,
+    },
 }
 
 impl CrossCellStage {
@@ -87,19 +91,47 @@ impl CrossCellStage {
         }
     }
 
-    /// An empty accumulator for a stream of `n_genes` genes.
-    pub(crate) fn accumulator(&self, n_genes: usize) -> Accumulator {
+    /// The `batch_key` cell column the passes read, if any.
+    pub(crate) fn batch_key(&self) -> Option<&str> {
         match &self.kind {
-            CrossCellKind::MedianNormalize { .. } => Accumulator::Totals(Vec::new()),
-            CrossCellKind::HighlyVariableGenes { flavor, .. } => Accumulator::Genes {
-                flavor: *flavor,
-                moments: GeneMoments::new(n_genes),
-                clipped: None,
-            },
+            CrossCellKind::HighlyVariableGenes { batch_key, .. } => batch_key.as_deref(),
+            CrossCellKind::MedianNormalize { .. } => None,
         }
     }
 
-    /// The node's statistics, and the maps of its apply pass if it has one.
+    /// An empty accumulator for a stream of `n_genes` genes; `cells` is the store's
+    /// cell table (`store` its path), which a `batch_key` is read from.
+    pub(crate) fn accumulator(
+        &self,
+        n_genes: usize,
+        cells: Option<Arc<DataFrame>>,
+        store: &str,
+    ) -> Accumulator {
+        match &self.kind {
+            CrossCellKind::MedianNormalize { .. } => Accumulator::Totals(Vec::new()),
+            CrossCellKind::HighlyVariableGenes {
+                layer,
+                flavor,
+                batch_key,
+                ..
+            } => {
+                let batch = batch_key
+                    .as_ref()
+                    .zip(cells)
+                    .map(|(name, table)| BatchColumn {
+                        name: name.clone(),
+                        table,
+                        store: store.to_owned(),
+                    });
+                Accumulator::Genes(Box::new(HvgAccumulator::new(
+                    layer, *flavor, n_genes, batch,
+                )))
+            }
+        }
+    }
+
+    /// The node's statistics (for HVG without its gene columns, which need the gene
+    /// table: see `hvg::columns`), and the maps of its apply pass if it has one.
     pub(crate) fn finish(
         &self,
         accumulator: Accumulator,
@@ -110,19 +142,8 @@ impl CrossCellStage {
                 let apply = ElementwiseMaps::new(maps.clone(), keep.as_ref()).with_median(median);
                 (NodeStatistics::MedianTotal(median), Some(apply))
             }
-            (
-                Accumulator::Genes {
-                    flavor,
-                    moments,
-                    clipped,
-                },
-                _,
-            ) => (
-                NodeStatistics::HighlyVariableGenes(HighlyVariableGeneStatistics {
-                    flavor,
-                    moments,
-                    clipped,
-                }),
+            (Accumulator::Genes(genes), _) => (
+                NodeStatistics::HighlyVariableGenes(Box::new(genes.finish())),
                 None,
             ),
             (Accumulator::Totals(_), CrossCellKind::HighlyVariableGenes { .. }) => {
@@ -137,13 +158,8 @@ impl CrossCellStage {
 pub(crate) enum Accumulator {
     /// The positive cell totals, in cell order.
     Totals(Vec<f64>),
-    /// Per-gene moments; `clipped` once the first pass of `seurat_v3` ended (its clip
-    /// set, its moments those of the second pass).
-    Genes {
-        flavor: HvgFlavor,
-        moments: GeneMoments,
-        clipped: Option<ClippedMoments>,
-    },
+    /// `highly_variable_genes`' moments and fits.
+    Genes(Box<HvgAccumulator>),
 }
 
 /// What one leaf of a pass's reduction holds (task 5.6): the sums over one store cell
@@ -152,8 +168,8 @@ pub(crate) enum Accumulator {
 pub(crate) enum Partial {
     /// The positive cell totals, in cell order.
     Totals(Vec<f64>),
-    /// Per-gene moments.
-    Moments(GeneMoments),
+    /// Per-gene moments per group of cells.
+    Groups(GroupPartial),
 }
 
 impl Partial {
@@ -165,17 +181,7 @@ impl Partial {
                 left.extend(right);
                 Self::Totals(left)
             }
-            (Self::Moments(mut left), Self::Moments(right)) => {
-                left.n_cells += right.n_cells;
-                for (sum, right) in left.sums.iter_mut().zip(&right.sums) {
-                    *sum += right;
-                }
-                for (squares, right) in left.sums_of_squares.iter_mut().zip(&right.sums_of_squares)
-                {
-                    *squares += right;
-                }
-                Self::Moments(left)
-            }
+            (Self::Groups(left), Self::Groups(right)) => Self::Groups(left.combine(right)),
             _ => unreachable!("one pass's partials come from Accumulator::leaf"),
         }
     }
@@ -186,32 +192,42 @@ impl Accumulator {
     pub(crate) fn leaf(&self) -> Partial {
         match self {
             Self::Totals(_) => Partial::Totals(Vec::new()),
-            Self::Genes { moments, .. } => Partial::Moments(GeneMoments::new(moments.sums.len())),
+            Self::Genes(genes) => Partial::Groups(genes.leaf()),
         }
     }
 
-    /// Add `block` (the stream's input layer of rows of one cell block) to `leaf`, a
-    /// leaf of pass `pass` (0-based); a leaf's blocks come in cell order.
+    /// Whether pass `pass` must fold every block into one leaf, in cell order (its sums
+    /// depend on the order of the cells: `seurat_v3`'s Welford moments with batches).
+    pub(crate) fn sequential(&self, pass: u32) -> bool {
+        match self {
+            Self::Totals(_) => false,
+            Self::Genes(genes) => genes.sequential(pass),
+        }
+    }
+
+    /// Add `layer` (the stream's input layer of `block`, rows of one cell block) to
+    /// `leaf`, a leaf of pass `pass` (0-based); a leaf's blocks come in cell order.
     ///
     /// # Errors
     /// `KY-E117` if the block's genes are not the accumulator's (a stream that
-    /// changed shape: a kyto bug, reported, never a panic).
+    /// changed shape: a kyto bug, reported, never a panic); HVG's batch errors.
     pub(crate) fn fold(
         &self,
         pass: u32,
         leaf: &mut Partial,
-        block: &CellBlock,
+        layer: &CellBlock,
+        block: &PipelineBlock,
     ) -> Result<(), KytoError> {
         match (self, leaf) {
             (Self::Totals(_), Partial::Totals(totals)) => {
                 let mut row_totals = Vec::new();
                 let kernels = Kernels::detected();
-                match block.data() {
+                match layer.data() {
                     CellValues::F32(values) => {
-                        cell_totals(kernels, block.indptr(), values, &mut row_totals);
+                        cell_totals(kernels, layer.indptr(), values, &mut row_totals);
                     }
                     CellValues::U32(values) => {
-                        cell_totals(kernels, block.indptr(), values, &mut row_totals);
+                        cell_totals(kernels, layer.indptr(), values, &mut row_totals);
                     }
                 }
                 // scanpy keeps the totals in the data's float32 (task 6.2); NaN is not
@@ -224,125 +240,31 @@ impl Accumulator {
                 );
                 Ok(())
             }
-            (
-                Self::Genes {
-                    flavor, clipped, ..
-                },
-                Partial::Moments(moments),
-            ) => {
-                if block.n_genes() as usize != moments.sums.len() {
-                    return Err(KytoError::InvalidCellBlock {
-                        context: "highly_variable_genes statistics pass".to_owned(),
-                        problem: format!(
-                            "a statistics pass over {} genes got a block of {} genes",
-                            moments.sums.len(),
-                            block.n_genes()
-                        ),
-                    });
-                }
-                let mut gene_values = GeneValues::new(block);
-                if pass == 0 {
-                    let expm1 = *flavor == HvgFlavor::Seurat;
-                    add_moments_by_gene(moments, &mut gene_values, |_, value| {
-                        if expm1 { value.exp_m1() } else { value }
-                    });
-                } else {
-                    let Some(clipped) = clipped else {
-                        unreachable!("end_pass(0) of seurat_v3 sets the clip")
-                    };
-                    let clip = &clipped.clip;
-                    add_moments_by_gene(moments, &mut gene_values, |gene, value| {
-                        value.min(clip[gene])
-                    });
-                }
-                Ok(())
-            }
+            (Self::Genes(genes), Partial::Groups(groups)) => genes.fold(pass, groups, layer, block),
             _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
         }
     }
 
     /// End pass `pass` with its reduction over every leaf (`None` for a stream without
-    /// cells): keep it, and for `seurat_v3`'s first pass set the second pass's clip.
-    pub(crate) fn end_pass(&mut self, pass: u32, reduced: Option<Partial>) {
-        let reduced = reduced.unwrap_or_else(|| self.leaf());
+    /// cells): keep it, and for `seurat_v3`'s first pass fit the second pass's clip.
+    ///
+    /// # Errors
+    /// `KY-E215` if `seurat_v3` read a value that is not a count.
+    pub(crate) fn end_pass(
+        &mut self,
+        pass: u32,
+        reduced: Option<Partial>,
+    ) -> Result<(), KytoError> {
         match (self, reduced) {
-            (Self::Totals(totals), Partial::Totals(reduced)) => *totals = reduced,
-            (
-                Self::Genes {
-                    flavor,
-                    moments,
-                    clipped,
-                },
-                Partial::Moments(reduced),
-            ) => {
-                if pass == 0 {
-                    *moments = reduced;
-                    if *flavor == HvgFlavor::SeuratV3 {
-                        *clipped = Some(ClippedMoments {
-                            clip: seurat_v3_clip(moments),
-                            moments: GeneMoments::new(moments.sums.len()),
-                        });
-                    }
-                } else if let Some(clipped) = clipped {
-                    clipped.moments = reduced;
-                }
+            (Self::Totals(totals), Some(Partial::Totals(reduced))) => *totals = reduced,
+            (Self::Totals(totals), None) => totals.clear(),
+            (Self::Genes(genes), Some(Partial::Groups(reduced))) => {
+                genes.end_pass(pass, Some(reduced))?;
             }
+            (Self::Genes(genes), None) => genes.end_pass(pass, None)?,
             _ => unreachable!("a pass's reduction comes from Accumulator::leaf"),
         }
-    }
-}
-
-/// `seurat_v3`'s clip per gene: `mean + sqrt(n) * reg_std`, `reg_std` the gene's own
-/// standard deviation (1 for a gene of variance 0 or NaN, as scanpy's unfitted genes):
-/// a stand-in for scanpy's loess-regressed one until 6.3.
-fn seurat_v3_clip(moments: &GeneMoments) -> Vec<f64> {
-    let sqrt_n = (moments.n_cells as f64).sqrt();
-    moments
-        .means()
-        .into_iter()
-        .zip(moments.variances())
-        .map(|(mean, variance)| {
-            let reg_std = if variance > 0.0 { variance.sqrt() } else { 1.0 };
-            reg_std * sqrt_n + mean
-        })
-        .collect()
-}
-
-fn add_moments_by_gene(
-    moments: &mut GeneMoments,
-    gene_values: &mut GeneValues<'_>,
-    transform: impl Fn(usize, f64) -> f64,
-) {
-    moments.n_cells += gene_values.rows;
-    gene_values.for_each(|gene, value| {
-        let value = transform(gene, value);
-        moments.sums[gene] += value;
-        moments.sums_of_squares[gene] += value * value;
-    });
-}
-
-/// The (gene, value as `f64`) of every stored value of a block, in storage order.
-struct GeneValues<'a> {
-    block: &'a CellBlock,
-    rows: u64,
-}
-
-impl<'a> GeneValues<'a> {
-    fn new(block: &'a CellBlock) -> Self {
-        let rows = block.indptr().len().saturating_sub(1) as u64;
-        Self { block, rows }
-    }
-
-    fn for_each(&mut self, mut add: impl FnMut(usize, f64)) {
-        fn each<T: KernelValue>(indices: &[u32], values: &[T], add: &mut impl FnMut(usize, f64)) {
-            for (&gene, &value) in indices.iter().zip(values) {
-                add(gene as usize, value.to_f64());
-            }
-        }
-        match self.block.data() {
-            CellValues::F32(values) => each(self.block.indices(), values, &mut add),
-            CellValues::U32(values) => each(self.block.indices(), values, &mut add),
-        }
+        Ok(())
     }
 }
 
@@ -368,17 +290,40 @@ pub(crate) fn starts_with_median(maps: &[MapElementwise]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use polars::prelude::DataFrame;
+
     use super::*;
+
+    /// A stream block holding `layer` alone, over cells `0..rows`.
+    fn pipeline_block(layer: &CellBlock) -> PipelineBlock {
+        let rows = layer.indptr().len() - 1;
+        PipelineBlock {
+            cell_block: 0,
+            cells: (0..rows as u64).collect(),
+            layers: std::collections::BTreeMap::new(),
+            columns: DataFrame::empty_with_height(rows),
+        }
+    }
 
     /// Run every pass of `stage` over `block`, one leaf a pass.
     fn run_passes(stage: &CrossCellStage, n_genes: usize, block: &CellBlock) -> Accumulator {
-        let mut accumulator = stage.accumulator(n_genes);
+        let mut accumulator = stage.accumulator(n_genes, None, "store");
+        let rows = pipeline_block(block);
         for pass in 0..stage.passes {
             let mut leaf = accumulator.leaf();
-            accumulator.fold(pass, &mut leaf, block).unwrap();
-            accumulator.end_pass(pass, Some(leaf));
+            accumulator.fold(pass, &mut leaf, block, &rows).unwrap();
+            accumulator.end_pass(pass, Some(leaf)).unwrap();
         }
         accumulator
+    }
+
+    fn hvg(flavor: HvgFlavor) -> CrossCellKind {
+        CrossCellKind::HighlyVariableGenes {
+            layer: "counts".to_owned(),
+            flavor,
+            n_top_genes: None,
+            batch_key: None,
+        }
     }
 
     #[test]
@@ -400,17 +345,10 @@ mod tests {
     }
 
     #[test]
-    fn gene_moments_follow_get_mean_var() {
+    fn gene_moments_follow_mean_var() {
         // Cells: [1, 0] [3, 2]
         let block = CellBlock::from_u32(vec![0, 1, 3], vec![0, 0, 1], vec![1, 3, 2], 2).unwrap();
-        let stage = CrossCellStage::new(
-            0,
-            1,
-            CrossCellKind::HighlyVariableGenes {
-                layer: "counts".to_owned(),
-                flavor: HvgFlavor::CellRanger,
-            },
-        );
+        let stage = CrossCellStage::new(0, 1, hvg(HvgFlavor::CellRanger));
         let accumulator = run_passes(&stage, 2, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), None) = stage.finish(accumulator)
         else {
@@ -420,6 +358,7 @@ mod tests {
         assert_eq!(moments.n_cells(), 2);
         assert_eq!(moments.sums(), [4.0, 2.0]);
         assert_eq!(moments.sums_of_squares(), [10.0, 4.0]);
+        assert_eq!(moments.positives(), [2, 1]);
         assert_eq!(moments.means(), [2.0, 1.0]);
         assert_eq!(moments.variances(), [2.0, 2.0]);
         assert!(statistics.clipped().is_none());
@@ -427,62 +366,73 @@ mod tests {
 
     #[test]
     fn seurat_v3_clips_in_its_second_pass() {
-        // Gene 0 over 4 cells: [0, 0, 0, 8]: mean 2, variance 16, clip 2 + 2 * 4 = 10.
-        // Gene 1: [1, 1, 1, 1]: variance 0, reg_std 1, clip 1 + 2 = 3.
-        let block = CellBlock::from_u32(
-            vec![0, 1, 2, 3, 5],
-            vec![1, 1, 1, 0, 1],
-            vec![1, 1, 1, 8, 1],
-            2,
-        )
-        .unwrap();
-        let stage = CrossCellStage::new(
-            0,
-            2,
-            CrossCellKind::HighlyVariableGenes {
-                layer: "counts".to_owned(),
-                flavor: HvgFlavor::SeuratV3,
-            },
-        );
-        let accumulator = run_passes(&stage, 2, &block);
+        // 8 cells, 25 genes: gene 0 is 1 in every cell (variance 0, so reg_std 1 and
+        // clip 1 + sqrt(8)); genes 1..25 vary, enough points for
+        // the loess (skmisc refuses fewer).
+        let (n_cells, n_genes) = (8_u32, 25_u32);
+        let (mut indptr, mut indices, mut values) = (vec![0], Vec::new(), Vec::new());
+        for cell in 0..n_cells {
+            for gene in 0..n_genes {
+                let value = if gene == 0 {
+                    1
+                } else {
+                    (cell * gene + gene) % (gene + 3)
+                };
+                if value != 0 {
+                    indices.push(gene);
+                    values.push(value);
+                }
+            }
+            indptr.push(indices.len() as u64);
+        }
+        let block = CellBlock::from_u32(indptr, indices, values, u64::from(n_genes)).unwrap();
+        let stage = CrossCellStage::new(0, 2, hvg(HvgFlavor::SeuratV3));
+        let accumulator = run_passes(&stage, n_genes as usize, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), None) = stage.finish(accumulator)
         else {
             panic!("expected HVG statistics")
         };
         let clipped = statistics.clipped().unwrap();
-        assert_eq!(clipped.clip(), [10.0, 3.0]);
-        assert_eq!(clipped.moments().sums(), [8.0, 4.0]);
-        assert_eq!(clipped.moments().n_cells(), 4);
+        assert_eq!(clipped.clip()[0], 1.0 + 8_f64.sqrt());
+        assert_eq!(clipped.regularized_std()[0], 1.0);
+        assert_eq!(clipped.moments().sums()[0], 8.0);
+        assert_eq!(clipped.moments().n_cells(), 8);
+        assert!(clipped.clip()[1..].iter().all(|clip| clip.is_finite()));
     }
 
     #[test]
-    fn seurat_moments_are_of_expm1() {
+    fn seurat_v3_refuses_values_that_are_not_counts() {
+        let block = CellBlock::from_f32(vec![0, 1], vec![0], vec![1.5], 1).unwrap();
+        let stage = CrossCellStage::new(0, 2, hvg(HvgFlavor::SeuratV3));
+        let mut accumulator = stage.accumulator(1, None, "store");
+        let mut leaf = accumulator.leaf();
+        accumulator
+            .fold(0, &mut leaf, &block, &pipeline_block(&block))
+            .unwrap();
+        let error = accumulator.end_pass(0, Some(leaf)).unwrap_err();
+        assert_eq!(error.code(), "KY-E215");
+        assert!(error.to_string().contains("1.5"), "{error}");
+    }
+
+    #[test]
+    fn seurat_moments_are_of_expm1_in_float32() {
         let block = CellBlock::from_f32(vec![0, 1], vec![0], vec![1.0], 1).unwrap();
-        let stage = CrossCellStage::new(
-            0,
-            1,
-            CrossCellKind::HighlyVariableGenes {
-                layer: "log1p".to_owned(),
-                flavor: HvgFlavor::Seurat,
-            },
-        );
+        let stage = CrossCellStage::new(0, 1, hvg(HvgFlavor::Seurat));
         let accumulator = run_passes(&stage, 1, &block);
         let (NodeStatistics::HighlyVariableGenes(statistics), _) = stage.finish(accumulator) else {
             panic!("expected HVG statistics")
         };
-        assert_eq!(statistics.moments().sums(), [1.0_f64.exp_m1()]);
+        let expm1 = 1.0_f64.exp_m1() as f32;
+        assert_eq!(statistics.moments().sums(), [f64::from(expm1)]);
+        assert_eq!(
+            statistics.moments().sums_of_squares(),
+            [f64::from(expm1 * expm1)]
+        );
     }
 
     #[test]
     #[should_panic(expected = "statistics passes")]
     fn a_pass_count_the_statistics_do_not_need_is_a_bug() {
-        let _ = CrossCellStage::new(
-            3,
-            1,
-            CrossCellKind::HighlyVariableGenes {
-                layer: "counts".to_owned(),
-                flavor: HvgFlavor::SeuratV3,
-            },
-        );
+        let _ = CrossCellStage::new(3, 1, hvg(HvgFlavor::SeuratV3));
     }
 }

@@ -5,13 +5,15 @@
 //! today (the scan's layers, `with_default_layer`, per-cell `normalize_total`/`log1p`
 //! maps, alone or fused, the cross-cell nodes of task 5.4: a median
 //! `normalize_total`, alone or first in a fused pass, and `highly_variable_genes`
-//! without batches, and the steps of task 5.8: cell and gene filters, `select_genes`,
-//! `take_cells`, `with_cells` and `with_genes`), and refuse the rest with `KY-E601`
-//! naming the task that adds it, before anything is read. Cell steps run on every
-//! block (`cell_steps.rs`); gene steps run once, in plan order, between the statistics
+//! (with or without batches; its gene columns join the gene table, task 6.3), and
+//! the steps of task 5.8: cell and gene filters, `select_genes`, `take_cells`,
+//! `with_cells` and `with_genes`), and refuse the rest with `KY-E601` naming the task
+//! that adds it, before anything is read. Cell steps run on every block
+//! (`cell_steps.rs`); gene steps run once, in plan order, between the statistics
 //! passes (`gene_steps.rs`: a step reading a cell's profile streams the store once to
-//! collect it), and leave a gene selection for the blocks after them. The cell and gene
-//! tables are read (from the scan's local store) only when a step needs them. [`Pipeline::run`] opens the scan's layers once, runs every
+//! collect it), and leave a gene selection for the blocks after them. The cell and
+//! gene tables are read (from the scan's local store) only when a step needs them.
+//! [`Pipeline::run`] opens the scan's layers once, runs every
 //! cross-cell node's statistics passes in plan order (each pass streams the node's
 //! input again from the scan, through the stages below it; exactly the passes the
 //! physical plan gives the node; its blocks reduced in a fixed tree in block order,
@@ -23,7 +25,7 @@
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
 //! A plan ending in a sink keeps what it writes ([`crate::sink`], task 5.9;
 //! [`Pipeline::sink`] runs it).
-//! Does not: `scale`, `pca`, HVG batches, neighbours, clusterings, expression leaves
+//! Does not: `scale`, `pca`, neighbours, clusterings, expression leaves
 //! reading embeddings or recomputing stored columns (see the error each one gives), or
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
@@ -49,12 +51,13 @@ use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
 use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
+use crate::hvg;
 use crate::operator::Operator;
 use crate::qc::{CellQc, GeneSet};
 use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
 use crate::sink::SinkSpec;
-use crate::statistics::Statistics;
+use crate::statistics::{NodeStatistics, Statistics};
 
 /// How a pipeline runs, apart from the plan.
 #[derive(Debug, Clone)]
@@ -194,7 +197,6 @@ impl Pipeline {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
         stages.reverse();
-        refuse_unwritten_gene_columns(&stages)?;
         let root = scan.root();
         let schema = root.schema();
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
@@ -394,7 +396,11 @@ impl Pipeline {
                 Stage::CrossCell(cross_cell) => cross_cell,
             };
             let n_genes = usize::try_from(tables.n_genes()).unwrap_or(usize::MAX);
-            let mut accumulator = cross_cell.accumulator(n_genes);
+            let cells = match cross_cell.batch_key() {
+                Some(_) => Some(tables.cells()?),
+                None => None,
+            };
+            let mut accumulator = cross_cell.accumulator(n_genes, cells, &self.store);
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
             for pass in 0..cross_cell.passes {
                 // A tree in block order over the store's cell blocks (task 5.6, R11).
@@ -405,9 +411,20 @@ impl Pipeline {
                     &accumulator,
                     pass,
                 )?;
-                accumulator.end_pass(pass, reduced);
+                accumulator.end_pass(pass, reduced)?;
             }
-            let (node_statistics, apply) = cross_cell.finish(accumulator);
+            let (mut node_statistics, apply) = cross_cell.finish(accumulator);
+            if let (
+                NodeStatistics::HighlyVariableGenes(hvg),
+                CrossCellKind::HighlyVariableGenes { n_top_genes, .. },
+            ) = (&mut node_statistics, &cross_cell.kind)
+            {
+                // The gene columns (task 6.3), in the gene table later steps read.
+                let genes = tables.genes()?;
+                let ids = genes.ids(&self.store)?;
+                hvg.columns = hvg::columns(hvg, *n_top_genes, &ids)?;
+                genes.set_columns(&hvg.columns, &self.store)?;
+            }
             statistics.nodes.insert(cross_cell.node, node_statistics);
             operators.extend(apply.map(Operator::Maps));
         }
@@ -455,19 +472,18 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
             CrossCellOp::HighlyVariableGenes {
                 layer,
                 flavor,
-                batch_key: None,
-                ..
+                n_top_genes,
+                batch_key,
             } => {
                 let kind = CrossCellKind::HighlyVariableGenes {
                     layer: layer.clone(),
                     flavor: *flavor,
+                    n_top_genes: *n_top_genes,
+                    batch_key: batch_key.clone(),
                 };
                 Ok(Some(Stage::CrossCell(CrossCellStage::new(
                     index, passes, kind,
                 ))))
-            }
-            CrossCellOp::HighlyVariableGenes { .. } => {
-                Err(not_yet("highly_variable_genes(batch_key=...)", "6.3"))
             }
             CrossCellOp::Scale { .. } => Err(not_yet(plan.node().method(), "6.4")),
             CrossCellOp::Pca { .. } => Err(not_yet(plan.node().method(), "6.5")),
@@ -539,77 +555,6 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
         // `Operation::Scan`.
         Plan::Scan(_) | Plan::Sink(_) => Ok(None),
     }
-}
-
-/// `KY-E601` for a step that reads a gene column `highly_variable_genes` writes below
-/// it: its statistics do not become gene columns before task 6.3, and a stored column
-/// of the same name would be read stale (bug-hunter, 5.8).
-fn refuse_unwritten_gene_columns(stages: &[Stage]) -> Result<(), KytoError> {
-    let mut unwritten: BTreeSet<String> = BTreeSet::new();
-    for stage in stages {
-        let mut reads: Vec<&str> = Vec::new();
-        let mut qc_reads: Vec<Prepared> = Vec::new();
-        let mut cell_prepared: Vec<&Prepared> = Vec::new();
-        match stage {
-            Stage::CrossCell(cross_cell) => {
-                if let CrossCellKind::HighlyVariableGenes { flavor, .. } = &cross_cell.kind {
-                    unwritten.extend(
-                        kyto_plan::hvg_columns(*flavor, false)
-                            .into_iter()
-                            .map(|column| column.name),
-                    );
-                }
-            }
-            Stage::Genes { kind, .. } => match kind {
-                GeneStepKind::Filter(predicate) => {
-                    reads.extend(predicate.columns.iter().map(String::as_str))
-                }
-                GeneStepKind::Select(_) => {}
-                GeneStepKind::Columns(columns) => {
-                    for (_, prepared, _) in columns {
-                        reads.extend(prepared.columns.iter().map(String::as_str));
-                    }
-                }
-            },
-            Stage::Cells(CellStage::Filter(predicate)) => cell_prepared.push(predicate),
-            Stage::Cells(CellStage::Columns(columns)) => {
-                cell_prepared.extend(columns.iter().map(|(_, prepared, _)| prepared));
-            }
-            Stage::Cells(CellStage::Take(_)) | Stage::Maps(_) => {}
-        }
-        // A QC metric's gene set reads gene columns too.
-        for prepared in cell_prepared {
-            for leaf in &prepared.leaves {
-                if let Source::Qc { metric, .. } = leaf
-                    && let Some(genes) = metric.genes()
-                {
-                    qc_reads.push(Prepared::new(genes.node()));
-                }
-            }
-        }
-        reads.extend(
-            qc_reads
-                .iter()
-                .flat_map(|prepared| prepared.columns.iter().map(String::as_str)),
-        );
-        if let Some(name) = reads.iter().find(|name| unwritten.contains(**name)) {
-            return Err(not_yet(
-                &format!("reading the gene column '{name}' that highly_variable_genes writes"),
-                "6.3",
-            ));
-        }
-        // A with_genes column of that name replaces it.
-        if let Stage::Genes {
-            kind: GeneStepKind::Columns(columns),
-            ..
-        } = stage
-        {
-            for (name, _, _) in columns {
-                unwritten.remove(name);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// A resolved cell expression of `method`, whose leaves the stream computes: table

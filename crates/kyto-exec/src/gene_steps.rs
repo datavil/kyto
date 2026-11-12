@@ -27,6 +27,7 @@ use crate::block_stream::{StreamSource, Windows};
 use crate::cell_block_pool::CellBlockPool;
 use crate::expression::{Prepared, cast, mask};
 use crate::pipeline_block::PipelineBlock;
+use crate::statistics::HvgValues;
 
 /// The genes present at a step of the stream, and their table.
 #[derive(Debug, Clone)]
@@ -68,6 +69,46 @@ impl Genes {
     /// Whether no gene is present.
     pub fn is_empty(&self) -> bool {
         self.positions.is_empty()
+    }
+
+    /// The gene IDs of the genes present, in the stream's gene order.
+    ///
+    /// # Errors
+    /// `KY-E113` if the table has no string `gene_id` column.
+    pub(crate) fn ids(&self, store: &str) -> Result<Vec<String>, KytoError> {
+        let path = format!("{store}/genes.parquet");
+        let ids = self
+            .table
+            .column("gene_id")
+            .and_then(|column| column.str().cloned())
+            .map_err(|error| corrupt(&path, error.to_string()))?;
+        Ok(ids
+            .iter()
+            .map(|id| id.unwrap_or_default().to_owned())
+            .collect())
+    }
+
+    /// Add (or replace) the gene columns `highly_variable_genes` computed (task 6.3).
+    ///
+    /// # Errors
+    /// `KY-E113` if a column does not have one value per gene present.
+    pub(crate) fn set_columns(
+        &mut self,
+        columns: &[(String, HvgValues)],
+        store: &str,
+    ) -> Result<(), KytoError> {
+        let path = format!("{store}/genes.parquet");
+        for (name, values) in columns {
+            let series = match values {
+                HvgValues::Boolean(values) => Series::new(name.into(), values),
+                HvgValues::Float64(values) => Series::new(name.into(), values),
+                HvgValues::Int64(values) => Series::new(name.into(), values),
+            };
+            self.table
+                .with_column(series.into())
+                .map_err(|error| corrupt(&path, error.to_string()))?;
+        }
+        Ok(())
     }
 
     /// The position among the genes present of the gene `gene_id`, if present.

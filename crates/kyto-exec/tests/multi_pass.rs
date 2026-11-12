@@ -175,6 +175,7 @@ fn moments_by_hand(
     layer: &str,
     n_genes: usize,
     transform: impl Fn(usize, f64) -> f64,
+    float32: bool,
 ) -> (u64, Vec<f64>, Vec<f64>) {
     let mut leaves: Vec<(u64, Moments)> = Vec::new();
     for block in blocks {
@@ -196,8 +197,15 @@ fn moments_by_hand(
         };
         for (&gene, value) in layer.indices().iter().zip(values) {
             let value = transform(gene as usize, value);
+            // A first pass squares each value in float32, as scanpy's numba kernel
+            // squares float32 data (task 6.3).
+            let square = if float32 {
+                f64::from(value as f32 * value as f32)
+            } else {
+                value * value
+            };
             sums[gene as usize] += value;
-            squares[gene as usize] += value * value;
+            squares[gene as usize] += square;
         }
     }
     let leaves: Vec<_> = leaves.into_iter().map(|(_, leaf)| leaf).collect();
@@ -328,6 +336,11 @@ fn hvg_on_fixtures_needs_exactly_the_passes_explain_reports() {
             ("seurat after a median", &median, HvgFlavor::Seurat, "log1p"),
         ];
         for (case, input, flavor, hvg_layer) in cases {
+            if flavor == HvgFlavor::CellRanger && name == "pbmc3k" {
+                // pbmc3k's genes seen in no cell give equal percentile edges, refused as
+                // scanpy (6.3); hvg_parity.rs runs it on the genes in >= 3 cells.
+                continue;
+            }
             let plan = input
                 .highly_variable_genes(Some(hvg_layer), flavor, Some(100), None)
                 .unwrap();
@@ -373,22 +386,32 @@ fn hvg_on_fixtures_needs_exactly_the_passes_explain_reports() {
             assert_eq!(hvg.flavor(), flavor);
             match flavor {
                 HvgFlavor::Seurat if case == "seurat" => {
-                    let by_hand =
-                        moments_by_hand(&logged, "log1p", n_genes, |_, value| value.exp_m1());
+                    let by_hand = moments_by_hand(
+                        &logged,
+                        "log1p",
+                        n_genes,
+                        |_, value| f64::from(value.exp_m1() as f32),
+                        true,
+                    );
                     assert_moments(hvg.moments(), &by_hand);
                 }
                 HvgFlavor::CellRanger => {
-                    let by_hand = moments_by_hand(&logged, "log1p", n_genes, |_, value| value);
+                    let by_hand =
+                        moments_by_hand(&logged, "log1p", n_genes, |_, value| value, true);
                     assert_moments(hvg.moments(), &by_hand);
                 }
                 HvgFlavor::SeuratV3 => {
-                    let by_hand = moments_by_hand(&counts, &layer, n_genes, |_, value| value);
+                    let by_hand = moments_by_hand(&counts, &layer, n_genes, |_, value| value, true);
                     assert_moments(hvg.moments(), &by_hand);
                     let clipped = hvg.clipped().unwrap();
                     let clip = clipped.clip();
-                    let by_hand = moments_by_hand(&counts, &layer, n_genes, |gene, value| {
-                        value.min(clip[gene])
-                    });
+                    let by_hand = moments_by_hand(
+                        &counts,
+                        &layer,
+                        n_genes,
+                        |gene, value| value.min(clip[gene]),
+                        false,
+                    );
                     assert_moments(clipped.moments(), &by_hand);
                 }
                 HvgFlavor::Seurat => {
@@ -403,7 +426,12 @@ fn hvg_on_fixtures_needs_exactly_the_passes_explain_reports() {
                 }
             }
             let (_, on_four, _) = run(&physical, &storage, threads(4));
-            assert_eq!(on_four, statistics, "{case}: same statistics on 4 threads");
+            // Debug text: the gene columns hold NaN (6.3), which `==` never equals.
+            assert_eq!(
+                format!("{on_four:?}"),
+                format!("{statistics:?}"),
+                "{case}: same statistics on 4 threads"
+            );
 
             // An output reading a layer adds the final pass.
             let all = physical_plan(&[Output::all(&plan)], OptimizeOptions::ALL, options());

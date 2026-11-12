@@ -883,32 +883,69 @@ fn one_row_blocks_give_the_same_bits() {
     }
 }
 
-/// A step reading a gene column `highly_variable_genes` writes is refused before
-/// reading (6.3 writes those columns): the stored `highly_variable` of the same name
-/// would be read stale, a new one like `dispersions_norm` is not there (bug-hunter).
+/// A step reading a gene column `highly_variable_genes` writes reads the written one
+/// (6.3), not the stored `highly_variable` of the same name; a new one like
+/// `dispersions_norm` is there too.
 #[test]
-fn columns_hvg_writes_wait_for_6_3() {
+fn columns_hvg_writes_are_read_downstream() {
     let hvg = scan(&fixture().path)
         .highly_variable_genes(Some("log1p"), kyto_plan::HvgFlavor::Seurat, Some(1), None)
         .unwrap();
+    let all_genes = execute(&hvg, all_rules()).unwrap().gene_table;
+    let flags: Vec<bool> = all_genes
+        .column("highly_variable")
+        .unwrap()
+        .bool()
+        .unwrap()
+        .iter()
+        .map(Option::unwrap)
+        .collect();
+    let norms: Vec<f64> = all_genes
+        .column("dispersions_norm")
+        .unwrap()
+        .f64()
+        .unwrap()
+        .iter()
+        .map(|value| value.unwrap_or(f64::NAN))
+        .collect();
+    let ids: Vec<String> = all_genes
+        .column("gene_id")
+        .unwrap()
+        .str()
+        .unwrap()
+        .iter()
+        .map(|id| id.unwrap().to_owned())
+        .collect();
+    // Six genes in 20 bins: each bin's dispersion is normalised to 1, ties are
+    // flagged together (as scanpy's `>=` cutoff), the unexpressed gene is not.
+    assert!(flags.contains(&true) && flags.contains(&false), "{flags:?}");
     for column in ["highly_variable", "dispersions_norm"] {
         let predicate = match column {
             "highly_variable" => GeneExpr::column(column),
             _ => Expr::binary(GeneExpr::column(column), BinaryOp::Gt, Literal::Float(0.0)).unwrap(),
         };
-        let plan = hvg.filter_genes(&predicate).unwrap();
-        let error = execute(&plan, all_rules()).unwrap_err();
-        assert_eq!(error.code(), "KY-E601", "{column}");
-        assert!(error.to_string().contains("6.3"), "{error}");
+        let kept = execute(&hvg.filter_genes(&predicate).unwrap(), all_rules())
+            .unwrap()
+            .gene_table;
+        let kept: Vec<String> = kept
+            .column("gene_id")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .map(|id| id.unwrap().to_owned())
+            .collect();
+        let expected: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .filter(|&(gene, _)| match column {
+                "highly_variable" => flags[gene],
+                // A NaN kyto writes compares as in Polars, above every number
+                // (deviations.md, `NaN` in float metadata).
+                _ => norms[gene] > 0.0 || norms[gene].is_nan(),
+            })
+            .map(|(_, id)| id.clone())
+            .collect();
+        assert_eq!(kept, expected, "{column}");
     }
-    // A with_genes column of that name replaces it; reading it then runs.
-    let replaced = hvg
-        .with_genes([(
-            "highly_variable".to_owned(),
-            Expr::binary(GeneExpr::column("mean"), BinaryOp::Gt, Literal::Float(1.0)).unwrap(),
-        )])
-        .unwrap()
-        .filter_genes(&GeneExpr::column("highly_variable"))
-        .unwrap();
-    execute(&replaced, all_rules()).unwrap();
 }
