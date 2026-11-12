@@ -3,8 +3,8 @@
 Done when: adding a column named ``CD3E`` after a plan is built does not change that
 plan's output. The stores are ``.h5ad`` files converted with ``kyto.convert`` (they need
 anndata and skip without it); the grammar is ``docs/feature_names.md``. Every case is
-also covered without a store by ``crates/kyto-core/tests/resolve.rs`` and
-``crates/kyto-plan/tests/resolve_in_plan.rs``.
+also covered without a store by ``crates/kyto-core/tests/it/resolve.rs`` and
+``crates/kyto-plan/tests/it/resolve_in_plan.rs``.
 """
 
 # pandas and anndata ship without complete type information; strict pyright cannot see

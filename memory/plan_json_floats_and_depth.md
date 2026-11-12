@@ -16,4 +16,4 @@ with loops, which also writes a shared `Arc` subtree once instead of once per us
 so every 4.2 check runs again; the resolver is idempotent on resolved expressions, which
 is what makes the round trip exact. Keep it so when adding a node or a resolver rule:
 add the node to `plan_json.rs` (`Step`) and to the corpus in
-`crates/kyto-plan/tests/plan_json.rs`.
+`crates/kyto-plan/tests/it/plan_json.rs`.

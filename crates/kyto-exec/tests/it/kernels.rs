@@ -205,8 +205,8 @@ fn kernels_run_on_the_detected_instruction_set() {
 
 /// Every `f32` from -1 up through `log1p`: kyto's value against libm's `f32::ln_1p` and
 /// against `f64::ln_1p` rounded to `f32`. Prints the counts; asserts at most 1 ulp from
-/// libm. Run on purpose: `cargo test --release -p kyto-exec --test kernels -- --ignored
-/// --nocapture`.
+/// libm. Run on purpose: `cargo test --release -p kyto-exec --test it -- kernels::
+/// --ignored --nocapture`.
 #[test]
 #[ignore = "walks 3.2e9 floats; run in release on purpose"]
 fn log1p_over_every_f32() {

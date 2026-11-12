@@ -1,7 +1,7 @@
 """``kyto.convert`` from Python: arguments, duplicate IDs, empty inputs, coded errors.
 
 Values against anndata for every fixture and input format are checked by the Rust test
-``crates/kyto-store/tests/import_parity.rs`` (it reads the store with the tile reader).
+``crates/kyto-store/tests/it/import_parity.rs`` (it reads the store with the tile reader).
 These tests cover the Python surface: the doctest, ``on_duplicate_ids``, 0-cell and
 0-gene inputs, and the coded error of each failure. Tests that write ``.h5ad`` files
 need anndata or h5py and skip without them.

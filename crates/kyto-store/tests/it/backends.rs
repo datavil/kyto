@@ -11,6 +11,9 @@
 //! `KYTO_TEST_S3_ENDPOINT` (`http://127.0.0.1:9000`), `KYTO_TEST_S3_BUCKET`,
 //! `KYTO_TEST_S3_ACCESS_KEY_ID`, `KYTO_TEST_S3_SECRET_ACCESS_KEY`.
 
+// Test helpers may unwrap (clippy.toml allows it in tests).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};

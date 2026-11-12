@@ -44,7 +44,7 @@ stats_alloc = "0.1.10"
 # Peak heap bytes for the 5.5 memory-limit check, against the estimate (as kyto-plan's 4.6 check).
 peak_alloc = "0.3.0"
 proptest = "1.11.0"
-# The 4.4 reference evaluator's dataset schema (`kyto-plan/tests/support`, task 5.8).
+# The 4.4 reference evaluator's dataset schema (`kyto-plan/tests/it/support.rs`, task 5.8).
 serde_json = "1.0.154"
 # Kernel benches (task 5.3): `cargo bench -p kyto-exec --bench kernels`.
 criterion = { version = "0.8.2", default-features = false }

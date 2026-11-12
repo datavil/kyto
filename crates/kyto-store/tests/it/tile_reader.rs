@@ -6,22 +6,19 @@
 //! Reads are counted by [`CountingStore`], a storage wrapper passed to the reader (no
 //! global state, R7), and mapped back to inner chunks through each shard's index.
 //!
-//! Every test runs on each backend of `support/backends.rs` (task 2.8): the local
+//! Every test runs on each backend of `backends.rs` (task 2.8): the local
 //! filesystem, HTTP, and S3 (MinIO) when configured. The reads counted are the same on
 //! all of them, since remote storage reads the byte ranges zarrs asks for.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used)]
 
-#[path = "support/backends.rs"]
-mod backends;
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use backends::{Backend, Storage, backends, storage};
+use crate::backends::{Backend, Storage, backends, storage};
 use kyto_store::{
     AxisSelection, CellValues, CsrMatrix, LayerReader, LayerValue, LayerWriteOptions,
     SelectedBlock, TileGrid, Tiling, read_layer, write_layer,

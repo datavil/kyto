@@ -3,7 +3,7 @@
 Done when: ``cell_column(...) & gene_column(...)`` raises ``KY-E202`` when the plan is
 built (here: when the two are combined, before any data is read), and ``.str`` on a
 numeric expression fails in pyright (``tests/typing/expressions.py``, checked by
-``uv run pyright``). Rust tests: ``crates/kyto-core/tests/expressions.rs``.
+``uv run pyright``). Rust tests: ``crates/kyto-core/tests/it/expressions.rs``.
 """
 
 import ast

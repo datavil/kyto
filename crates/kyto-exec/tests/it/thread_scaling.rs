@@ -2,7 +2,7 @@
 //! proper is task 10.3).
 //!
 //! On purpose only, in release (timings): `uv run cargo test --release -p kyto-exec
-//! --test thread_scaling -- --ignored --nocapture`. Writes the pbmc3k fixture as
+//! --test it -- thread_scaling:: --ignored --nocapture`. Writes the pbmc3k fixture as
 //! `.h5ad` (`tests/fixtures`, needs anndata; skips with exit code 77 without it),
 //! converts it at 128 x 4096 tiles (22 cell blocks of 8 tiles), and runs `scan ->
 //! normalize_total(1e4) -> log1p` (one fused pass) to the end of the stream on 1, 2, 4

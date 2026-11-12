@@ -3,7 +3,7 @@
 Done when: the original plan is unchanged after 10 chained calls. The stores are built
 with ``kyto.convert`` from a tiny Matrix Market directory and opened with the private
 ``kyto._kyto.scan`` (the public ``kyto.scan`` is task 7.1). Rust tests:
-``crates/kyto-plan/tests/plan_chain.rs``.
+``crates/kyto-plan/tests/it/plan_chain.rs``.
 """
 
 import doctest

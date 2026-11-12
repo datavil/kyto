@@ -207,6 +207,17 @@ requires editing many unrelated files, the foundation is wrong: stop and tell th
   `schema()`, `peek()`, `features()`, `estimate()`, `explain()`.
 - One command runs everything an agent needs before a commit (lint, type check,
   cargo test, pytest). Keep it fast and green.
+- **One Rust integration-test binary per crate.** Integration tests live in
+  `crates/<crate>/tests/it/`, each file a module of `tests/it/main.rs`. A new test file
+  is a new `mod` line there, never a new `tests/<name>.rs`: every such file is another
+  binary that links HDF5, Polars and kyto again (200 MB or more each). Shared helpers are
+  modules of the same binary (`support.rs`, `backends.rs`). Filter by module path
+  (`cargo test -p kyto-exec --test it -- pca_parity::`); a test that re-runs its own
+  binary passes the full path (`store_writer_kill::child_writes_until_killed`). The one
+  exception is a test that needs the process to itself (a counting or peak-tracking
+  `#[global_allocator]`, or a check of the process's memory): it stays a separate
+  `tests/<name>.rs` (kyto-exec's `cell_block_stream`, `estimate_fixtures`,
+  `memory_limit`).
 - Snapshot and reference files live next to the tests that own them. Update them
   only on purpose, and say so in the commit message.
 
@@ -284,9 +295,9 @@ uv run --no-project python scripts/agents_commands.py
 
 ```bash
 uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references
-uv run cargo test --release -p kyto-exec --test thread_scaling -- --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
+uv run cargo test --release -p kyto-exec --test it -- thread_scaling:: --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
 uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (criterion, timings)
-uv run cargo test --release -p kyto-exec --test kernels -- --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
+uv run cargo test --release -p kyto-exec --test it -- kernels:: --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
 ```
 
 - **Bench:** only 5.3's kernel bench above (criterion, in `crates/kyto-exec/benches`). The

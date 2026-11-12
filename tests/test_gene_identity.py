@@ -6,7 +6,7 @@ Done when: a fixture with duplicate symbols triggers ``KY-E204``. The fixture is
 ``features.tsv`` gives ``TBCE`` to two gene IDs (as the 10x GRCh38 reference does).
 Symbols come from the gene table's ``symbol`` column (format.md §5.2): the 10x and mtx
 importers fill it, an ``.h5ad`` brings it when ``var`` has a ``symbol`` column. Every
-case is also covered without a store by ``crates/kyto-core/tests/gene_symbols.rs``.
+case is also covered without a store by ``crates/kyto-core/tests/it/gene_symbols.rs``.
 """
 
 # pandas and anndata ship without complete type information; strict pyright cannot see

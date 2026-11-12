@@ -5,8 +5,8 @@ From Python, the plans that can be built are scans, ``with_default_layer`` and
 ``filter_genes`` (on gene metadata, or on ``cell_profile``, which needs a statistics
 pass over all cells). Each optimized node line ends with its device and passes.
 Nothing is read: the store is deleted before ``explain()`` runs. Every node kind and
-rule is covered by the Rust tests (``crates/kyto-plan/tests/physical_plan.rs``), and the
-text and JSON snapshots of 5 reference pipelines by ``crates/kyto-plan/tests/explain.rs``.
+rule is covered by the Rust tests (``crates/kyto-plan/tests/it/physical_plan.rs``), and the
+text and JSON snapshots of 5 reference pipelines by ``crates/kyto-plan/tests/it/explain.rs``.
 """
 
 import gzip

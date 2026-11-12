@@ -4,10 +4,10 @@
 //! out or fused): each node's line in the physical plan names its device and passes,
 //! with the passes its rule gives. Then snapshots: a standard pipeline with every
 //! rule off and on (the fused pass), `Plan::physical` (the optimized section of
-//! `explain()`, task 4.7: `tests/explain.rs`), and outputs sharing a sub-plan.
+//! `explain()`, task 4.7: `tests/it/explain.rs`), and outputs sharing a sub-plan.
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 

@@ -4,7 +4,7 @@ Done when: ``pull("CD3")`` suggests ``CD3E``, ``CD3D``, ``CD3G`` on the PBMC fix
 ``pull`` is task 7.4; it resolves its name as ``feature(...)`` does, so this resolves
 ``feature("CD3")`` on pbmc3k, converted from the 10x matrix directory (gene IDs are
 Ensembl IDs; symbols sit in the ``symbol`` column). Every case is also covered without
-a store by ``crates/kyto-core/tests/suggestions.rs``.
+a store by ``crates/kyto-core/tests/it/suggestions.rs``.
 """
 
 import tarfile

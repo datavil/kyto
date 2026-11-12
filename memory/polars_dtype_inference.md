@@ -11,5 +11,5 @@ literals: Polars' dynamic literals widen when the value does not fit (`u8 + -1` 
 leaf (column, matrix read, embedding component) becomes an empty stand-in column of
 its declared dtype (`Enum` stands in as `String`). Then it reads the dtype from
 `lazy().select(..).collect_schema()`. Plain reads keep their own dtype (`Enum`
-included). `crates/kyto-plan/tests/column_dtype_polars.rs` guards it, so a Polars
+included). `crates/kyto-plan/tests/it/column_dtype_polars.rs` guards it, so a Polars
 upgrade that changes the rules shows up there.

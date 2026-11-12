@@ -3,7 +3,7 @@
 Does: start MinIO on a free local port, from a native `minio` binary on PATH (in a
 temporary data directory) or else from a pinned image in a container runtime (docker
 or podman, as in CI); create a test bucket; run `cargo test -p kyto-store --test
-tile_reader --test remote_storage` with the `KYTO_TEST_S3_*` variables set (the
+it -- tile_reader:: remote_storage::` with the `KYTO_TEST_S3_*` variables set (the
 suites then run every test on the local, HTTP and S3 backends); and stop MinIO and
 remove its data. With neither a `minio` binary nor a working container runtime it
 prints a visible SKIPPED notice and exits 0, so the local gate stays green on
@@ -265,9 +265,10 @@ def main() -> int:
             "kyto-store",
             "--locked",
             "--test",
-            "tile_reader",
-            "--test",
-            "remote_storage",
+            "it",
+            "--",
+            "tile_reader::",
+            "remote_storage::",
         ]
         return subprocess.call(command, cwd=ROOT, env=environment)
 

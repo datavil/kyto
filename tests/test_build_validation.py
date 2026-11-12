@@ -7,7 +7,7 @@ scanned (which reads ``schema.json`` and the gene IDs and symbols, metadata only
 and then deleted, so any read of the matrix or the tables would fail with a storage
 error (a 1xx code) instead of the expected code. The codes no Python method reaches
 yet (``KY-E203`` needs ``select_genes``, ``KY-E215`` and ``KY-E216`` the other plan
-steps, 7.2) are covered in ``crates/kyto-plan/tests/build_validation.rs``, which also
+steps, 7.2) are covered in ``crates/kyto-plan/tests/it/build_validation.rs``, which also
 checks every code of the registry.
 """
 

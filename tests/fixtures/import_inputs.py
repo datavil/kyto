@@ -8,7 +8,7 @@ must store: per layer the canonical CSR (``<layer>.indptr`` u64, ``.indices`` u3
 ``genes.parquet``, Enum columns as strings) and the ``schema.json`` column entries
 (plus each Enum's category list).
 A ``manifest.json`` lists the cases. The Rust test
-``crates/kyto-store/tests/import_parity.rs`` converts every case and compares.
+``crates/kyto-store/tests/it/import_parity.rs`` converts every case and compares.
 
 Run as ``python -m fixtures.import_inputs <out_dir>`` from ``tests/``. Exits with code
 77 when anndata or scanpy is not installed (platforms without wheels).

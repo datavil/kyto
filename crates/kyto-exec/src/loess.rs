@@ -13,7 +13,7 @@
 //! `floor(n * span)` nearest points (tricube weights of the distance over the
 //! farthest one's), giving the surface's value and slope there; a point's fitted value
 //! is the cubic Hermite interpolation between the vertices around it. Checked against
-//! `skmisc` (`tests/loess_parity.rs`): the same values to about 1e-14.
+//! `skmisc` (`tests/it/loess_parity.rs`): the same values to about 1e-14.
 //! Does not: other degrees, spans above 1 (no `seurat_v3` passes one), robustness
 //! iterations, `surface="direct"`, standard errors, or more than one predictor.
 

@@ -4,7 +4,7 @@ Done when: ``n_genes`` read after ``filter_genes`` raises ``KY-E301``. The store
 ``.h5ad`` converted with ``kyto.convert`` (it needs anndata and skips without it); no
 kyto writer computes derived columns yet (6.1), so the test marks ``n_genes`` as
 derived by adding ``lineage`` to its ``schema.json`` entry, as format.md section 8
-defines it. Every case is also covered by ``crates/kyto-plan/tests/lineage.rs``.
+defines it. Every case is also covered by ``crates/kyto-plan/tests/it/lineage.rs``.
 """
 
 # pandas and anndata ship without complete type information; strict pyright cannot see

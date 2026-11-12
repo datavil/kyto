@@ -1,7 +1,7 @@
 //! Task 5.8: the executor runs filters, `select_genes`, `take_cells` and computed
 //! columns.
 //!
-//! The 4.4 reference evaluator (`kyto-plan/tests/support`, shared through `#[path]`)
+//! The 4.4 reference evaluator (`kyto-plan/tests/it/support.rs`, shared through `#[path]`)
 //! is the oracle: its seeded dataset is written as a real store (24 cells x 6 genes in
 //! 8 x 4 tiles, so 3 cell blocks and 2 gene blocks), random chains of the steps the
 //! executor runs (cell and gene filters over table columns, gene values and cell
@@ -26,8 +26,7 @@
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "../../kyto-plan/tests/support/mod.rs"]
-mod support;
+use crate::plan_support as support;
 
 use std::collections::{BTreeMap, HashMap};
 use std::num::{NonZeroU64, NonZeroUsize};

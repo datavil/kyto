@@ -3,7 +3,7 @@
 The constructors build numeric ``CellExpr`` leaves; ``Atlas.resolve`` names their
 layer and checks the gene set when the plan is built (R6). The values are checked
 against ``scanpy.pp.calculate_qc_metrics`` in Rust
-(``crates/kyto-algo/tests/qc_parity.rs``): no Python terminal reads a computed column
+(``crates/kyto-algo/tests/it/qc_parity.rs``): no Python terminal reads a computed column
 yet (plan 5.2 Open (1), 7.x).
 """
 

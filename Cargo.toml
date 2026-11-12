@@ -33,3 +33,9 @@ todo = "deny"
 # ubuntu-24.04-arm runner was cancelled while linking, memory/polars_debug_link_memory.md).
 [profile.dev.package."*"]
 debug = "line-tables-only"
+
+# The workspace's own crates too: full debug info made each test binary 200-430 MB.
+# Backtraces keep file:line; a debugger shows no local variables (set `debug = true`
+# locally for a debugging session, never commit it).
+[profile.dev]
+debug = "line-tables-only"

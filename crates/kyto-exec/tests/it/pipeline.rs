@@ -332,7 +332,7 @@ fn a_missing_store_is_an_error_from_run() {
     assert!(error.code().starts_with("KY-E1"), "{error}");
 }
 
-/// Counts the storage requests, as `crates/kyto-store/tests/tile_reader.rs` does.
+/// Counts the storage requests, as `crates/kyto-store/tests/it/tile_reader.rs` does.
 struct CountingStore<S> {
     inner: S,
     reads: AtomicUsize,

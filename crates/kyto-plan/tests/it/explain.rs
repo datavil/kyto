@@ -3,13 +3,13 @@
 //! Each reference pipeline's `explain()` text and `explain_json()` JSON is compared
 //! with its snapshot in `tests/snapshots/explain/` (`<name>.txt`, `<name>.json`). To
 //! update them on purpose (say so in the commit message), run
-//! `KYTO_UPDATE_SNAPSHOTS=1 uv run cargo test -p kyto-plan --test explain` and read the
+//! `KYTO_UPDATE_SNAPSHOTS=1 uv run cargo test -p kyto-plan --test it explain::` and read the
 //! diff. Then: the text and the JSON say the same, the optimized section is the
 //! physical plan's own text, short names are shown resolved, and nothing changes the
 //! plan.
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::path::PathBuf;
 use std::sync::Arc;

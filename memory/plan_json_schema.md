@@ -3,7 +3,7 @@
 **Works:** the published schema (`crates/kyto-plan/src/plan_json.schema.json`) is also
 the runtime shape check of `validate_plan` (`jsonschema` crate, no default features), so
 it cannot silently drift from what the validator enforces. Its drift from what `to_json`
-writes is caught because 4.3's corpus and random chains (`tests/plan_json.rs`
+writes is caught because 4.3's corpus and random chains (`tests/it/plan_json.rs`
 `assert_round_trip`) must have no diagnostics, and every 4.3 refusal must give the same
 first code from `validate_plan` as `from_json` raises (`refused`).
 

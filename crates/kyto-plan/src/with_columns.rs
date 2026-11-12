@@ -134,7 +134,7 @@ impl Transform for WithColumns {
 /// itself with one empty stand-in column per leaf (`Enum` and `String` leaves stand in
 /// as `String`; `uint32` matrix reads and detected genes as `Float64`, so arithmetic
 /// on counts does not wrap, task 5.8), so supertypes, literals that adapt or widen, and true division follow
-/// Polars exactly (`tests/column_dtype_polars.rs`). The executor casts each result to
+/// Polars exactly (`tests/it/column_dtype_polars.rs`). The executor casts each result to
 /// the declared dtype. `Float64` if Polars cannot say (resolution refuses such
 /// expressions first).
 pub fn column_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> ColumnDtype {

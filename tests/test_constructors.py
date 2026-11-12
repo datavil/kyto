@@ -5,7 +5,7 @@
 returns, explicit arguments (R7), the coded errors ``KY-E208`` and ``KY-E209``, and that
 ``repr`` is code that rebuilds the expression. ``feature`` only parses its name; the
 resolver is task 3.5. Doctests: ``tests/test_docstrings.py``. Rust tests:
-``crates/kyto-core/tests/feature_names.rs``.
+``crates/kyto-core/tests/it/feature_names.rs``.
 """
 
 from collections.abc import Callable

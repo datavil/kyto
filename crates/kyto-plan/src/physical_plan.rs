@@ -43,7 +43,7 @@ use crate::with_columns::Columns;
 /// one for the sketch `X^T Omega` (with the gene means for the implicit centring), one
 /// per iteration (the centred covariance times the newest block, `X^T (X Q)`, which
 /// grows the basis), one for the embedding `(X - mu) V`. Set on the fixtures
-/// (`kyto-exec/tests/pca_parity.rs`, 50 components of pbmc3k's 2,000 HVGs): 7 gave
+/// (`kyto-exec/tests/it/pca_parity.rs`, 50 components of pbmc3k's 2,000 HVGs): 7 gave
 /// scanpy's variances to 1.2e-4, 9 to 1.3e-6 (the `float32` reference's precision).
 pub const PCA_POWER_ITERATIONS: u32 = 9;
 

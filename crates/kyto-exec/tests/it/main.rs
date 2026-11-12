@@ -1,0 +1,23 @@
+//! kyto-exec integration tests: one test binary, one module per former
+//! `tests/<name>.rs` file, so HDF5, Polars and kyto are linked once (AGENTS.md,
+//! Agent-friendliness). Add a new test file here as a module, never as `tests/*.rs`.
+
+// The 4.4 reference evaluator, shared with kyto-plan's tests.
+#[path = "../../../kyto-plan/tests/it/support.rs"]
+mod plan_support;
+
+mod deterministic_reductions;
+mod filter_qc_parity;
+mod filters_columns;
+mod hvg_parity;
+mod kernels;
+mod loess_parity;
+mod multi_pass;
+mod normalize_log1p_parity;
+mod pca;
+mod pca_parity;
+mod pipeline;
+mod run_control;
+mod scale_parity;
+mod sinks;
+mod thread_scaling;

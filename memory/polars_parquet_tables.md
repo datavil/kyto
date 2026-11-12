@@ -6,7 +6,7 @@ before (7 rows at `n = 2` gave groups of 2, 2, 3), breaking format.md §5.7.
 
 **Works:** `ParquetWriter::batched(schema)`, then one `write_batch` per `n`-row slice of
 a rechunked frame: each single-chunk batch is one row group (`table_io::write_table`;
-`tests/table_format.rs::parquet_uses_zstd_statistics_and_block_row_groups` guards it).
+`tests/it/table_format.rs::parquet_uses_zstd_statistics_and_block_row_groups` guards it).
 
 **Also:**
 - Without the `dtype-i8`, `dtype-i16`, `dtype-u8`, `dtype-u16` features the polars crate
@@ -16,4 +16,4 @@ a rechunked frame: each single-chunk batch is one row group (`table_io::write_ta
   1.95), so the workspace `rust-version` is 1.95 (bumped Nov 7, 2026).
 - Polars `Enum` has no `ordered` flag; §8 keeps it in `schema.json` (`TableColumn`).
 - Rust polars 0.55.2 files read in Python polars 2.x with the same dtypes, Enum categories
-  included (`tests/table_round_trip.rs::python_polars_reads_the_dtypes`, needs `uv run`).
+  included (`tests/it/table_round_trip.rs::python_polars_reads_the_dtypes`, needs `uv run`).

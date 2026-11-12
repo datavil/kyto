@@ -3,7 +3,7 @@
 //! or thread count and equal `write_layer`'s (§10.3, R11), `schema.json` and
 //! `provenance.json` follow §8 and §9, the target appears only on success (§10.1),
 //! stale temporary directories are deleted by the next write, and bad input gets coded
-//! errors (R10). The kill test is `tests/store_writer_kill.rs`.
+//! errors (R10). The kill test is `tests/it/store_writer_kill.rs`.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used)]

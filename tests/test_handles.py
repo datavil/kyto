@@ -5,7 +5,7 @@ Done when: no handle exposes a method that mutates, checked by a stub test
 twin ``test_runtime_handles_match_stub``). Each handle is read-only and lazy:
 ``names()``, ``schema()`` and ``estimate()`` answer from metadata; the ``to_*``
 terminals raise ``KY-E601`` until task 7.3. The accessors on ``Atlas`` are 7.3's, taken
-early. Rust tests: ``crates/kyto-plan/tests/handles.rs``; frozen pyclasses:
+early. Rust tests: ``crates/kyto-plan/tests/it/handles.rs``; frozen pyclasses:
 ``crates/kyto-py/src/handles.rs``.
 
 No store kyto writes holds an embedding or a graph yet (the importers bring none), and

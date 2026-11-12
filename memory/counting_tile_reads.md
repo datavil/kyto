@@ -1,7 +1,7 @@
 # Counting tile reads: wrap the storage, map byte ranges through the shard index (task 2.4)
 
 **Works:** `LayerReader` is generic over zarrs `ReadableStorageTraits`, so a test passes a
-`CountingStore` wrapper (`crates/kyto-store/tests/tile_reader.rs`) that records every
+`CountingStore` wrapper (`crates/kyto-store/tests/it/tile_reader.rs`) that records every
 `(key, ByteRange)` in `get_partial_many` (zarrs' `get` and `get_partial` default to it).
 zarrs 0.22 reads one tile of a sharded array as two partial reads: the shard index
 (`n_inner * 16 + 4` bytes at the end) and the inner chunk's exact `[offset, nbytes]`

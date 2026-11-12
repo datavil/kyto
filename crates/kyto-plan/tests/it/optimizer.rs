@@ -8,7 +8,7 @@
 //! (proptest) with random rules on, each compared the same way.
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 

@@ -3,7 +3,7 @@
 **Works:** write chunks before the final shape is known through arrays built with the
 largest shape the format allows (`u32::MAX` cells, `i64::MAX` entries): a regular-grid
 chunk's bytes do not depend on the array shape. Build the real-shape arrays at `finish`
-only to write `zarr.json`. `tests/store_writer.rs::bytes_do_not_depend_on_batching_or_threads`
+only to write `zarr.json`. `tests/it/store_writer.rs::bytes_do_not_depend_on_batching_or_threads`
 checks the layer files equal `write_layer`'s byte for byte.
 
 **Broke (by design review):** deleting another writer's `.kyto-tmp-` directory is not

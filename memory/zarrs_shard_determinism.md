@@ -9,7 +9,7 @@ different `indptr` and `data` shard files, breaking byte-identical stores
 **Works:** write every chunk through `zarr_arrays::store_chunk`, which passes
 `CodecOptions` with `concurrent_target(1)`: the encoder then runs inner chunks in
 index order. Parallelism, when needed (2.5), goes across shards, not inside one.
-`tests/layer_format.rs::rewrites_are_byte_identical` guards it; run it several times
+`tests/it/layer_format.rs::rewrites_are_byte_identical` guards it; run it several times
 after touching the writer or upgrading zarrs.
 
 **Also:** zarrs is pinned to 0.22.x by its version requirement (`0.22.10`); moving to

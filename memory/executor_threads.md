@@ -14,8 +14,8 @@ before joining, so a producer blocked in `send` gets an error and returns.
 - Each block carries every layer the scan read; drop what the output does not read at
   the end of the stream, or projected-away layers ride along (a test caught it).
 - Thread scaling is a timing check: keep it `#[ignore]` and run it in release
-  (`uv run cargo test --release -p kyto-exec --test thread_scaling -- --ignored
-  --nocapture`), with a warm-up run and the median of several. On this 10-core Mac
+  (`uv run cargo test --release -p kyto-exec --test it -- thread_scaling::
+  --ignored --nocapture`), with a warm-up run and the median of several. On this 10-core Mac
   (4 performance + 6 efficiency cores) pbmc3k at 128 x 4096 tiles gave 1.84x, 2.74x,
   4.09x at 2, 4, 8 threads with as many blocks in flight; past 4 threads the
   efficiency cores add less.

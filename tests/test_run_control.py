@@ -12,7 +12,7 @@ while the run computes. Ctrl-C is simulated in the main thread both ways it can 
 GIL (``check_signals`` raises it), and ``signal.raise_signal`` inside the progress
 callback (the callback raises it). After each cancel the same process runs the plan to
 the end. The executor side (cancel in a statistics pass, no reads after a cancel) is
-``crates/kyto-exec/tests/run_control.rs``. Skips where anndata has no wheels.
+``crates/kyto-exec/tests/it/run_control.rs``. Skips where anndata has no wheels.
 """
 
 import _thread

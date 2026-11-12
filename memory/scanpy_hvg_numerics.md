@@ -1,7 +1,7 @@
 # scanpy's highly variable genes, number for number (task 6.3)
 
 **Works:** follow scanpy 1.12.5's steps exactly, then every flavour's flags match on
-the 1.5 fixtures (`crates/kyto-exec/tests/hvg_parity.rs`):
+the 1.5 fixtures (`crates/kyto-exec/tests/it/hvg_parity.rs`):
 - `mean_var` (fast_array_utils) squares `float32` values in `float32` and sums in
   `float64`; variance `sq/n - mean^2`, times `n/(n-1)`. Not Welford: kyto sums too.
 - seurat: `expm1` of the `float32` log data (kyto rounds the `f64` result once, numpy

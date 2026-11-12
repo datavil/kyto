@@ -5,11 +5,12 @@
 //!
 //! The snapshots are `tests/snapshots/normalize_log1p/<name>.txt`. To update them on
 //! purpose (say so in the commit message), run
-//! `KYTO_UPDATE_SNAPSHOTS=1 uv run cargo test -p kyto-plan --test normalize_log1p_explain`
+//! `KYTO_UPDATE_SNAPSHOTS=1 uv run cargo test -p kyto-plan --test it
+//! normalize_log1p_explain::`
 //! and read the diff.
 #![allow(clippy::unwrap_used)]
 
-mod support;
+use crate::support;
 
 use std::path::PathBuf;
 use std::sync::Arc;

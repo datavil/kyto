@@ -1,7 +1,7 @@
 //! Task 6.4: scale.
 //!
 //! Done when: matches scanpy; `estimate()` reports the dense size (that half is
-//! `crates/kyto-plan/tests/estimate.rs`). The synthetic and pbmc3k fixtures (written as
+//! `crates/kyto-plan/tests/it/estimate.rs`). The synthetic and pbmc3k fixtures (written as
 //! `.h5ad` by `tests/fixtures`, converted here; skipped without anndata, exit code 77)
 //! run the stored scanpy reference `scale` (`tests/fixtures/make_reference.py`): genes
 //! seen in at least `min_cells_per_gene` cells, `normalize_total(1e4) -> log1p`, the

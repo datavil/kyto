@@ -4,14 +4,14 @@ Done when: tests cover all three cases.
 
 - An absent sparse value densifies to 0: no Python terminal reads the matrix yet
   (``KY-E601`` until 7.3), so the rule is tested where it lives, on ``CellBlock`` in
-  ``crates/kyto-store/tests/missing_values.rs``, through the tile reader. Here, the
+  ``crates/kyto-store/tests/it/missing_values.rs``, through the tile reader. Here, the
   stored layer of a converted ``.h5ad`` holds no null or ``NaN`` for its zeros.
 - Missing metadata is null: an ``.h5ad`` categorical code ``-1`` and masked nullable
   entries become Polars nulls in the store, and so does ``NaN`` in a float column
   (anndata has no nullable float; decided by the user, Nov 7, 2026; format.md §5.5),
   and expressions test for nulls with ``is_null()`` / ``is_not_null()``; ``x == None``
   is ``KY-E212``, naming the null test to write. How nulls flow through operations is tested in
-  ``crates/kyto-core/tests/missing_values.rs``.
+  ``crates/kyto-core/tests/it/missing_values.rs``.
 - A gene removed by a filter raises ``KY-E203``: no plan node removes genes before
   task 4.1, so the resolver check is tested in Rust (``missing_values.rs`` in
   kyto-core); here, the error class and its message.

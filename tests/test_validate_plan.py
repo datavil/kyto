@@ -2,7 +2,7 @@
 
 Done when: deliberately broken plans each return the expected diagnostic. The full
 table (27 broken plans over every check: syntax, version, shape against the schema,
-replay through the plan methods) is in ``crates/kyto-plan/tests/plan_validate.rs``;
+replay through the plan methods) is in ``crates/kyto-plan/tests/it/plan_validate.rs``;
 here the Python surface: the dict shape, agreement with ``from_json`` (no diagnostics
 exactly when it reads the text; the first diagnostic has the code it raises, and past
 the shape check is that error), a set of broken plans with their code and path, and the

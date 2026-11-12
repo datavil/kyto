@@ -3,7 +3,7 @@
 //! Polars' rules when an expression is lowered (a `NaN` that kyto writes is a value, not
 //! null, format.md §5.5; the `.h5ad` importer makes anndata's `NaN` null); a gene
 //! removed upstream is refused with `KY-E203` when the plan is built.
-//! The densify-to-0 rule is tested in kyto-store (`tests/missing_values.rs`), where
+//! The densify-to-0 rule is tested in kyto-store (`tests/it/missing_values.rs`), where
 //! `CellBlock` lives.
 #![allow(clippy::unwrap_used)]
 

@@ -14,4 +14,4 @@
   off kyto's on ~620 pbmc3k values (6.2). That alone moves means by ~4e-9 relative and a
   few hundred scaled values by up to ~6e-7. To test kyto's own steps, run scanpy live
   with a correctly rounded `log1p` (`np.log1p(x.astype(f64)).astype(f32)`) and demand
-  identical bits; bound the stored reference separately (`tests/scale_parity.rs`).
+  identical bits; bound the stored reference separately (`tests/it/scale_parity.rs`).

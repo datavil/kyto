@@ -3,10 +3,7 @@
 
 #![allow(clippy::unwrap_used)]
 
-#[path = "support/backends.rs"]
-mod backends;
-
-use backends::{Backend, backends, storage};
+use crate::backends::{Backend, backends, storage};
 use zarrs::storage::byte_range::ByteRange;
 use zarrs::storage::{ReadableStorageTraits, StoreKey};
 

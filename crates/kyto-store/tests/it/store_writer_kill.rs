@@ -113,7 +113,7 @@ fn killing_a_write_midway_leaves_the_target_absent() {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "child_writes_until_killed",
+            "store_writer_kill::child_writes_until_killed",
             "--ignored",
             "--nocapture",
             "--test-threads=1",

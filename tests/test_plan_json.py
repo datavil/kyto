@@ -4,7 +4,7 @@ Done when: ``from_json(atlas.to_json())`` gives back an equal plan for every pla
 test suite. From Python, the plans the suite builds are scans of a store (with and
 without gene symbols), ``with_default_layer`` and ``filter_genes`` with the gene
 expressions the suite uses; each one here writes the same text again after the round
-trip and prints the same tree. The Rust side (``crates/kyto-plan/tests/plan_json.rs``)
+trip and prints the same tree. The Rust side (``crates/kyto-plan/tests/it/plan_json.rs``)
 covers every node kind, every expression form, stores without symbols and random
 chains. Then the refusals:
 ``KY-E217`` for broken text, ``KY-E218`` for another version, and the builders' own

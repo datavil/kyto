@@ -17,5 +17,5 @@ values zeroed, so each value keeps its lane and a set of every gene equals
 `total_counts` bit for bit. Percent is `in / total * 100` as scanpy (0/0 = NaN).
 
 **Not wired:** nothing in the executor evaluates expressions yet (`with_cells` is
-`KY-E601`, 5.2 Open (1)); the 6.1 parity test (`crates/kyto-algo/tests/qc_parity.rs`)
+`KY-E601`, 5.2 Open (1)); the 6.1 parity test (`crates/kyto-algo/tests/it/qc_parity.rs`)
 streams the layer and calls `CellQc` itself.

@@ -3,7 +3,7 @@
 Task 4.4 had to show "optimized results equal unoptimized results" with no executor
 (5.x). What worked:
 
-- **A test-only reference evaluator** (`crates/kyto-plan/tests/support/mod.rs`) runs both
+- **A test-only reference evaluator** (`crates/kyto-plan/tests/it/support.rs`) runs both
   the logical chain and the optimized arena over a small seeded in-memory dataset, with
   **one semantics function per node shared by both runs**, so any difference comes from
   the rewrites. Per-cell nodes are computed for real; cross-cell ones (HVG, PCA,
