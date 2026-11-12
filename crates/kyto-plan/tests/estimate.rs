@@ -166,7 +166,7 @@ fn statistics_passes_stream_again_and_a_final_pass_reads_the_layers() {
         .log1p(Some("normalized"), "log1p")
         .unwrap();
     let pca = normalized.pca(Some("log1p"), "X_pca", 50, 0).unwrap();
-    let pca_passes = 2 + 2 * PCA_POWER_ITERATIONS;
+    let pca_passes = 2 + PCA_POWER_ITERATIONS;
     // Median: 1 statistics pass; PCA's; then one pass delivers the layers.
     let all = estimate_all(&pca);
     assert_eq!(all.passes(), 1 + pca_passes + 1);
@@ -198,10 +198,10 @@ fn a_shared_sub_plan_makes_its_passes_once() {
         Output::members(&hvg, [Member::GeneColumn("highly_variable".into())]).unwrap(),
         Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap(),
     ];
-    // Median 1 (once), seurat_v3 2, PCA 16; nothing read from the stream.
+    // Median 1 (once), seurat_v3 2, PCA 2 + its iterations; nothing read from the stream.
     assert_eq!(
         estimate(&outputs).passes(),
-        1 + 2 + 2 + 2 * PCA_POWER_ITERATIONS
+        1 + 2 + 2 + PCA_POWER_ITERATIONS
     );
 }
 
@@ -269,8 +269,18 @@ fn in_memory_members_and_statistics_are_resident() {
     let pca_estimate =
         estimate(&[Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()]);
     let embeddings = N_CELLS * 50 * 4 + N_GENES * 50 * 4;
-    let halko = (2 * N_CELLS + N_GENES) * (50 + 10) * 8;
-    assert_eq!(pca_estimate.resident_memory(), 56 + embeddings + halko);
+    // Its Krylov basis and products (60 columns a block) with their copies, means and
+    // the embedding's rows in f64 with their cells and in f32; per leaf of a pass (2 blocks in flight and 2
+    // subtrees, as `scale` above) the sketch and the gene sums.
+    let columns = (50 + 10).min(N_GENES);
+    let krylov = N_GENES * (4 * columns * u64::from(PCA_POWER_ITERATIONS) + 1) * 8
+        + N_CELLS * (50 + 1) * 8
+        + N_CELLS * 50 * 4;
+    let leaves = N_GENES * (columns * 8 + 16) * (2 + 2);
+    assert_eq!(
+        pca_estimate.resident_memory(),
+        56 + embeddings + krylov + leaves
+    );
 
     let neighbors = pca
         .neighbors(Neighbors {

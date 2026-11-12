@@ -43,6 +43,8 @@ mod kernels;
 mod loess;
 mod memory_limit;
 mod operator;
+mod pca;
+mod pca_dense;
 mod pipeline;
 mod pipeline_block;
 mod qc;
@@ -60,6 +62,7 @@ pub use loess::loess_fitted;
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
 };
+pub use pca::PcaStatistics;
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
 pub use qc::{CellQc, GeneSet, QcValues};

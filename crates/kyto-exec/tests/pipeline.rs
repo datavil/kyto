@@ -21,7 +21,8 @@ use std::time::Duration;
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{CellValues, ExecuteOptions, Pipeline, PipelineBlock};
 use kyto_plan::{
-    Member, Operation, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan,
+    Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions, Output, PhysicalOptions,
+    PhysicalPlan, Plan, physical_plan,
 };
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
@@ -291,14 +292,27 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let base = scan(&store);
-    // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since 6.4.
-    let pca = base.pca(Some("counts"), "X_pca", 2, 0).unwrap();
-    let physical = PhysicalPlan::new(pca.optimize(), PhysicalOptions::default());
+    // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since
+    // 6.4, `pca` since 6.5.
+    let neighbors = base
+        .pca(Some("counts"), "X_pca", 2, 0)
+        .unwrap()
+        .neighbors(Neighbors {
+            embedding: "X_pca".to_owned(),
+            n_components: None,
+            n_neighbors: 2,
+            metric: Metric::Euclidean,
+            search: NeighborSearch::Exact,
+            seed: 0,
+            key: None,
+        })
+        .unwrap();
+    let physical = PhysicalPlan::new(neighbors.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 0).unwrap_err();
     assert_eq!(error.code(), "KY-E601");
     let message = error.to_string();
     assert!(
-        message.contains("pca") && message.contains("6.5"),
+        message.contains("neighbors") && message.contains("6.6"),
         "{message}"
     );
     let physical = PhysicalPlan::new(base.optimize(), PhysicalOptions::default());

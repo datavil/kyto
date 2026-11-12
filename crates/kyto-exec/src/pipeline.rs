@@ -6,7 +6,8 @@
 //! maps, alone or fused, the cross-cell nodes of task 5.4: a median
 //! `normalize_total`, alone or first in a fused pass, and `highly_variable_genes`
 //! (with or without batches; its gene columns join the gene table, task 6.3) and
-//! `scale` (its apply pass writes the scaled layer, task 6.4), and
+//! `scale` (its apply pass writes the scaled layer, task 6.4), `pca` (its embedding,
+//! loadings and variances are statistics, task 6.5), and
 //! the steps of task 5.8: cell and gene filters, `select_genes`, `take_cells`,
 //! `with_cells` and `with_genes`), and refuse the rest with `KY-E601` naming the task
 //! that adds it, before anything is read. Cell steps run on every block
@@ -26,7 +27,7 @@
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
 //! A plan ending in a sink keeps what it writes ([`crate::sink`], task 5.9;
 //! [`Pipeline::sink`] runs it).
-//! Does not: `pca`, neighbours, clusterings, expression leaves
+//! Does not: neighbours, clusterings, expression leaves
 //! reading embeddings or recomputing stored columns (see the error each one gives), or
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
@@ -404,6 +405,11 @@ impl Pipeline {
             let mut accumulator = cross_cell.accumulator(n_genes, cells, &self.store);
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
             for pass in 0..cross_cell.passes {
+                if accumulator.skips(pass) {
+                    // Nothing left to compute (pca's basis stopped growing): counted as done.
+                    control.add_done(self.grid.n_cells());
+                    continue;
+                }
                 // A tree in block order over the store's cell blocks (task 5.6, R11).
                 let reduced = reduce_pass(
                     &source(Arc::clone(&readers), &operators, input.clone()),
@@ -502,7 +508,21 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                     index, passes, kind,
                 ))))
             }
-            CrossCellOp::Pca { .. } => Err(not_yet(plan.node().method(), "6.5")),
+            CrossCellOp::Pca {
+                layer,
+                n_components,
+                seed,
+                ..
+            } => {
+                let kind = CrossCellKind::Pca {
+                    layer: layer.clone(),
+                    n_components: *n_components,
+                    seed: *seed,
+                };
+                Ok(Some(Stage::CrossCell(CrossCellStage::new(
+                    index, passes, kind,
+                ))))
+            }
         },
         Plan::Neighbors(_) => Err(not_yet(plan.node().method(), "6.6")),
         Plan::Cluster(_) => Err(not_yet(plan.node().method(), "6.8")),

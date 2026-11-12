@@ -63,8 +63,13 @@
 //! dtype) + (n_cells + 1) x 8`) a node writes; and the state of cross-cell nodes:
 //! median `normalize_total` `n_cells x 8`, `scale` and `highly_variable_genes`
 //! `n_genes x 16`, and while their statistics pass runs `n_genes x 16` more per block
-//! in flight and per subtree of its reduction tree (`log2(blocks) + 1`, task 5.6), a `filter_genes` reading the matrix `n_genes x 8`, `pca` the streamed
-//! Halko blocks `(2 x n_cells + n_genes) x (n_components + `[`PCA_OVERSAMPLES`]`) x 8`.
+//! in flight and per subtree of its reduction tree (`log2(blocks) + 1`, task 5.6), a `filter_genes` reading the matrix `n_genes x 8`, `pca` (task 6.5) its Krylov
+//! basis and the basis times the covariance with the copies the dense steps make,
+//! `4 x n_genes x l x `[`PCA_POWER_ITERATIONS`]` x 8` with `l = min(n_components + `
+//! [`PCA_OVERSAMPLES`]`, n_genes)`, its means `n_genes x 8` and the embedding's rows
+//! while its last pass builds them (`n_cells x (n_components + 1) x 8`, with each
+//! row's cell) and their `float32` copy (`n_cells x n_components x 4`), and per leaf of its
+//! passes' reductions `n_genes x (l x 8 + 16)` (the sketch or a product).
 //!
 //! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today;
 //! with the per-cell maps, the held block and the pool they are checked within 25% of
@@ -90,7 +95,7 @@ use crate::map_elementwise::ElementwiseOp;
 use crate::members::Member;
 use crate::node::{CellScope, LogicalNode};
 use crate::optimized_plan::{Operation, OptimizedNode};
-use crate::physical_plan::{Blocks, Device, PhysicalPlan};
+use crate::physical_plan::{Blocks, Device, PCA_POWER_ITERATIONS, PhysicalPlan};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
 use crate::sink::Sink;
@@ -111,8 +116,13 @@ pub const ASSUMED_NNZ_SHARD_SIZE: u64 = 1 << 20;
 const OPEN_LAYER_BYTES: u128 = 2 * 65_536 * 8;
 
 /// Extra columns of the streamed randomized PCA's blocks beyond its components
-/// (Halko et al., scikit-learn's default). Provisional; task 6.5 sets it.
+/// (Halko et al., scikit-learn's default; task 6.5).
 pub const PCA_OVERSAMPLES: u64 = 10;
+
+/// Columns of each block of a PCA of `n_components` over `n_genes` genes.
+fn pca_block_columns(n_components: u64, n_genes: u128) -> u128 {
+    (u128::from(n_components) + u128::from(PCA_OVERSAMPLES)).min(n_genes)
+}
 
 /// What a plan would read and hold, from its schema alone.
 ///
@@ -665,7 +675,9 @@ fn reduction_bytes(node: &OptimizedNode, input: &PlanSchema, window: u128, n_blo
         Operation::Node(plan) => match plan.as_ref() {
             Plan::CrossCell(cross_cell) => match cross_cell.params().op() {
                 CrossCellOp::Scale { .. } | CrossCellOp::HighlyVariableGenes { .. } => n_genes * 16,
-                CrossCellOp::Pca { .. } => 0,
+                CrossCellOp::Pca { n_components, .. } => {
+                    n_genes * (pca_block_columns(*n_components, n_genes) * 8 + 16)
+                }
             },
             _ => 0,
         },
@@ -701,9 +713,11 @@ fn statistics_bytes(node: &OptimizedNode, input: &PlanSchema) -> u128 {
             Plan::CrossCell(cross_cell) => match cross_cell.params().op() {
                 CrossCellOp::Scale { .. } | CrossCellOp::HighlyVariableGenes { .. } => n_genes * 16,
                 CrossCellOp::Pca { n_components, .. } => {
-                    (2 * n_cells + n_genes)
-                        * (u128::from(*n_components) + u128::from(PCA_OVERSAMPLES))
-                        * 8
+                    let columns = pca_block_columns(*n_components, n_genes);
+                    // The basis and products, and their copies for the dense steps.
+                    n_genes * (4 * columns * u128::from(PCA_POWER_ITERATIONS) + 1) * 8
+                        + n_cells * (u128::from(*n_components) + 1) * 8
+                        + n_cells * u128::from(*n_components) * 4
                 }
             },
             _ => 0,

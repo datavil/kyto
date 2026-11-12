@@ -10,7 +10,7 @@ optimized plan
   output #5 reads [layer:counts, layer:log1p, layer:logn, layer:norm, cells:batch, cells:leiden, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_new, embedding:X_new_loadings, embedding:X_pca, graph:connectivities, graph:distances]
   #5 LEIDEN "connectivities" -> "leiden" resolution=1 seed=0 <- #4 (node 6) [device=cpu passes=0 in memory]
   #4 NEIGHBORS "X_new" -> "distances", "connectivities" n_neighbors=15 metric=Euclidean search=Exact seed=0 <- #3 (node 5) [device=cpu passes=0 in memory]
-  #3 PCA "logn" -> "X_new" n_components=2 seed=0 <- #2 (node 4) [device=cpu passes=16 (statistics=16 apply=0) blocks=4096 cells]
+  #3 PCA "logn" -> "X_new" n_components=2 seed=0 <- #2 (node 4) [device=cpu passes=11 (statistics=11 apply=0) blocks=4096 cells]
   #2 FILTER_CELLS cell_column('score') > -2.0 <- #1 (node 3) [device=cpu passes=1 blocks=4096 cells]
   #1 FUSED_ELEMENTWISE [NORMALIZE_TOTAL "counts" -> "norm" target_sum=median; LOG1P "norm" -> "logn"] keeps ["logn", "norm"] <- #0 (node 1, 2) [device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells]
   #0 SCAN "synthetic.kyto" (24 cells x 6 genes) reads [layer:counts, layer:log1p, cells:batch, cells:score, cells:total_counts, genes:highly_variable, genes:mean, genes:symbol, embedding:PCs, embedding:X_pca] (node 0) [device=cpu passes=1 blocks=4096 cells]

@@ -34,6 +34,9 @@ kyto-core = { path = "../kyto-core" }
 polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "dtype-categorical"] }
 # Sinks (task 5.9): an `.h5ad` sink writes a temporary store next to the target first.
 tempfile = "3.27.0"
+# The small dense steps of the streamed PCA (task 6.5): QR, SVD and the symmetric
+# eigendecomposition of its Krylov basis, on one thread (`Par::Seq`, R11).
+faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
 
 [dev-dependencies]
 # Counts allocations for the 5.1 Done-when check (a global allocator, no unsafe here).

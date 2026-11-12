@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 
 use kyto_plan::HvgFlavor;
 
+use crate::pca::PcaStatistics;
+
 pub use crate::scale::ScaleStatistics;
 
 /// Per-gene sums and sums of squares of a layer over a group of cells.
@@ -283,6 +285,8 @@ pub enum NodeStatistics {
     HighlyVariableGenes(Box<HighlyVariableGeneStatistics>),
     /// `scale`: each gene's mean and standard deviation (task 6.4).
     Scale(Box<ScaleStatistics>),
+    /// `pca`: the embedding, loadings and variances (task 6.5).
+    Pca(Box<PcaStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

@@ -17,7 +17,9 @@
 //! (the gene columns, computed by the pipeline once the passes ended).
 //! `scale` (task 6.4): one pass of per-gene moments, then its apply pass (see
 //! `scale.rs`).
-//! Does not: `pca` (6.5), or run passes (see `reduction.rs`).
+//! `pca` (task 6.5): a sketch pass, the Krylov product passes and a projection pass
+//! (see `pca.rs`); a product pass after its basis stopped growing is skipped.
+//! Does not: run passes (see `reduction.rs`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -31,6 +33,7 @@ use crate::elementwise::{ElementwiseMaps, cell_totals};
 use crate::hvg_pass::{BatchColumn, GroupPartial, HvgAccumulator};
 use crate::kernels::Kernels;
 use crate::operator::Operator;
+use crate::pca::{PCA_PASSES, PcaAccumulator, PcaPartial};
 use crate::pipeline_block::PipelineBlock;
 use crate::scale::{ScaleMap, ScaleStatistics, fold_moments};
 use crate::statistics::{GeneMoments, NodeStatistics};
@@ -69,6 +72,12 @@ pub(crate) enum CrossCellKind {
         zero_center: bool,
         max_value: Option<f64>,
     },
+    /// `pca` of `layer`.
+    Pca {
+        layer: String,
+        n_components: u64,
+        seed: u64,
+    },
 }
 
 impl CrossCellStage {
@@ -84,6 +93,7 @@ impl CrossCellStage {
                 HvgFlavor::Seurat | HvgFlavor::CellRanger => 1,
                 HvgFlavor::SeuratV3 => 2,
             },
+            CrossCellKind::Pca { .. } => PCA_PASSES,
         };
         assert_eq!(
             passes, needed,
@@ -99,7 +109,8 @@ impl CrossCellStage {
                 maps.first().map_or("", MapElementwise::layer)
             }
             CrossCellKind::HighlyVariableGenes { layer, .. }
-            | CrossCellKind::Scale { layer, .. } => layer,
+            | CrossCellKind::Scale { layer, .. }
+            | CrossCellKind::Pca { layer, .. } => layer,
         }
     }
 
@@ -107,7 +118,9 @@ impl CrossCellStage {
     pub(crate) fn batch_key(&self) -> Option<&str> {
         match &self.kind {
             CrossCellKind::HighlyVariableGenes { batch_key, .. } => batch_key.as_deref(),
-            CrossCellKind::MedianNormalize { .. } | CrossCellKind::Scale { .. } => None,
+            CrossCellKind::MedianNormalize { .. }
+            | CrossCellKind::Scale { .. }
+            | CrossCellKind::Pca { .. } => None,
         }
     }
 
@@ -124,6 +137,16 @@ impl CrossCellStage {
             CrossCellKind::Scale { .. } => {
                 Accumulator::Moments(Box::new(GeneMoments::new(n_genes, false)))
             }
+            CrossCellKind::Pca {
+                layer,
+                n_components,
+                seed,
+            } => Accumulator::Pca(Box::new(PcaAccumulator::new(
+                layer,
+                *n_components,
+                *seed,
+                n_genes,
+            ))),
             CrossCellKind::HighlyVariableGenes {
                 layer,
                 flavor,
@@ -183,6 +206,7 @@ impl CrossCellStage {
                     Some(Operator::Scale(apply)),
                 )
             }
+            (Accumulator::Pca(pca), _) => (NodeStatistics::Pca(Box::new(pca.finish())), None),
             (Accumulator::Totals(_) | Accumulator::Moments(_), _) => {
                 unreachable!("a stage's accumulator comes from CrossCellStage::accumulator")
             }
@@ -199,6 +223,8 @@ pub(crate) enum Accumulator {
     Genes(Box<HvgAccumulator>),
     /// `scale`'s per-gene moments.
     Moments(Box<GeneMoments>),
+    /// `pca`'s sketch, basis and rows.
+    Pca(Box<PcaAccumulator>),
 }
 
 /// What one leaf of a pass's reduction holds (task 5.6): the sums over one store cell
@@ -211,6 +237,8 @@ pub(crate) enum Partial {
     Groups(GroupPartial),
     /// Per-gene moments of every cell (`scale`).
     Moments(Box<GeneMoments>),
+    /// A leaf of a `pca` pass.
+    Pca(Box<PcaPartial>),
 }
 
 impl Partial {
@@ -227,20 +255,22 @@ impl Partial {
                 left.combine(&right);
                 Self::Moments(left)
             }
+            (Self::Pca(left), Self::Pca(right)) => Self::Pca(Box::new(left.combine(*right))),
             _ => unreachable!("one pass's partials come from Accumulator::leaf"),
         }
     }
 }
 
 impl Accumulator {
-    /// An empty leaf of the next pass's reduction.
-    pub(crate) fn leaf(&self) -> Partial {
+    /// An empty leaf of pass `pass`'s reduction.
+    pub(crate) fn leaf(&self, pass: u32) -> Partial {
         match self {
             Self::Totals(_) => Partial::Totals(Vec::new()),
             Self::Genes(genes) => Partial::Groups(genes.leaf()),
             Self::Moments(moments) => {
                 Partial::Moments(Box::new(GeneMoments::new(moments.sums.len(), false)))
             }
+            Self::Pca(pca) => Partial::Pca(Box::new(pca.leaf(pass))),
         }
     }
 
@@ -248,8 +278,17 @@ impl Accumulator {
     /// depend on the order of the cells: `seurat_v3`'s Welford moments with batches).
     pub(crate) fn sequential(&self, pass: u32) -> bool {
         match self {
-            Self::Totals(_) | Self::Moments(_) => false,
+            Self::Totals(_) | Self::Moments(_) | Self::Pca(_) => false,
             Self::Genes(genes) => genes.sequential(pass),
+        }
+    }
+
+    /// Whether pass `pass` has nothing to do and is not run (`pca`'s product passes
+    /// after its basis stopped growing).
+    pub(crate) fn skips(&self, pass: u32) -> bool {
+        match self {
+            Self::Pca(pca) => pca.skips(pass),
+            Self::Totals(_) | Self::Moments(_) | Self::Genes(_) => false,
         }
     }
 
@@ -290,6 +329,7 @@ impl Accumulator {
             }
             (Self::Genes(genes), Partial::Groups(groups)) => genes.fold(pass, groups, layer, block),
             (Self::Moments(_), Partial::Moments(moments)) => fold_moments(moments, layer),
+            (Self::Pca(pca), Partial::Pca(partial)) => pca.fold(partial, layer, block),
             _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
         }
     }
@@ -315,6 +355,8 @@ impl Accumulator {
             (Self::Moments(moments), None) => {
                 **moments = GeneMoments::new(moments.sums.len(), false);
             }
+            (Self::Pca(pca), Some(Partial::Pca(reduced))) => pca.end_pass(pass, Some(*reduced))?,
+            (Self::Pca(pca), None) => pca.end_pass(pass, None)?,
             _ => unreachable!("a pass's reduction comes from Accumulator::leaf"),
         }
         Ok(())
@@ -363,7 +405,7 @@ mod tests {
         let mut accumulator = stage.accumulator(n_genes, None, "store");
         let rows = pipeline_block(block);
         for pass in 0..stage.passes {
-            let mut leaf = accumulator.leaf();
+            let mut leaf = accumulator.leaf(0);
             accumulator.fold(pass, &mut leaf, block, &rows).unwrap();
             accumulator.end_pass(pass, Some(leaf)).unwrap();
         }
@@ -458,7 +500,7 @@ mod tests {
         let block = CellBlock::from_f32(vec![0, 1], vec![0], vec![1.5], 1).unwrap();
         let stage = CrossCellStage::new(0, 2, hvg(HvgFlavor::SeuratV3));
         let mut accumulator = stage.accumulator(1, None, "store");
-        let mut leaf = accumulator.leaf();
+        let mut leaf = accumulator.leaf(0);
         accumulator
             .fold(0, &mut leaf, &block, &pipeline_block(&block))
             .unwrap();

@@ -83,8 +83,8 @@
           5
         ],
         "device": "cpu",
-        "passes": 16,
-        "statistics_passes": 16,
+        "passes": 11,
+        "statistics_passes": 11,
         "apply_pass": false,
         "blocks": "cells",
         "block_cells": 4096

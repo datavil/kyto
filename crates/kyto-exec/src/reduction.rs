@@ -133,7 +133,7 @@ where
                 }
             }
             while starts.len() < groups.len() {
-                starts.push(accumulator.leaf());
+                starts.push(accumulator.leaf(pass));
             }
             let leaves = groups
                 .into_par_iter()

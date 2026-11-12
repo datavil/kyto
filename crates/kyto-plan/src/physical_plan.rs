@@ -12,7 +12,7 @@
 //! | `normalize_total` (median), `scale`, `filter_genes` reading the matrix, a fused pass starting with a median `normalize_total` | 1 | 1 | cells |
 //! | `highly_variable_genes` (`seurat`, `cell_ranger`), `with_genes` reading the matrix | 1 | 0 | cells |
 //! | `highly_variable_genes` (`seurat_v3`: moments, then clipped variances) | 2 | 0 | cells |
-//! | `pca` (streamed Halko: `2 + 2 x` [`PCA_POWER_ITERATIONS`]) | 16 | 0 | cells |
+//! | `pca` (streamed randomized block Krylov: `2 +` [`PCA_POWER_ITERATIONS`]) | 11 | 0 | cells |
 //! | `with_cells`/`with_genes` on metadata only, `neighbors`, `leiden`/`louvain` | 0 | 0 | in memory |
 //! | `with_default_layer` | 0 | 0 | none (resolved at build) |
 //!
@@ -38,11 +38,14 @@ use crate::optimized_plan::{NodeLine, Operation, OptimizedNode, OptimizedPlan};
 use crate::plan::Plan;
 use crate::with_columns::Columns;
 
-/// Power iterations of the streamed randomized PCA (Halko et al.), so its passes are
-/// `2 + 2 x PCA_POWER_ITERATIONS`: one for `A x Omega` (with the column means for the
-/// implicit centring), two per iteration (`A^T x Q`, then `A x Z`), one for `Q^T x A`.
-/// Provisional (scikit-learn's `n_iter="auto"` for few components); task 6.5 sets it.
-pub const PCA_POWER_ITERATIONS: u32 = 7;
+/// Power iterations of the streamed randomized PCA (task 6.5: a block Krylov method on
+/// the genes' side, Halko et al. 2011), so its passes are `2 + PCA_POWER_ITERATIONS`:
+/// one for the sketch `X^T Omega` (with the gene means for the implicit centring), one
+/// per iteration (the centred covariance times the newest block, `X^T (X Q)`, which
+/// grows the basis), one for the embedding `(X - mu) V`. Set on the fixtures
+/// (`kyto-exec/tests/pca_parity.rs`, 50 components of pbmc3k's 2,000 HVGs): 7 gave
+/// scanpy's variances to 1.2e-4, 9 to 1.3e-6 (the `float32` reference's precision).
+pub const PCA_POWER_ITERATIONS: u32 = 9;
 
 /// Where a node runs (R7: an argument, never a global setting).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -251,7 +254,7 @@ fn execution(node: &OptimizedNode, device: Device, cells: u64) -> Execution {
                     HvgFlavor::Seurat | HvgFlavor::CellRanger => streamed(1, false),
                     HvgFlavor::SeuratV3 => streamed(2, false),
                 },
-                CrossCellOp::Pca { .. } => streamed(2 + 2 * PCA_POWER_ITERATIONS, false),
+                CrossCellOp::Pca { .. } => streamed(2 + PCA_POWER_ITERATIONS, false),
             },
             Plan::WithColumns(with_columns) => {
                 let metadata_only = match with_columns.params().columns() {
