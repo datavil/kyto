@@ -24,7 +24,8 @@
 //! kyto-store's `StoreWriter` (an `.h5ad` through a temporary store and `sink_h5ad`).
 //! Highly variable genes (task 6.3) take their moments from those passes (with
 //! batches, `seurat_v3`'s loess fit, [`loess_fitted`]) and write their gene columns
-//! into the gene table later steps read.
+//! into the gene table later steps read. `scale` (task 6.4) takes per-gene moments
+//! from one pass and z-scores the layer in its apply pass ([`ScaleStatistics`]).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -47,6 +48,7 @@ mod pipeline_block;
 mod qc;
 mod reduction;
 mod run_control;
+mod scale;
 mod sink;
 mod statistics;
 
@@ -64,7 +66,7 @@ pub use qc::{CellQc, GeneSet, QcValues};
 pub use run_control::{Progress, RunControl};
 pub use statistics::{
     BatchStatistics, ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, HvgValues,
-    NodeStatistics, Statistics,
+    NodeStatistics, ScaleStatistics, Statistics,
 };
 // The block type lives in kyto-store (the tile reader builds it, the writer consumes
 // it); the executor names it from here.

@@ -2,7 +2,8 @@
 //!
 //! Does: dispatch one block to per-cell maps (`normalize_total`, `log1p`, fused or
 //! not), a cell step (`filter_cells`, `take_cells`, `with_cells`) or a gene selection
-//! (the remap a `filter_genes`/`select_genes` step leaves for later blocks); say
+//! (the remap a `filter_genes`/`select_genes` step leaves for later blocks) or
+//! `scale`'s apply pass (task 6.4); say
 //! whether an operator reads layers; give each new stream counters of its own and
 //! check them at the stream's end.
 //! Does not: compute statistics passes or gene steps (the pipeline does, before the
@@ -15,6 +16,7 @@ use crate::cell_steps::CellStep;
 use crate::elementwise::ElementwiseMaps;
 use crate::gene_steps::GeneSelection;
 use crate::pipeline_block::PipelineBlock;
+use crate::scale::ScaleMap;
 
 /// One streamed operator.
 #[derive(Debug, Clone)]
@@ -25,6 +27,8 @@ pub(crate) enum Operator {
     Cells(CellStep),
     /// The genes kept by a gene filter or selection.
     Genes(GeneSelection),
+    /// `scale`'s apply pass (task 6.4).
+    Scale(ScaleMap),
 }
 
 impl Operator {
@@ -43,13 +47,14 @@ impl Operator {
             Self::Maps(maps) => maps.apply(block, pool, store),
             Self::Cells(step) => step.apply(block, pool),
             Self::Genes(selection) => selection.apply(block, pool),
+            Self::Scale(scale) => scale.apply(block, pool, store),
         }
     }
 
     /// Whether it needs the blocks' layers (a gene selection only remaps what is there).
     pub(crate) fn reads_layers(&self) -> bool {
         match self {
-            Self::Maps(_) => true,
+            Self::Maps(_) | Self::Scale(_) => true,
             Self::Cells(step) => step.reads_layers(),
             Self::Genes(_) => false,
         }

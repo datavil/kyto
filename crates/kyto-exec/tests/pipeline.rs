@@ -291,19 +291,16 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let base = scan(&store);
-    let scale = base.scale(Some("counts"), "scaled", true, None).unwrap();
-    // `select_genes` and the other 5.8 steps run now, sinks since 5.9.
+    // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since 6.4.
     let pca = base.pca(Some("counts"), "X_pca", 2, 0).unwrap();
-    for (plan, method, task) in [(&scale, "scale", "6.4"), (&pca, "pca", "6.5")] {
-        let physical = PhysicalPlan::new(plan.optimize(), PhysicalOptions::default());
-        let error = Pipeline::new(&physical, 0).unwrap_err();
-        assert_eq!(error.code(), "KY-E601");
-        let message = error.to_string();
-        assert!(
-            message.contains(method) && message.contains(task),
-            "{message}"
-        );
-    }
+    let physical = PhysicalPlan::new(pca.optimize(), PhysicalOptions::default());
+    let error = Pipeline::new(&physical, 0).unwrap_err();
+    assert_eq!(error.code(), "KY-E601");
+    let message = error.to_string();
+    assert!(
+        message.contains("pca") && message.contains("6.5"),
+        "{message}"
+    );
     let physical = PhysicalPlan::new(base.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 1).unwrap_err();
     assert_eq!(error.code(), "KY-E215");

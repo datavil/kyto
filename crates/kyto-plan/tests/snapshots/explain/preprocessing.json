@@ -4,37 +4,43 @@
       "id": 5,
       "name": "PCA",
       "parameters": "\"scaled\" -> \"X_new\" n_components=2 seed=0",
-      "input": 4
+      "input": 4,
+      "note": null
     },
     {
       "id": 4,
       "name": "SCALE",
       "parameters": "\"logn\" -> \"scaled\" zero_center=true max_value=10",
-      "input": 3
+      "input": 3,
+      "note": "densifies: zero_center=true stores every gene of every cell in \"scaled\" (see estimate()); for PCA, give pca the unscaled layer, which it centres implicitly"
     },
     {
       "id": 3,
       "name": "HIGHLY_VARIABLE_GENES",
       "parameters": "\"counts\" flavor=seurat_v3 n_top_genes=3 batch_key=\"batch\"",
-      "input": 2
+      "input": 2,
+      "note": null
     },
     {
       "id": 2,
       "name": "LOG1P",
       "parameters": "\"norm\" -> \"logn\"",
-      "input": 1
+      "input": 1,
+      "note": null
     },
     {
       "id": 1,
       "name": "NORMALIZE_TOTAL",
       "parameters": "\"counts\" -> \"norm\" target_sum=10000",
-      "input": 0
+      "input": 0,
+      "note": null
     },
     {
       "id": 0,
       "name": "SCAN",
       "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
-      "input": null
+      "input": null,
+      "note": null
     }
   ],
   "optimized": {

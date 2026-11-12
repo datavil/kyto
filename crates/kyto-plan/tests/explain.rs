@@ -251,3 +251,37 @@ fn explain_leaves_the_plan_unchanged() {
         assert_eq!(plan.to_json(), before, "{name}");
     }
 }
+
+/// A centred `scale` carries a note that it densifies and what to do instead (task
+/// 6.4); an uncentred one, and every other step, none.
+#[test]
+fn a_centred_scale_notes_that_it_densifies() {
+    let centred = scan().scale(Some("counts"), "scaled", true, None).unwrap();
+    let explanation = centred.explanation();
+    let note = explanation.logical()[0].note.as_deref().unwrap();
+    assert!(note.starts_with("densifies"), "{note}");
+    assert!(
+        note.contains("pca") && note.contains("implicitly"),
+        "{note}"
+    );
+    assert!(
+        explanation.logical()[1..]
+            .iter()
+            .all(|entry| entry.note.is_none())
+    );
+    let text = centred.explain();
+    assert!(
+        text.lines()
+            .nth(1)
+            .unwrap()
+            .ends_with(&format!(" [{note}]")),
+        "{text}"
+    );
+    let json: serde_json::Value = serde_json::from_str(&centred.explain_json()).unwrap();
+    assert_eq!(json["logical"][0]["note"].as_str(), Some(note));
+    assert!(json["logical"][1]["note"].is_null());
+
+    let uncentred = scan().scale(Some("counts"), "scaled", false, None).unwrap();
+    assert!(uncentred.explanation().logical()[0].note.is_none());
+    assert!(!uncentred.explain().contains("densifies"));
+}

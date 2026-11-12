@@ -4,43 +4,50 @@
       "id": 6,
       "name": "LEIDEN",
       "parameters": "\"connectivities\" -> \"leiden\" resolution=1 seed=0",
-      "input": 5
+      "input": 5,
+      "note": null
     },
     {
       "id": 5,
       "name": "NEIGHBORS",
       "parameters": "\"X_new\" -> \"distances\", \"connectivities\" n_neighbors=15 metric=Euclidean search=Exact seed=0",
-      "input": 4
+      "input": 4,
+      "note": null
     },
     {
       "id": 4,
       "name": "PCA",
       "parameters": "\"logn\" -> \"X_new\" n_components=2 seed=0",
-      "input": 3
+      "input": 3,
+      "note": null
     },
     {
       "id": 3,
       "name": "FILTER_CELLS",
       "parameters": "cell_column('score') > -2.0",
-      "input": 2
+      "input": 2,
+      "note": null
     },
     {
       "id": 2,
       "name": "LOG1P",
       "parameters": "\"norm\" -> \"logn\"",
-      "input": 1
+      "input": 1,
+      "note": null
     },
     {
       "id": 1,
       "name": "NORMALIZE_TOTAL",
       "parameters": "\"counts\" -> \"norm\" target_sum=median",
-      "input": 0
+      "input": 0,
+      "note": null
     },
     {
       "id": 0,
       "name": "SCAN",
       "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
-      "input": null
+      "input": null,
+      "note": null
     }
   ],
   "optimized": {

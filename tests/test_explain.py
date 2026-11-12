@@ -126,12 +126,14 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
                 "name": "FILTER_GENES",
                 "parameters": "gene_column('feature_type') == 'Gene Expression'",
                 "input": 0,
+                "note": None,
             },
             {
                 "id": 0,
                 "name": "SCAN",
                 "parameters": f'"{path}" (2 cells x 3 genes)',
                 "input": None,
+                "note": None,
             },
         ],
         "optimized": {

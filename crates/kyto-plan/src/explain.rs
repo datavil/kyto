@@ -2,7 +2,8 @@
 //!
 //! Does: gather, from a logical plan and its [`PhysicalPlan`], one entry per logical
 //! node (from the last down to the scan: its ID, name, parameters with every name
-//! resolved in full (R6), and input) and the optimized plan's outputs and nodes (from
+//! resolved in full (R6), input, and a note in brackets when the step has a cheaper
+//! alternative: a centred `scale` densifies, task 6.4) and the optimized plan's outputs and nodes (from
 //! the top down: arena position, name, parameters, what a scan reads, input, the
 //! logical nodes it came from, and how it runs: device, passes, blocks). [`Explain`]
 //! prints the text form and writes the JSON form from the same entries, so the two
@@ -30,6 +31,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::cross_cell::CrossCellOp;
 use crate::optimized_plan::{NodeParameters, Operation};
 use crate::physical_plan::{Blocks, PhysicalOptions, PhysicalPlan};
 use crate::plan::Plan;
@@ -52,6 +54,9 @@ pub struct LogicalEntry {
     pub parameters: String,
     /// Its input's ID (`None` for the scan).
     pub input: Option<u64>,
+    /// A warning about the step and what to do instead (`None` for most steps): a
+    /// centred `scale` densifies its layer (task 6.4).
+    pub note: Option<String>,
 }
 
 /// One output of the optimized plan: the node a terminal reads and what it reads.
@@ -109,6 +114,7 @@ impl Explain {
                 name: node.name(),
                 parameters: Described(node).to_string(),
                 input: node.input().map(|input| input.id().0),
+                note: note(node),
             })
             .collect();
         let optimized = physical.optimized();
@@ -211,6 +217,26 @@ impl fmt::Display for Described<'_> {
     }
 }
 
+/// What `explain` warns about `node`, if anything: a centred `scale` stores every gene
+/// of every cell, where PCA would centre the sparse layer implicitly (task 6.4).
+fn note(node: &Plan) -> Option<String> {
+    match node {
+        Plan::CrossCell(cross_cell) => match cross_cell.params().op() {
+            CrossCellOp::Scale {
+                zero_center: true,
+                into,
+                ..
+            } => Some(format!(
+                "densifies: zero_center=true stores every gene of every cell in {into:?} \
+                 (see estimate()); for PCA, give pca the unscaled layer, which it centres \
+                 implicitly"
+            )),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `[layer:counts, cells:batch]`.
 fn member_list(members: &[String]) -> String {
     format!("[{}]", members.join(", "))
@@ -228,6 +254,9 @@ impl fmt::Display for Explain {
             )?;
             if let Some(input) = entry.input {
                 write!(formatter, " <- node {input}")?;
+            }
+            if let Some(note) = &entry.note {
+                write!(formatter, " [{note}]")?;
             }
         }
         formatter.write_str("\noptimized plan")?;

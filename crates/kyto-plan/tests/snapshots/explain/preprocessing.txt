@@ -1,6 +1,6 @@
 logical plan
   node 5 PCA "scaled" -> "X_new" n_components=2 seed=0 <- node 4
-  node 4 SCALE "logn" -> "scaled" zero_center=true max_value=10 <- node 3
+  node 4 SCALE "logn" -> "scaled" zero_center=true max_value=10 <- node 3 [densifies: zero_center=true stores every gene of every cell in "scaled" (see estimate()); for PCA, give pca the unscaled layer, which it centres implicitly]
   node 3 HIGHLY_VARIABLE_GENES "counts" flavor=seurat_v3 n_top_genes=3 batch_key="batch" <- node 2
   node 2 LOG1P "norm" -> "logn" <- node 1
   node 1 NORMALIZE_TOTAL "counts" -> "norm" target_sum=10000 <- node 0

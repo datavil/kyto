@@ -386,7 +386,9 @@ impl Atlas {
     /// The logical tree lists the plan's steps from the last down to the scan, each with
     /// its node ID and its parameters, every name resolved in full as the plan stored it
     /// (R6: a ``feature`` or a gene read by symbol shows the gene ID and layer it
-    /// names). The optimized tree is the plan optimized with every rule (for a terminal
+    /// names), and, in brackets, a note when the step has a cheaper alternative (a
+    /// centred ``scale`` stores every gene of every cell; PCA centres sparse data
+    /// implicitly). The optimized tree is the plan optimized with every rule (for a terminal
     /// reading all of its output): one line for what the output reads, then one line per
     /// node from the top down to the scan, each with the logical nodes it came from
     /// (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
@@ -401,7 +403,7 @@ impl Atlas {
     /// format : {"text", "json"}, default="text"
     ///     ``"text"``: the two trees as text, under ``logical plan`` and ``optimized
     ///     plan``. ``"json"``: the same as a dict with ``logical`` (one dict per step:
-    ///     ``id``, ``name``, ``parameters``, ``input``) and ``optimized`` (``outputs``:
+    ///     ``id``, ``name``, ``parameters``, ``input``, ``note``) and ``optimized`` (``outputs``:
     ///     ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
     ///     ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
     ///     ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,

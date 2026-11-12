@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 
 use kyto_plan::HvgFlavor;
 
+pub use crate::scale::ScaleStatistics;
+
 /// Per-gene sums and sums of squares of a layer over a group of cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneMoments {
@@ -279,6 +281,8 @@ pub enum NodeStatistics {
     MedianTotal(f64),
     /// `highly_variable_genes`.
     HighlyVariableGenes(Box<HighlyVariableGeneStatistics>),
+    /// `scale`: each gene's mean and standard deviation (task 6.4).
+    Scale(Box<ScaleStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

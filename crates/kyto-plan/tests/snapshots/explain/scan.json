@@ -4,7 +4,8 @@
       "id": 0,
       "name": "SCAN",
       "parameters": "\"synthetic.kyto\" (24 cells x 6 genes)",
-      "input": null
+      "input": null,
+      "note": null
     }
   ],
   "optimized": {

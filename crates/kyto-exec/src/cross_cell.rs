@@ -15,7 +15,9 @@
 //! `float32` (NaN when there is none, as numpy). HVG: see `hvg_pass.rs` (what its
 //! passes sum: `seurat` and `cell_ranger` one pass, `seurat_v3` two) and `hvg.rs`
 //! (the gene columns, computed by the pipeline once the passes ended).
-//! Does not: `scale` (6.4) or `pca` (6.5), or run passes (see `reduction.rs`).
+//! `scale` (task 6.4): one pass of per-gene moments, then its apply pass (see
+//! `scale.rs`).
+//! Does not: `pca` (6.5), or run passes (see `reduction.rs`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -28,8 +30,10 @@ use polars::prelude::DataFrame;
 use crate::elementwise::{ElementwiseMaps, cell_totals};
 use crate::hvg_pass::{BatchColumn, GroupPartial, HvgAccumulator};
 use crate::kernels::Kernels;
+use crate::operator::Operator;
 use crate::pipeline_block::PipelineBlock;
-use crate::statistics::NodeStatistics;
+use crate::scale::{ScaleMap, ScaleStatistics, fold_moments};
+use crate::statistics::{GeneMoments, NodeStatistics};
 
 /// A cross-cell node of the stream, with the statistics passes the physical plan
 /// gives it.
@@ -58,6 +62,13 @@ pub(crate) enum CrossCellKind {
         n_top_genes: Option<u64>,
         batch_key: Option<String>,
     },
+    /// `scale` of `layer` into layer `into`.
+    Scale {
+        layer: String,
+        into: String,
+        zero_center: bool,
+        max_value: Option<f64>,
+    },
 }
 
 impl CrossCellStage {
@@ -68,7 +79,7 @@ impl CrossCellStage {
     /// (kyto-plan) and the executor disagree, a kyto bug.
     pub(crate) fn new(node: usize, passes: u32, kind: CrossCellKind) -> Self {
         let needed = match &kind {
-            CrossCellKind::MedianNormalize { .. } => 1,
+            CrossCellKind::MedianNormalize { .. } | CrossCellKind::Scale { .. } => 1,
             CrossCellKind::HighlyVariableGenes { flavor, .. } => match flavor {
                 HvgFlavor::Seurat | HvgFlavor::CellRanger => 1,
                 HvgFlavor::SeuratV3 => 2,
@@ -87,7 +98,8 @@ impl CrossCellStage {
             CrossCellKind::MedianNormalize { maps, .. } => {
                 maps.first().map_or("", MapElementwise::layer)
             }
-            CrossCellKind::HighlyVariableGenes { layer, .. } => layer,
+            CrossCellKind::HighlyVariableGenes { layer, .. }
+            | CrossCellKind::Scale { layer, .. } => layer,
         }
     }
 
@@ -95,7 +107,7 @@ impl CrossCellStage {
     pub(crate) fn batch_key(&self) -> Option<&str> {
         match &self.kind {
             CrossCellKind::HighlyVariableGenes { batch_key, .. } => batch_key.as_deref(),
-            CrossCellKind::MedianNormalize { .. } => None,
+            CrossCellKind::MedianNormalize { .. } | CrossCellKind::Scale { .. } => None,
         }
     }
 
@@ -109,6 +121,9 @@ impl CrossCellStage {
     ) -> Accumulator {
         match &self.kind {
             CrossCellKind::MedianNormalize { .. } => Accumulator::Totals(Vec::new()),
+            CrossCellKind::Scale { .. } => {
+                Accumulator::Moments(Box::new(GeneMoments::new(n_genes, false)))
+            }
             CrossCellKind::HighlyVariableGenes {
                 layer,
                 flavor,
@@ -131,22 +146,44 @@ impl CrossCellStage {
     }
 
     /// The node's statistics (for HVG without its gene columns, which need the gene
-    /// table: see `hvg::columns`), and the maps of its apply pass if it has one.
-    pub(crate) fn finish(
-        &self,
-        accumulator: Accumulator,
-    ) -> (NodeStatistics, Option<ElementwiseMaps>) {
+    /// table: see `hvg::columns`), and the operator of its apply pass if it has one.
+    pub(crate) fn finish(&self, accumulator: Accumulator) -> (NodeStatistics, Option<Operator>) {
         match (accumulator, &self.kind) {
             (Accumulator::Totals(mut totals), CrossCellKind::MedianNormalize { maps, keep }) => {
                 let median = median(&mut totals);
                 let apply = ElementwiseMaps::new(maps.clone(), keep.as_ref()).with_median(median);
-                (NodeStatistics::MedianTotal(median), Some(apply))
+                (
+                    NodeStatistics::MedianTotal(median),
+                    Some(Operator::Maps(apply)),
+                )
             }
             (Accumulator::Genes(genes), _) => (
                 NodeStatistics::HighlyVariableGenes(Box::new(genes.finish())),
                 None,
             ),
-            (Accumulator::Totals(_), CrossCellKind::HighlyVariableGenes { .. }) => {
+            (
+                Accumulator::Moments(moments),
+                CrossCellKind::Scale {
+                    layer,
+                    into,
+                    zero_center,
+                    max_value,
+                },
+            ) => {
+                let statistics = ScaleStatistics::from_moments(&moments);
+                let apply = ScaleMap::new(
+                    layer.clone(),
+                    into.clone(),
+                    *zero_center,
+                    *max_value,
+                    statistics.clone(),
+                );
+                (
+                    NodeStatistics::Scale(Box::new(statistics)),
+                    Some(Operator::Scale(apply)),
+                )
+            }
+            (Accumulator::Totals(_) | Accumulator::Moments(_), _) => {
                 unreachable!("a stage's accumulator comes from CrossCellStage::accumulator")
             }
         }
@@ -160,6 +197,8 @@ pub(crate) enum Accumulator {
     Totals(Vec<f64>),
     /// `highly_variable_genes`' moments and fits.
     Genes(Box<HvgAccumulator>),
+    /// `scale`'s per-gene moments.
+    Moments(Box<GeneMoments>),
 }
 
 /// What one leaf of a pass's reduction holds (task 5.6): the sums over one store cell
@@ -170,6 +209,8 @@ pub(crate) enum Partial {
     Totals(Vec<f64>),
     /// Per-gene moments per group of cells.
     Groups(GroupPartial),
+    /// Per-gene moments of every cell (`scale`).
+    Moments(Box<GeneMoments>),
 }
 
 impl Partial {
@@ -182,6 +223,10 @@ impl Partial {
                 Self::Totals(left)
             }
             (Self::Groups(left), Self::Groups(right)) => Self::Groups(left.combine(right)),
+            (Self::Moments(mut left), Self::Moments(right)) => {
+                left.combine(&right);
+                Self::Moments(left)
+            }
             _ => unreachable!("one pass's partials come from Accumulator::leaf"),
         }
     }
@@ -193,6 +238,9 @@ impl Accumulator {
         match self {
             Self::Totals(_) => Partial::Totals(Vec::new()),
             Self::Genes(genes) => Partial::Groups(genes.leaf()),
+            Self::Moments(moments) => {
+                Partial::Moments(Box::new(GeneMoments::new(moments.sums.len(), false)))
+            }
         }
     }
 
@@ -200,7 +248,7 @@ impl Accumulator {
     /// depend on the order of the cells: `seurat_v3`'s Welford moments with batches).
     pub(crate) fn sequential(&self, pass: u32) -> bool {
         match self {
-            Self::Totals(_) => false,
+            Self::Totals(_) | Self::Moments(_) => false,
             Self::Genes(genes) => genes.sequential(pass),
         }
     }
@@ -241,6 +289,7 @@ impl Accumulator {
                 Ok(())
             }
             (Self::Genes(genes), Partial::Groups(groups)) => genes.fold(pass, groups, layer, block),
+            (Self::Moments(_), Partial::Moments(moments)) => fold_moments(moments, layer),
             _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
         }
     }
@@ -262,6 +311,10 @@ impl Accumulator {
                 genes.end_pass(pass, Some(reduced))?;
             }
             (Self::Genes(genes), None) => genes.end_pass(pass, None)?,
+            (Self::Moments(moments), Some(Partial::Moments(reduced))) => *moments = reduced,
+            (Self::Moments(moments), None) => {
+                **moments = GeneMoments::new(moments.sums.len(), false);
+            }
             _ => unreachable!("a pass's reduction comes from Accumulator::leaf"),
         }
         Ok(())
