@@ -15,8 +15,8 @@ use std::path::Path;
 
 use kyto_error::KytoError;
 use polars::prelude::{
-    Column, DataFrame, DataType, FrozenCategories, ParquetCompression, ParquetReader,
-    ParquetWriter, SerReader, StatisticsOptions,
+    Column, DataFrame, DataType, FrozenCategories, ParallelStrategy, ParquetCompression,
+    ParquetReader, ParquetWriter, SerReader, StatisticsOptions,
 };
 
 use crate::table_axis::TableAxis;
@@ -110,6 +110,17 @@ pub(crate) fn write_table_columns(
     table_columns(axis, &stored)
 }
 
+/// A Parquet reader of a table that decodes columns in parallel, never row groups.
+///
+/// Polars' default strategy decodes the row groups of a table with more row groups
+/// than columns in parallel, and each row group of an `Enum` column builds a lookup
+/// of all its categories: pbmc3k's `symbol` (32 738 categories, 32 row groups) peaked
+/// at about 50 MB to hold 5 MB. By columns it peaks at about 1.5 times what it holds
+/// (task 5.10).
+fn table_reader(file: File) -> ParquetReader<File> {
+    ParquetReader::new(file).read_parallel(ParallelStrategy::Columns)
+}
+
 /// Read the `axis` table of the store at `store` and check it (format.md §5).
 ///
 /// Returns a new frame the caller owns: the String ID column first, string columns as
@@ -122,7 +133,7 @@ pub fn read_table(store: &Path, axis: TableAxis) -> Result<DataFrame, KytoError>
     let path = store.join(axis.file_name());
     let path_text = path.display().to_string();
     let file = File::open(&path).map_err(|error| store_io("open table", &path_text, error))?;
-    let frame = ParquetReader::new(file)
+    let frame = table_reader(file)
         .finish()
         .map_err(|error| store_io("read table", &path_text, error))?;
     check_table(axis, &frame, PlainStrings::Forbidden).map_err(|error| {
@@ -154,7 +165,7 @@ pub fn read_ids(store: &Path, axis: TableAxis, n_rows: u64) -> Result<Vec<String
         problem,
     };
     let file = File::open(&path).map_err(|error| store_io("open table", &path_text, error))?;
-    let frame = ParquetReader::new(file)
+    let frame = table_reader(file)
         .with_columns(Some(vec![axis.id_column().to_owned()]))
         .finish()
         .map_err(|error| store_io("read table", &path_text, error))?;
@@ -211,7 +222,7 @@ pub fn read_symbols(store: &Path, n_rows: u64) -> Result<Vec<Option<String>>, Ky
         problem,
     };
     let file = File::open(&path).map_err(|error| store_io("open table", &path_text, error))?;
-    let frame = ParquetReader::new(file)
+    let frame = table_reader(file)
         .with_columns(Some(vec![SYMBOL.to_owned()]))
         .finish()
         .map_err(|error| store_io("read table", &path_text, error))?;

@@ -228,8 +228,10 @@ class Atlas:
         passes read (fewer bytes are on disk, compressed; the cell and gene tables are
         not counted). ``peak_memory`` is the most memory the plan holds at once: the
         blocks in flight in every streamed step (sized for blocks of mean density) plus
-        statistics and in-memory results; the store reader's part is within 25% of
-        what it allocates on the test fixtures. Nothing is read.
+        statistics, in-memory results and the cell and gene tables the run reads (a
+        filter, ``take_cells``, ``select_genes``, a computed column or a sink reads a
+        whole table; string lengths are assumed, task 5.10); within 25% of what the
+        executor allocates on the test fixtures. Nothing is read.
 
         Returns
         -------

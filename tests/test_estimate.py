@@ -21,6 +21,12 @@ _PASS_BYTES = 3 * 8 + 4097 * 4 + 2 * 8
 # Opening the layer decodes one 65 536-value `tile_offsets` chunk and copies it; its
 # 2 `tile_offsets` values stay held.
 _PEAK = 2 * 65536 * 8 + 2 * 8
+# A gene filter reads the gene table (task 5.10), held until the run ends: `gene_id`
+# at 40 bytes a String value, and the Enum columns `symbol` (3 categories) and
+# `feature_type` (2) at a 4-byte code per gene and 160 bytes per category.
+_GENE_TABLE = 3 * 40 + (3 * 4 + 3 * 160) + (3 * 4 + 2 * 160)
+# Finding a profile's cell reads the cell table: `cell_id` of 2 cells.
+_CELL_TABLE = 2 * 40
 
 
 @pytest.fixture
@@ -52,7 +58,12 @@ def test_estimates_read_nothing(store: Path) -> None:
     ]
     shutil.rmtree(store)  # estimate() reads nothing
     # The `cell_profile` filter makes a statistics pass and keeps 8 bytes per gene.
-    expected = [(1, _PEAK), (1, _PEAK), (1, _PEAK), (2, _PEAK + 3 * 8)]
+    expected = [
+        (1, _PEAK),
+        (1, _PEAK),
+        (1, _PEAK + _GENE_TABLE),
+        (2, _PEAK + _GENE_TABLE + _CELL_TABLE + 3 * 8),
+    ]
     for plan, (passes, peak) in zip(plans, expected, strict=True):
         assert plan.estimate() == {
             "passes": passes,

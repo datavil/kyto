@@ -12,11 +12,11 @@
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use kyto_core::{AtlasSchema, CellExpr, GeneIds};
+use kyto_core::{AtlasSchema, CellExpr, GeneExpr, GeneIds};
 use kyto_plan::{
-    ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, Device, HvgFlavor, Member,
-    Metric, NeighborSearch, Neighbors, OptimizeOptions, Output, PCA_POWER_ITERATIONS,
-    PhysicalOptions, Plan, Sink, physical_plan,
+    ASSUMED_CATEGORY_BYTES, ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, ASSUMED_STRING_BYTES,
+    CostEstimate, Device, HvgFlavor, Member, Metric, NeighborSearch, Neighbors, OptimizeOptions,
+    Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Sink, physical_plan,
 };
 
 const N_CELLS: u64 = 10_000;
@@ -71,6 +71,13 @@ const SCAN_BLOCK: u64 = (2 * 4_097 * 4 + 819_200 * 8) + 4_096 * 4 + 4_097 * 8 + 
 /// A joined block of `counts` (or one mapped from it) as the consumer holds it and the
 /// pool keeps it: `indices` and values at the capacity pushing reaches, and `indptr`.
 const HELD_BLOCK: u64 = 1_048_576 * 8 + 4_097 * 8;
+
+/// The cell table in memory (task 5.10): `cell_id` at the assumed 40 bytes a `String`
+/// value, `score` 4 bytes a value.
+const CELL_TABLE: u64 = N_CELLS * 40 + N_CELLS * 4;
+
+/// The gene table in memory: `gene_id` at 40 bytes a value.
+const GENE_TABLE: u64 = N_GENES * 40;
 
 #[test]
 fn a_scan_read_whole() {
@@ -132,8 +139,9 @@ fn split_blocks_hold_fewer_cells() {
     assert!(joining > reading);
     let held = 262_144 * 8 + 1_025 * 8;
     let small = with(1_024);
-    // 12 blocks (3 cell blocks of 4 parts): the consumer's block and the pool's one.
-    assert_eq!(small.block_memory(), joining + 2 * held);
+    // 12 blocks (3 cell blocks of 4 parts): the consumer's block and the pool's two
+    // (its most, `(1 + 1)` blocks of 1 layer; the reader allocates every block anew).
+    assert_eq!(small.block_memory(), joining + 3 * held);
     // Each block reads its tiles' whole `indptr`: 4 x the indptr bytes of whole blocks.
     assert_eq!(
         small.bytes_read(),
@@ -206,9 +214,11 @@ fn metadata_only_plans_read_no_matrix() {
         estimate(&[Output::members(&plan, [Member::CellColumn("twice".into())]).unwrap()]);
     assert_eq!(estimate.passes(), 0);
     assert_eq!(estimate.bytes_read(), 0);
-    // The scan reads no layer: no blocks, no `tile_offsets`; the column is held.
-    assert_eq!(estimate.block_memory(), 0);
-    assert_eq!(estimate.resident_memory(), N_CELLS * 4);
+    // The scan reads no layer: no blocks, no `tile_offsets`. The executor reads the
+    // cell table (task 5.10), half again its largest column (`cell_id`) for a moment,
+    // and holds it and the column.
+    assert_eq!(estimate.block_memory(), N_CELLS * 40 * 3 / 2);
+    assert_eq!(estimate.resident_memory(), N_CELLS * 4 + CELL_TABLE);
 }
 
 #[test]
@@ -231,20 +241,21 @@ fn nodes_writing_layers_hold_an_output_block() {
     let log1p = estimate_all(&scan().log1p(Some("counts"), "log1p").unwrap()).block_memory();
     // The output block (`float32` values and `u32` indices of a mean block and its
     // `indptr`) is held with the joined block, less than reading it; but while the last
-    // block is read the consumer holds a block of both layers and the pool keeps the
-    // buffers of the two layers of the block before.
+    // block is read the consumer holds a block of both layers and the pool keeps one
+    // buffer: of the 4 the first window allocated, the consumer holds 2 and the last
+    // block's `log1p` takes one back (task 5.10).
     const { assert!(HELD_BLOCK + 819_200 * 8 + 4_097 * 8 < SCAN_BLOCK) };
-    assert_eq!(log1p, SCAN_BLOCK + 4 * HELD_BLOCK);
+    assert_eq!(log1p, SCAN_BLOCK + 3 * HELD_BLOCK);
     // Centred `scale` is dense: every gene of every row, with the joined block.
     let scaled = estimate_all(&scan().scale(Some("counts"), "scaled", true, None).unwrap());
     let dense = 4_096 * N_GENES * 8 + 4_097 * 8;
     assert!(HELD_BLOCK + dense > SCAN_BLOCK);
     // While the last block is computed: one block's work, the consumer's block of both
     // layers (the dense one at its capacity, 2^23 entries, is `dense`) and the pool's
-    // 2 dense buffers.
+    // dense buffer.
     assert_eq!(
         scaled.block_memory(),
-        (HELD_BLOCK + dense) + (HELD_BLOCK + dense) + 2 * dense
+        (HELD_BLOCK + dense) + (HELD_BLOCK + dense) + dense
     );
     // Its statistics: a mean and a variance per gene, and while its statistics pass
     // runs, the same per leaf of its reduction (task 5.6): 2 blocks in flight and the
@@ -327,4 +338,149 @@ fn huge_sizes_saturate() {
 fn assumed_chunk_sizes_are_the_writer_defaults() {
     assert_eq!(ASSUMED_NNZ_CHUNK_SIZE, kyto_store::DEFAULT_NNZ_CHUNK_SIZE);
     assert_eq!(ASSUMED_NNZ_SHARD_SIZE, kyto_store::DEFAULT_NNZ_SHARD_SIZE);
+}
+
+#[test]
+fn steps_read_the_tables_they_need() {
+    let scan_only = estimate_all(&scan());
+    let resident = |plan: &Arc<Plan>| estimate_all(plan).resident_memory() - 56;
+    // A cell filter reads the cell table; a gene filter the gene table.
+    let cells = scan()
+        .filter_cells(
+            &kyto_core::Expr::binary(
+                CellExpr::column("score"),
+                kyto_core::BinaryOp::Gt,
+                kyto_core::Literal::Int(0),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(resident(&cells), CELL_TABLE);
+    let genes = scan()
+        .filter_genes(
+            &GeneExpr::column("gene_id")
+                .str(kyto_core::StrFunction::StartsWith("MT-".to_owned()))
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(resident(&genes), GENE_TABLE);
+    // `with_cells` reading one gene's values reads both; `take_cells` the cell table,
+    // `select_genes` the gene table; a sink both.
+    let gene_values = scan()
+        .with_cells([(
+            "g1".to_owned(),
+            CellExpr::expression(Some("counts".to_owned()), "G1"),
+        )])
+        .unwrap();
+    assert_eq!(
+        resident(&gene_values),
+        N_CELLS * 4 + CELL_TABLE + GENE_TABLE
+    );
+    let taken = scan().take_cells(["c1".to_owned()]).unwrap();
+    assert_eq!(resident(&taken), CELL_TABLE);
+    let selected = scan().select_genes(["G1".to_owned()]).unwrap();
+    assert_eq!(resident(&selected), GENE_TABLE);
+    let sink = scan()
+        .sink(Sink::Zarr {
+            path: "out.kyto".to_owned(),
+        })
+        .unwrap();
+    assert_eq!(resident(&sink), CELL_TABLE + GENE_TABLE);
+    // A map reads no table.
+    let log1p = scan().log1p(Some("counts"), "log1p").unwrap();
+    assert_eq!(resident(&log1p), scan_only.resident_memory() - 56);
+}
+
+#[test]
+fn an_enum_column_holds_its_categories() {
+    let json = schema_json(N_CELLS, N_GENES, 2_000_000).replace(
+        r#"{"name": "gene_id", "dtype": "String"}"#,
+        r#"{"name": "gene_id", "dtype": "String"},
+    {"name": "symbol", "dtype": "Enum", "n_categories": 30000, "ordered": false}"#,
+    );
+    let schema: AtlasSchema = serde_json::from_str(&json).unwrap();
+    let genes: Vec<String> = (0..N_GENES).map(|gene| format!("G{gene}")).collect();
+    let plan = Plan::scan("estimate.kyto", schema, GeneIds::new(genes))
+        .filter_genes(
+            &GeneExpr::column("symbol")
+                .str(kyto_core::StrFunction::StartsWith("MT-".to_owned()))
+                .unwrap(),
+        )
+        .unwrap();
+    let estimate = estimate_all(&plan);
+    // A 4-byte code per gene and 160 bytes per category, used or not.
+    let symbol = N_GENES * 4 + 30_000 * 160;
+    assert_eq!(estimate.resident_memory() - 56, GENE_TABLE + symbol);
+    // A second Enum column: reading takes half again both, decoding at once.
+    let json = json.replace(
+        r#""ordered": false}"#,
+        r#""ordered": false},
+    {"name": "name", "dtype": "Enum", "n_categories": 30000, "ordered": false}"#,
+    );
+    let schema: AtlasSchema = serde_json::from_str(&json).unwrap();
+    let genes: Vec<String> = (0..N_GENES).map(|gene| format!("G{gene}")).collect();
+    let two = Plan::scan("estimate.kyto", schema, GeneIds::new(genes))
+        .filter_genes(
+            &GeneExpr::column("symbol")
+                .str(kyto_core::StrFunction::StartsWith("MT-".to_owned()))
+                .unwrap(),
+        )
+        .unwrap();
+    // Reading only the gene column: no layer streams, the table read is the blocks
+    // term.
+    let output = Output::members(&two, [Member::GeneColumn("symbol".into())]).unwrap();
+    let reading = physical_plan(&[output], OptimizeOptions::ALL, PhysicalOptions::default())
+        .estimate()
+        .block_memory();
+    assert_eq!(reading, 2 * symbol * 3 / 2);
+    assert_eq!((ASSUMED_STRING_BYTES, ASSUMED_CATEGORY_BYTES), (40, 160));
+}
+
+#[test]
+fn a_filter_copies_the_blocks_it_rewrites() {
+    let predicate = kyto_core::Expr::binary(
+        CellExpr::column("score"),
+        kyto_core::BinaryOp::Gt,
+        kyto_core::Literal::Int(0),
+    )
+    .unwrap();
+    // Before `log1p`: the filter copies each block of `counts` (its mean entries and
+    // `indptr`) into a buffer from the pool and gives the joined one back; with the
+    // `log1p` block that is more than reading the tiles.
+    let plan = scan()
+        .filter_cells(&predicate)
+        .unwrap()
+        .log1p(Some("counts"), "log1p")
+        .unwrap();
+    let copy = 819_200 * 8 + 4_097 * 8;
+    let per_block = HELD_BLOCK + 2 * copy;
+    assert!(per_block > SCAN_BLOCK);
+    // While the last block is computed: its work, the consumer's block of both layers
+    // and 2 pooled buffers (the first window allocated 6, the consumer holds 2, the last
+    // block takes 2 back).
+    assert_eq!(
+        estimate_all(&plan).block_memory(),
+        per_block + 2 * HELD_BLOCK + 2 * HELD_BLOCK
+    );
+    // A second filter copies into the buffers the first gave back: no more memory.
+    let gene_filter = GeneExpr::column("gene_id")
+        .str(kyto_core::StrFunction::StartsWith("MT-".to_owned()))
+        .unwrap();
+    let twice = scan()
+        .filter_cells(&predicate)
+        .unwrap()
+        .filter_genes(&gene_filter)
+        .unwrap()
+        .log1p(Some("counts"), "log1p")
+        .unwrap();
+    assert_eq!(
+        estimate_all(&twice).block_memory(),
+        estimate_all(&plan).block_memory()
+    );
+    // After `log1p` a filter copies both layers.
+    let after = plan.filter_genes(&gene_filter).unwrap();
+    assert_eq!(
+        estimate_all(&after).block_memory(),
+        (per_block + copy) + 2 * HELD_BLOCK + 3 * HELD_BLOCK
+    );
 }

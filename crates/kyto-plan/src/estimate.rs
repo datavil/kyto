@@ -19,7 +19,7 @@
 //! `(C + 1) x 4` of `indptr` per tile and its `tile_offsets` (8 bytes per tile, plus 8),
 //! times the passes. Empty tiles count as read (an upper bound: their number is only
 //! known from `tile_offsets`). The compressed bytes on disk are fewer (zstd), and the
-//! Parquet tables are not counted.
+//! Parquet tables are not counted in bytes read (their memory is, below).
 //!
 //! **Peak memory** is the stream's working set plus what stays in memory, as the
 //! executor (task 5.2) holds them (measured in `crates/kyto-exec/tests/estimate_fixtures.rs`,
@@ -30,11 +30,18 @@
 //! block (`nnz x rows / n_cells`), a block in flight holds the larger of reading the
 //! scan's tiles (the scan's row below) and, once they are joined, the joined layers
 //! plus every layer the streamed nodes write (the rows below the scan's), not both:
-//! the executor reads a window, then maps it. A stream longer than its window adds,
-//! while a later window (`min(window, blocks - window)` blocks) is computed, the block
-//! its consumer holds (each output's layers) and the buffers the block pool keeps (one
-//! entry per scanned layer and per node writing layers, for at most `window + 1`
-//! blocks, never more than the window before held), each at most the largest layer
+//! the executor reads a window, then maps it. A step rewriting a block's rows (a cell
+//! filter, `take_cells`) or genes (a gene filter, `select_genes`) copies the layers the
+//! block carries (`e x (4 + value bytes) + (rows + 1) x 8` each) into pooled buffers
+//! and gives the old ones back, which a later such step takes: one copy per block, the
+//! largest. A stream longer than its window adds, while a later window (`later =
+//! min(window, blocks - window)` blocks) is computed, the block its consumer holds
+//! (each output's layers) and the free buffers of the block pool (task 5.10): the
+//! first window allocates every buffer its blocks hold, a later block only its
+//! reader's (written layers and copies come from the pool); free are those the
+//! consumer does not hold and the later window does not take, at most the pool's
+//! `(window + 1) x entries` (one entry per scanned layer and per operator: a node
+//! writing layers, a cell step, a gene selection), each at most the largest layer
 //! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) + (rows +
 //! 1) x 8`. Per node:
 //!
@@ -46,7 +53,10 @@
 //! | sink `h5ad` | per layer: `e x 8` (positions widened for HDF5) |
 //!
 //! Opening a layer, before the stream starts, decodes one 65 536-value chunk of its
-//! `tile_offsets` and copies it (1 MiB for a moment); the blocks term is at least that.
+//! `tile_offsets` and copies it (1 MiB for a moment); reading the cell and gene tables,
+//! also before, takes half again a table's largest column for a moment
+//! (`estimate_tables.rs`); the blocks term is at least each. The tables a run reads
+//! are held until it ends (resident).
 //! What stays in memory: each scanned layer's `tile_offsets`; every column (8 bytes a
 //! value; `Boolean` and 8-bit 1, 16-bit 2, 32-bit and `Enum` codes 4, `String` 16 as
 //! Polars string views), embedding (`rows x width x dtype`) and graph (`nnz x (4 +
@@ -64,16 +74,17 @@
 //! blocks that decode term (every tile at once) is far above what few threads hold. The
 //! other rows are promises to the executor (5.x) and the algorithms (6.x), which must
 //! check their own row when they land.
-//! Does not: read `tile_offsets` (exact per-block `nnz`) or the tables, count Polars
-//! tables, threads' scratch, the allocator's own overhead or the output a terminal
-//! returns, or choose blocks for a memory limit (`memory_limit.rs` uses this estimate
-//! to do that).
+//! Does not: read `tile_offsets` (exact per-block `nnz`) or the tables (their string
+//! lengths are assumed), count threads' scratch, the allocator's own overhead or the
+//! output a terminal returns, or choose blocks for a memory limit (`memory_limit.rs`
+//! uses this estimate to do that).
 
 use std::fmt;
 
 use kyto_core::{ColumnDtype, FloatDtype, LayerDtype, LayerSchema};
 
 use crate::cross_cell::CrossCellOp;
+use crate::estimate_tables::TableReads;
 use crate::filter::Predicate;
 use crate::map_elementwise::ElementwiseOp;
 use crate::members::Member;
@@ -83,6 +94,7 @@ use crate::physical_plan::{Blocks, Device, PhysicalPlan};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
 use crate::sink::Sink;
+use crate::with_columns::Columns;
 
 /// Inner chunk size `K` of `indices` and `data` the estimate assumes: the store
 /// writer's default (`kyto_store::DEFAULT_NNZ_CHUNK_SIZE`, provisional until 10.4).
@@ -182,12 +194,20 @@ impl PhysicalPlan {
         let mut joined_and_written = 0_u128;
         let mut once = 0_u128;
         // The stream (task 5.2): its window, its blocks, and its block pool's entries
-        // (one per scanned layer and per streamed node writing layers, each at most
-        // the largest layer block).
+        // (one per scanned layer and per operator: a streamed node writing layers, a
+        // cell step or a gene selection, each at most the largest layer block).
         let mut window = 0_u128;
         let mut n_blocks = 0_u128;
         let mut pool_entries = 0_u128;
         let mut largest_layer_block = 0_u128;
+        // The layers a block carries so far, and the most a step that rewrites its
+        // rows or genes copies (task 5.10).
+        let mut carried: Vec<(u64, LayerDtype)> = Vec::new();
+        let mut rewrite = 0_u128;
+        // Buffers a block allocates (reader) or takes from the pool (writers, copies).
+        let mut scanned_buffers = 0_u128;
+        let mut taken_buffers = 0_u128;
+        let mut rewrite_buffers = 0_u128;
         for (index, ((node, execution), schema)) in
             nodes.iter().zip(executions).zip(&schemas).enumerate()
         {
@@ -212,18 +232,33 @@ impl PhysicalPlan {
                         scan_reading += scan.block_bytes();
                         joined_and_written += joined;
                         pool_entries += 1;
+                        scanned_buffers += 1;
                         largest_layer_block = largest_layer_block.max(joined);
                         pass_bytes += scan.pass_bytes();
                         resident += scan.tile_offsets_bytes();
                         opening = OPEN_LAYER_BYTES;
+                        carried.push((layer.nnz, layer.dtype));
                     }
                 }
                 _ => {
+                    if rewrites_blocks(node) {
+                        let copy = carried
+                            .iter()
+                            .map(|(nnz, dtype)| {
+                                sizes.entries(*nnz) * (4 + layer_value_bytes(*dtype))
+                                    + (sizes.rows + 1) * 8
+                            })
+                            .sum::<u128>();
+                        rewrite = rewrite.max(copy);
+                        rewrite_buffers = rewrite_buffers.max(carried.len() as u128);
+                    }
                     let written = written_layers(node, schema);
-                    if !written.is_empty() {
+                    if !written.is_empty() || is_cell_or_gene_step(node) {
                         pool_entries += 1;
                     }
                     for layer in written {
+                        taken_buffers += 1;
+                        carried.push((layer.nnz, layer.dtype));
                         largest_layer_block = largest_layer_block.max(held_block_bytes(
                             &sizes,
                             layer.nnz,
@@ -243,22 +278,31 @@ impl PhysicalPlan {
                 sizes.n_blocks,
             );
         }
+        // A step rewriting a block's rows or genes copies its layers into buffers from
+        // the pool and gives the old ones back, which a later such step takes: one
+        // copy per block, however many steps (task 5.10).
+        joined_and_written += rewrite;
         let per_block = scan_reading.max(joined_and_written);
         let mut block = window * per_block;
         // A stream longer than its window: while a later window (`later` blocks) is
         // computed, the consumer holds a block and the pool keeps the buffers of the
         // blocks before (the layers the stream drops and the blocks the consumer gave
         // back): at most `(window + 1) x entries` buffers (task 5.2's pool), and no more
-        // than the window before held (the pool hands buffers out before the stream
-        // allocates new ones).
+        // than the blocks before allocated (task 5.10).
         if n_blocks > window {
             let later = window.min(n_blocks - window);
             let (held, held_layers) = self.held_blocks(&schemas);
-            // Every buffer of the blocks before, but the consumer's.
-            let recycled = ((n_blocks - later) * pool_entries)
-                .saturating_sub(held_layers)
+            // The buffers the blocks before allocated: the first window every buffer
+            // it holds, each later block only its reader's (the rest come from the
+            // pool). Free are those the consumer does not hold and the later window
+            // does not take back (task 5.10).
+            let taken = taken_buffers + rewrite_buffers;
+            let allocated =
+                window * (scanned_buffers + taken) + (n_blocks - later - window) * scanned_buffers;
+            let recycled = allocated
+                .saturating_sub(held_layers + later * taken)
                 .min((window + 1) * pool_entries);
-            let pool = (recycled * largest_layer_block).min(window * joined_and_written);
+            let pool = recycled * largest_layer_block;
             block = block.max(later * per_block + held + pool);
         }
         block += once;
@@ -273,11 +317,12 @@ impl PhysicalPlan {
             .zip(executions)
             .any(|(_, execution)| matches!(execution.blocks(), Blocks::Cells(_)));
         let passes = statistics_passes.saturating_add(u32::from(reads_stream && streams));
+        let tables = TableReads::new(nodes);
         CostEstimate {
             passes,
             bytes_read: saturate(pass_bytes * u128::from(passes)),
-            block_memory: saturate(block.max(opening)),
-            resident_memory: saturate(resident),
+            block_memory: saturate(block.max(opening).max(tables.reading)),
+            resident_memory: saturate(resident + tables.held),
             device: self.options().device,
         }
     }
@@ -308,6 +353,34 @@ impl PhysicalPlan {
             }
         }
         (bytes, layers)
+    }
+}
+
+/// Whether a streamed node rewrites each block's rows (a cell filter, `take_cells`) or
+/// genes (a gene filter, `select_genes`) into new buffers (kyto-exec's `keep_rows`,
+/// `GeneSelection`).
+fn rewrites_blocks(node: &OptimizedNode) -> bool {
+    match node.operation() {
+        Operation::Node(plan) => matches!(
+            plan.as_ref(),
+            Plan::Filter(_) | Plan::TakeCells(_) | Plan::SelectGenes(_)
+        ),
+        _ => false,
+    }
+}
+
+/// Whether a streamed node is one of the executor's cell steps (a cell filter,
+/// `take_cells`, `with_cells`) or gene selections (a gene filter, `select_genes`): an
+/// operator of the stream, for which the block pool keeps one more block's buffers
+/// (kyto-exec's `BlockStream::start`), like a node writing layers.
+fn is_cell_or_gene_step(node: &OptimizedNode) -> bool {
+    match node.operation() {
+        Operation::Node(plan) => match plan.as_ref() {
+            Plan::Filter(_) | Plan::TakeCells(_) | Plan::SelectGenes(_) => true,
+            Plan::WithColumns(node) => matches!(node.params().columns(), Columns::Cells(_)),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -547,7 +620,8 @@ fn written_block_bytes(
 /// its statistics.
 fn node_resident(node: &OptimizedNode, schema: &PlanSchema, input: Option<&PlanSchema>) -> u128 {
     if matches!(node.operation(), Operation::Scan { .. }) {
-        // A scan's tables are Polars frames (not counted); its layers stream.
+        // A scan's tables are counted where a step reads them (`estimate_tables.rs`);
+        // its layers stream.
         return 0;
     }
     let atlas = schema.atlas();
@@ -653,7 +727,7 @@ fn float_bytes(dtype: FloatDtype) -> u128 {
 }
 
 /// Bytes of one value of a column in memory (Polars): `String` as a 16-byte view.
-fn column_value_bytes(dtype: &ColumnDtype) -> u128 {
+pub(crate) fn column_value_bytes(dtype: &ColumnDtype) -> u128 {
     match dtype {
         ColumnDtype::Boolean | ColumnDtype::Int8 | ColumnDtype::UInt8 => 1,
         ColumnDtype::Int16 | ColumnDtype::UInt16 => 2,

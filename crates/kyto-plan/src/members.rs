@@ -308,7 +308,7 @@ fn expr_reads<A: ExprAxis>(expr: &Expr<A>, input: &PlanSchema, reads: &mut Membe
 
 /// Calls `visit` on each leaf of the tree under `root`, with a loop (trees are up to
 /// 1000 levels deep) that visits a shared subtree once.
-fn for_each_leaf(root: &ExprNode, visit: &mut dyn FnMut(&Source)) {
+pub(crate) fn for_each_leaf(root: &ExprNode, visit: &mut dyn FnMut(&Source)) {
     let mut seen: HashSet<*const ExprNode> = HashSet::new();
     let mut stack = vec![root];
     while let Some(node) = stack.pop() {

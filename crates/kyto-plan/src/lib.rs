@@ -32,6 +32,7 @@
 mod cluster;
 mod cross_cell;
 mod estimate;
+mod estimate_tables;
 mod explain;
 mod filter;
 mod handles;
@@ -62,6 +63,7 @@ mod with_default_layer;
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
 pub use estimate::{ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES};
+pub use estimate_tables::{ASSUMED_CATEGORY_BYTES, ASSUMED_STRING_BYTES};
 pub use explain::{Explain, LogicalEntry, OptimizedEntry, OutputEntry};
 pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};

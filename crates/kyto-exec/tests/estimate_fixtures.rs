@@ -15,8 +15,10 @@
 //! blocks; for split blocks at most 25% below (above is the decode term's upper bound,
 //! 4.6 Open (3): every tile of a block decoding at once, 32 tiles on pbmc3k at 1024
 //! genes a block, while 2 threads decode 2). A third plan (task 5.8: a QC column, a
-//! cell filter, a gene filter on `symbol`, then the maps) is reported but not asserted
-//! until the estimate counts table reads (task 5.10). Needs Python with anndata
+//! cell filter, a gene filter on `symbol`, then the maps) is held to the same
+//! tolerances since the estimate counts table reads, block copies and the pool's
+//! operators (task 5.10), and reading pbmc3k's gene table (`symbol`, an `Enum` of
+//! 32 738 categories) peaks at most 2.5 times what it holds. Needs Python with anndata
 //! (`uv run cargo test`); skips where it has no wheels (exit code 77). The only test in
 //! this binary, so no other test allocates while it measures.
 
@@ -33,7 +35,7 @@ use kyto_core::{
 };
 use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{Member, Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan};
-use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
+use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids, read_table};
 use peak_alloc::PeakAlloc;
 
 #[global_allocator]
@@ -88,6 +90,17 @@ fn measured_peak(plan: &PhysicalPlan) -> u64 {
     u64::try_from(peak).unwrap()
 }
 
+/// Heap bytes held at most while reading the gene table of `store`, and held after.
+fn table_read(store: &Path) -> (u64, u64) {
+    let before = ALLOCATOR.current_usage();
+    ALLOCATOR.reset_peak_usage();
+    let table = read_table(store, TableAxis::Genes).unwrap();
+    let held = ALLOCATOR.current_usage() - before;
+    let peak = ALLOCATOR.peak_usage() - before;
+    drop(table);
+    (u64::try_from(peak).unwrap(), u64::try_from(held).unwrap())
+}
+
 /// The physical plan of `plan` reading layer `layer`.
 fn physical(plan: &Arc<Plan>, layer: &str, options: PhysicalOptions) -> PhysicalPlan {
     let output = Output::members(plan, [Member::Layer(layer.to_owned())]).unwrap();
@@ -121,6 +134,16 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                 ..ConvertOptions::default()
             };
             convert(&h5ad, &store, &options).unwrap();
+            if name == "pbmc3k" && tiling == Tiling::default() {
+                // Task 5.10: reading the gene table (`symbol`: an Enum of 32 738
+                // categories, in 32 row groups) peaks at most about twice what it holds.
+                let (peak, held) = table_read(&store);
+                let ratio = peak as f64 / held as f64;
+                report.push(format!(
+                    "pbmc3k gene table: read peak {peak} B, holds {held} B ({ratio:.2}x)"
+                ));
+                assert!(ratio <= 2.5, "reading the gene table peaks at {ratio:.2}x");
+            }
             let schema = open_atlas_schema(&store).unwrap();
             let gene_ids =
                 GeneIds::new(read_ids(&store, TableAxis::Genes, schema.n_genes).unwrap());
@@ -193,12 +216,7 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                 // Whole blocks: the 4.6 Done-when. Split blocks (5.5) on many gene blocks
                 // are dominated by the decode term, which assumes every tile of a block
                 // decodes at once (4.6 Open (3)): too high, never far too low.
-                // The "filters" rows are reported, not asserted: the estimate has no
-                // term for reading the cell and gene tables, and reading an Enum column
-                // (pbmc3k's `symbol`) peaks far above what it holds (task 5.10).
-                let off = if kind == "filters" {
-                    false
-                } else if block_cells.is_none() {
+                let off = if block_cells.is_none() {
                     error.abs() > TOLERANCE
                 } else {
                     error < -TOLERANCE

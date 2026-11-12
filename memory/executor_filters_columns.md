@@ -21,8 +21,8 @@ compared differently. **Works:** the shared `support/mod.rs` rounds each map out
 - Reading an `Enum` column with many categories through `read_table` (Polars
   `ParquetReader`) peaks far above what it holds: pbmc3k `symbol` (32 738 categories)
   +54 MB peak for 5 MB held; `gene_id` (String) +2.5 MB. Gene steps read the gene table,
-  so this lands in their peak memory; `estimate()` does not model table reads (task
-  5.10).
+  so this lands in their peak memory. Fixed and estimated by task 5.10
+  ([estimate_table_reads.md](estimate_table_reads.md)).
 - Linking Polars' lazy engine into kyto-exec raised the test binaries' baseline RSS by
   about 5 MB on macOS (more code kept by the linker), which took 5.5's RSS check past
   its margin; the user raised `ALLOCATOR_OVERHEAD_PERCENT` to 100 (Nov 12, 2026).
