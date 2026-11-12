@@ -7,7 +7,8 @@
 //! empty `obsm`, `varm`, `obsp`, `varp` and `uns`. Each layer is streamed one cell
 //! block at a time through the tile reader (R8): memory is the two tables and
 //! `blocks_in_flight` cell blocks. The file is written next to the target and renamed
-//! into place only when complete (`atomic_file`).
+//! into place only when complete (`atomic_file`), after a last check the caller may
+//! pass ([`sink_h5ad_checked`]).
 //! Does not: export embeddings or graphs (not stored yet), compress, or write dense
 //! matrices (R8; anndata reads CSR as scipy CSR).
 
@@ -21,6 +22,7 @@ use zarrs::filesystem::FilesystemStore;
 
 use crate::atomic_file::AtomicFile;
 use crate::cell_block::CellValues;
+use crate::commit_check::{CommitCheck, proceed};
 use crate::export_h5::H5Out;
 use crate::export_h5ad_table::write_table;
 use crate::layer_open::ValueDtype;
@@ -75,6 +77,22 @@ impl Default for SinkH5adOptions {
 /// - `KY-E124` for a column name or string h5ad cannot hold.
 /// - `KY-E110` if the store cannot be read or the file cannot be written.
 pub fn sink_h5ad(store: &Path, target: &Path, options: &SinkH5adOptions) -> Result<(), KytoError> {
+    sink_h5ad_checked(store, target, options, &proceed)
+}
+
+/// [`sink_h5ad`] with a last check: `before_commit` runs once the whole file is
+/// written and synced, right before it is renamed to `target`. If it fails, `target`
+/// is as it was and the temporary file is deleted (the executor passes its cancel
+/// check, so a cancelled sink leaves no file).
+///
+/// # Errors
+/// Those of [`sink_h5ad`], and the error of `before_commit`.
+pub fn sink_h5ad_checked(
+    store: &Path,
+    target: &Path,
+    options: &SinkH5adOptions,
+    before_commit: CommitCheck<'_>,
+) -> Result<(), KytoError> {
     let store_text = store.display().to_string();
     let storage = Arc::new(
         FilesystemStore::new(store).map_err(|error| store_io("open store", &store_text, error))?,
@@ -116,7 +134,7 @@ pub fn sink_h5ad(store: &Path, target: &Path, options: &SinkH5adOptions) -> Resu
         path: target,
         detail: error.to_string(),
     })?;
-    file.commit()
+    file.commit(before_commit)
 }
 
 /// `KY-E123` if `target` lies inside the store: a writer adds no members (format.md §2).

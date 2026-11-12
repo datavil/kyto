@@ -3,7 +3,8 @@
 //! Does: a [`RunControl`] is shared by a running pipeline and whoever started it (for
 //! example the Python thread waiting for the run). The caller may [`RunControl::cancel`]
 //! at any time; the run checks the flag before it reads each block and before it
-//! computes each block, then stops with `KY-E503`: the stream ends (its producer thread
+//! computes each block (a sink once more right before it renames its target into
+//! place, `sink.rs`), then stops with `KY-E503`: the stream ends (its producer thread
 //! joined when it is dropped), its buffers are freed, and its rayon pool's threads exit
 //! once the pool is dropped (rayon does not join them). The run counts the cell rows it
 //! has computed, summed over its passes, so the caller can read
@@ -49,8 +50,9 @@ impl RunControl {
         Self::default()
     }
 
-    /// Ask the run to stop. It stops at its next block with `KY-E503`; calling this
-    /// again, or after the run ended, does nothing.
+    /// Ask the run to stop. It stops at its next block with `KY-E503` (a sink past its
+    /// last block, right before it renames its target into place); calling this again,
+    /// or after the run ended, does nothing.
     pub fn cancel(&self) {
         self.shared.cancelled.store(true, Ordering::Relaxed);
     }

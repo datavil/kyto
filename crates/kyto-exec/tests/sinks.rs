@@ -6,10 +6,11 @@
 //! columns plus the computed ones and the genes present, bit-identical to the stream;
 //! `sink_h5ad` round-trips through 2.6's importer to the same store contents; lineage
 //! is carried for stored derived columns still valid and the stale ones are dropped
-//! (3.8); an error or a cancel midway (`KY-E503`, 5.7) leaves no target and no
-//! temporary; a target that exists (without `overwrite`) or is the scanned store is
-//! refused before anything is read. The scanpy parity of a sunk filter -> QC ->
-//! normalize/log1p plan is `filter_qc_parity.rs`.
+//! (3.8); an error or a cancel (`KY-E503`, 5.7), midway or after the last block while
+//! the target is finished, leaves no target and no temporary; a target that exists
+//! (without `overwrite`) or is the scanned store is refused before anything is read.
+//! The scanpy parity of a sunk filter -> QC -> normalize/log1p plan is
+//! `filter_qc_parity.rs`.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -17,7 +18,7 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Lineage, Literal, Tiling};
 use kyto_error::KytoError;
@@ -538,6 +539,102 @@ fn a_cancelled_or_failing_sink_leaves_no_target() {
         let error = sink(&plan, target, false).unwrap_err();
         assert_eq!(error.code(), "KY-E210", "{error}");
         assert!(entries(&out).is_empty(), "{:?}", entries(&out));
+    }
+}
+
+/// Whether `directory` holds an entry whose name starts with `prefix`, does not end
+/// with `.lock`, and (with `member`) holds `member`.
+fn appeared(directory: &Path, prefix: &str, member: Option<&str>) -> bool {
+    entries(directory).iter().any(|name| {
+        name.starts_with(prefix)
+            && !name.ends_with(".lock")
+            && member.is_none_or(|member| directory.join(name).join(member).exists())
+    })
+}
+
+/// A cancel that comes after the last block, while the sink finishes its target (the
+/// tables, the sync, the `.h5ad` export), still leaves no target: the writers check
+/// the run's flag right before their rename (found by running Ctrl-C late in a sink).
+#[test]
+fn a_cancel_after_the_last_block_leaves_no_target() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let out = work.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    // When the sink is past its stream: `sink_zarr`'s temporary store has its root
+    // `zarr.json` (written last, before the tree is synced and renamed); `sink_h5ad`'s
+    // export has started its temporary file (its store is written by then).
+    let cases: [(Sink, &str, &'static str, Option<&'static str>); 2] = [
+        (
+            Sink::Zarr {
+                path: out.join("late.kyto").display().to_string(),
+            },
+            "late.kyto",
+            ".late.kyto.kyto-tmp-",
+            Some("zarr.json"),
+        ),
+        (
+            Sink::H5ad {
+                path: out.join("late.h5ad").display().to_string(),
+            },
+            "late.h5ad",
+            ".kyto-part-",
+            None,
+        ),
+    ];
+    for (target, name, prefix, member) in cases {
+        let pipeline = Pipeline::new(
+            &physical(&cell_steps(&scan(&store)).sink(target).unwrap()),
+            0,
+        )
+        .unwrap();
+        // The watcher races the rename; it wins by a wide margin (a sync and more are
+        // left), and an attempt it loses is a finished sink: try again.
+        let mut cancelled_late = false;
+        for _ in 0..20 {
+            let control = RunControl::new();
+            let finished = Arc::new(AtomicBool::new(false));
+            let watcher = std::thread::spawn({
+                let (control, finished, out) = (control.clone(), finished.clone(), out.clone());
+                move || {
+                    while !finished.load(Ordering::SeqCst) {
+                        if appeared(&out, prefix, member) {
+                            control.cancel();
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
+                }
+            });
+            let result = pipeline.sink(options(2, &control), false);
+            finished.store(true, Ordering::SeqCst);
+            watcher.join().unwrap();
+            match result {
+                Err(error) => {
+                    assert!(matches!(error, KytoError::Cancelled { .. }), "{error}");
+                    let progress = control.progress();
+                    assert_eq!(progress.done, progress.total, "every block was computed");
+                    assert!(entries(&out).is_empty(), "{:?}", entries(&out));
+                    cancelled_late = true;
+                    break;
+                }
+                Ok(_) => {
+                    // The cancel came after the rename: the sink had finished.
+                    assert_eq!(entries(&out), [name]);
+                    let written = out.join(name);
+                    if written.is_dir() {
+                        std::fs::remove_dir_all(written).unwrap();
+                    } else {
+                        std::fs::remove_file(written).unwrap();
+                    }
+                }
+            }
+        }
+        assert!(
+            cancelled_late,
+            "{name}: no cancel after the stream stopped the sink"
+        );
     }
 }
 

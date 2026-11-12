@@ -17,7 +17,7 @@ use hdf5_metno::types::VarLenUnicode;
 use kyto_store::{
     AxisSelection, CellBlock, CellValues, ConvertOptions, LayerReader, LayerSpec,
     LayerWriteOptions, SinkH5adOptions, StoreWriter, TableAxis, TileGrid, Tiling, ValueDtype,
-    convert, read_table, sink_h5ad,
+    convert, read_table, sink_h5ad, sink_h5ad_checked,
 };
 use polars::prelude::{
     Column, DataFrame, DataType, FrozenCategories, IntoColumn, NamedFrom, Series,
@@ -547,6 +547,69 @@ fn bad_targets_and_layers_are_coded_and_leave_nothing() {
     assert_eq!(error.code(), "KY-E122", "{error}");
     let entries = std::fs::read_dir(dir.path()).unwrap().count();
     assert_eq!(entries, 4, "in.kyto, out.h5ad, folder.h5ad, nothing");
+}
+
+/// `sink_h5ad_checked` runs its check once, when the temporary file is complete and
+/// before the target appears; a failing check leaves the target as it was.
+#[test]
+fn the_commit_check_runs_last_and_stops_the_rename() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("in.kyto");
+    write_store(&store, &cell_table(None));
+    let out = dir.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    let h5ad = out.join("out.h5ad");
+    let names = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let calls = std::cell::Cell::new(0_u32);
+    // What the check sees: no target yet, and the temporary file, complete (it opens
+    // as HDF5 and holds `var`, which is written after the layers and `obs`).
+    let stop = || {
+        calls.set(calls.get() + 1);
+        assert!(!h5ad.exists());
+        let names = names();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(names[0].starts_with(".kyto-part-"), "{names:?}");
+        assert!(
+            File::open(out.join(&names[0]))
+                .unwrap()
+                .group("var")
+                .is_ok()
+        );
+        Err(kyto_error::KytoError::Cancelled { done: 0, total: 0 })
+    };
+    let error = sink_h5ad_checked(&store, &h5ad, &options(Some("counts")), &stop).unwrap_err();
+    assert_eq!(error.code(), "KY-E503", "{error}");
+    assert_eq!(calls.get(), 1);
+    assert!(names().is_empty(), "{:?}", names());
+
+    // A check that passes: the file appears.
+    let pass = || {
+        calls.set(calls.get() + 1);
+        assert!(!h5ad.exists());
+        Ok(())
+    };
+    sink_h5ad_checked(&store, &h5ad, &options(Some("counts")), &pass).unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(names(), ["out.h5ad"]);
+
+    // Stopped while overwriting: the old file is untouched.
+    let before = std::fs::read(&h5ad).unwrap();
+    let overwrite = SinkH5adOptions {
+        overwrite: true,
+        ..options(None)
+    };
+    let stop_overwrite = || Err(kyto_error::KytoError::Cancelled { done: 0, total: 0 });
+    let error = sink_h5ad_checked(&store, &h5ad, &overwrite, &stop_overwrite).unwrap_err();
+    assert_eq!(error.code(), "KY-E503", "{error}");
+    assert_eq!(std::fs::read(&h5ad).unwrap(), before);
+    assert_eq!(names(), ["out.h5ad"]);
 }
 
 #[test]

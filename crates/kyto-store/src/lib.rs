@@ -10,7 +10,8 @@
 //! layer, streamed as [`CellBlock`]s by [`LayerReader`] (task 2.4, §4.7, §4.8), and a
 //! whole store written atomically from a stream of CellBlocks by [`StoreWriter`] (task
 //! 2.5, §10), and inputs imported into a new store by [`convert`] (`.h5ad`, 10x `.h5`,
-//! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7), and stores on S3, GCS
+//! Matrix Market; task 2.6), and a store exported as `.h5ad` by [`sink_h5ad`] (task 2.7; both writers take a last
+//! [`CommitCheck`] before their target appears), and stores on S3, GCS
 //! or HTTP read through [`RemoteStorage`] by the same [`LayerReader`] (task 2.8), and `schema.json` read as a
 //! [`kyto_core::AtlasSchema`] by [`read_atlas_schema`] (task 3.1), the one typed model the
 //! writer also writes it from.
@@ -20,6 +21,7 @@ mod aligned_buffer;
 mod atomic_dir;
 mod atomic_file;
 mod cell_block;
+mod commit_check;
 mod csr;
 mod export_h5;
 mod export_h5ad;
@@ -57,8 +59,11 @@ mod zarr_arrays;
 
 pub use aligned_buffer::{AlignedBuffer, BUFFER_ALIGNMENT};
 pub use cell_block::{CellBlock, CellBlockParts, CellData, CellValues, DenseValues};
+pub use commit_check::CommitCheck;
 pub use csr::CsrMatrix;
-pub use export_h5ad::{DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad};
+pub use export_h5ad::{
+    DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad, sink_h5ad_checked,
+};
 pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};
 pub use import_ids::OnDuplicateIds;
 pub use layer_io::{read_layer, write_layer};

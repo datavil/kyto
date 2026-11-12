@@ -13,7 +13,11 @@
 //! `.h5ad` is written as a store in a hidden temporary directory next to the target,
 //! exported by 2.7's [`kyto_store::sink_h5ad`] (the plan's default layer as `X`), and
 //! deleted. Any error or a cancel (`KY-E503`) leaves the target as it was: the writers
-//! write to temporaries renamed on success.
+//! write to temporaries renamed on success, and each checks the run's cancel flag once
+//! more right before its rename ([`kyto_store::CommitCheck`]), so a cancel that comes
+//! after the last block (while the tables are written, or during the `.h5ad` export)
+//! still leaves no target. Once the target is renamed into place the sink has
+//! finished: a later cancel changes nothing.
 //! Does not: write embeddings or graphs (`KY-E601`: the plan has nothing that writes
 //! them yet), remote targets (the path is a local path), or count the tables it holds
 //! in the estimate (5.10). Cluster labels (`String`) become `Enum` with 6.8.
@@ -26,7 +30,7 @@ use kyto_error::KytoError;
 use kyto_plan::{LogicalNode, Plan, Sink};
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, SinkH5adOptions, StoreWriter, TableAxis, Tiling,
-    ValueDtype, read_table, sink_h5ad,
+    ValueDtype, read_table, sink_h5ad_checked,
 };
 use polars::prelude::{Column, DataFrame, DataType, IdxCa, IdxSize, NamedFrom, Series};
 use zarrs::filesystem::FilesystemStore;
@@ -161,7 +165,8 @@ impl Pipeline {
     /// - `KY-E118` (`sink_zarr`) or `KY-E123` (`sink_h5ad`) if the target exists and
     ///   may not be replaced, or is the scanned store or lies inside it (checked before
     ///   anything is read; a store target is checked again when it is created).
-    /// - Any error of [`Pipeline::run_on`] or the stream (`KY-E503` when cancelled).
+    /// - Any error of [`Pipeline::run_on`] or the stream (`KY-E503` when cancelled, at
+    ///   any moment before the target is renamed into place).
     /// - The writers' errors ([`StoreWriter`], [`kyto_store::sink_h5ad`]): `KY-E124`
     ///   for names an `.h5ad` cannot hold, `KY-E110` for the file system.
     pub fn sink_on<S>(
@@ -203,13 +208,16 @@ impl Pipeline {
                         detail: error.to_string(),
                     })?;
                 let store = scratch.path().join("store");
+                let control = options.control.clone();
                 let cells = self.write_store(spec, storage, options, &store, false)?;
                 let export = SinkH5adOptions {
                     x_layer: spec.x_layer.clone(),
                     overwrite,
                     ..SinkH5adOptions::default()
                 };
-                sink_h5ad(&store, &target, &export)?;
+                // The export is not cancellable midway (5.7 Open (2)); a cancel during
+                // it is seen here, before the file appears.
+                sink_h5ad_checked(&store, &target, &export, &|| control.check())?;
                 Ok(cells)
             }
         }
@@ -227,6 +235,7 @@ impl Pipeline {
     where
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
     {
+        let control = options.control.clone();
         let mut stream = self.run_on(storage, options)?;
         let genes = match stream.genes() {
             Some(genes) => genes.table().clone(),
@@ -297,7 +306,8 @@ impl Pipeline {
             &self.store,
         )?;
         let n_cells = cells.height() as u64;
-        writer.finish(&cells, None)?;
+        // The last cancel point: after it, the store is renamed into place.
+        writer.finish_checked(&cells, None, &|| control.check())?;
         Ok(n_cells)
     }
 }

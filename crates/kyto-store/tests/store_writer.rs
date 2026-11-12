@@ -347,7 +347,8 @@ proptest! {
     }
 }
 
-fn small_store(target: &Path, overwrite: bool) -> Result<(), kyto_error::KytoError> {
+/// A writer of a 2-cell, 3-gene store at `target`, its rows pushed, not finished.
+fn small_writer(target: &Path, overwrite: bool) -> Result<StoreWriter, kyto_error::KytoError> {
     let genes = table("gene_id", "g", 3);
     let options = LayerWriteOptions::default();
     let mut writer = StoreWriter::create(
@@ -360,6 +361,11 @@ fn small_store(target: &Path, overwrite: bool) -> Result<(), kyto_error::KytoErr
     let norm = CellBlock::from_f32(vec![0, 1, 3], vec![1, 0, 2], vec![1.5, 2.0, 3.0], 3)?;
     let count = CellBlock::from_u32(vec![0, 1, 3], vec![1, 0, 2], vec![1, 2, 3], 3)?;
     writer.push(&[norm, count])?;
+    Ok(writer)
+}
+
+fn small_store(target: &Path, overwrite: bool) -> Result<(), kyto_error::KytoError> {
+    let writer = small_writer(target, overwrite)?;
     let source = ImportSource {
         kind: "h5ad".to_owned(),
         path: "in.h5ad".to_owned(),
@@ -533,6 +539,67 @@ fn a_failed_or_dropped_write_leaves_nothing() {
             .contains("the cells table has 2 rows, but the matrix has 1 cells")
     );
     assert!(entries(parent.path()).is_empty());
+}
+
+/// `finish_checked` runs its check once, when the temporary store is complete and
+/// before the target appears; a failing check leaves the target as it was.
+#[test]
+fn the_commit_check_runs_last_and_stops_the_rename() {
+    let parent = tempfile::tempdir().unwrap();
+    let target = parent.path().join("x.kyto");
+    let cells = table("cell_id", "c", 2);
+    let calls = std::cell::Cell::new(0_u32);
+    // What the check sees: no target yet, and a temporary store that is complete (its
+    // root zarr.json, written last, and both tables).
+    let look = || {
+        calls.set(calls.get() + 1);
+        assert!(!target.exists());
+        let names = entries(parent.path());
+        let temporary = names
+            .iter()
+            .find(|name| name.starts_with(".x.kyto.kyto-tmp-") && !name.ends_with(".lock"))
+            .unwrap();
+        for member in ["zarr.json", "schema.json", "cells.parquet", "genes.parquet"] {
+            assert!(
+                parent.path().join(temporary).join(member).exists(),
+                "{member}"
+            );
+        }
+    };
+    let stop = || {
+        look();
+        Err(kyto_error::KytoError::Cancelled { done: 2, total: 2 })
+    };
+    let error = small_writer(&target, false)
+        .unwrap()
+        .finish_checked(&cells, None, &stop)
+        .unwrap_err();
+    assert_eq!(error.code(), "KY-E503", "{error}");
+    assert_eq!(calls.get(), 1);
+    assert!(entries(parent.path()).is_empty());
+
+    // A check that passes: the store appears, the check ran once.
+    let pass = || {
+        look();
+        Ok(())
+    };
+    small_writer(&target, false)
+        .unwrap()
+        .finish_checked(&cells, None, &pass)
+        .unwrap();
+    assert_eq!(calls.get(), 2);
+    assert_eq!(entries(parent.path()), ["x.kyto"]);
+
+    // Stopped while overwriting: the old store is untouched.
+    let before = store_bytes(&target);
+    let stop_overwrite = || Err(kyto_error::KytoError::Cancelled { done: 2, total: 2 });
+    let error = small_writer(&target, true)
+        .unwrap()
+        .finish_checked(&cells, None, &stop_overwrite)
+        .unwrap_err();
+    assert_eq!(error.code(), "KY-E503", "{error}");
+    assert_eq!(store_bytes(&target), before);
+    assert_eq!(entries(parent.path()), ["x.kyto"]);
 }
 
 #[test]

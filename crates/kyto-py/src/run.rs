@@ -11,7 +11,10 @@
 //! before this returns; the rayon pool's threads exit just after) and is re-raised as it is. Other Python threads run while
 //! the plan computes.
 //! A plan ending in a sink writes it (task 5.9; never over an existing target: the
-//! public `sink_zarr`/`sink_h5ad` and their `overwrite` are 7.3).
+//! public `sink_zarr`/`sink_h5ad` and their `overwrite` are 7.3). A cancel reaches the
+//! sink until it renames its target into place, so an exception raised here leaves no
+//! target, unless it arrived after that rename: the sink had then finished, as if the
+//! signal came right after this returned.
 //! Does not: return the data (the terminals are 7.2/7.3: each drains its stream
 //! through [`run_plan`]), or apply a memory limit (5.5's `fit_memory_limit`
 //! is for 7.2's `collect(memory_limit=...)`).
@@ -76,7 +79,8 @@ pub fn run_plan(
             (receiver, received)
         });
         receiver = back;
-        // Signals first: Ctrl-C wins over a run that has just finished.
+        // Signals first: Ctrl-C wins over a run that has just finished (a sink that
+        // has renamed its target into place has finished: the target stays).
         let looked = py
             .check_signals()
             .and_then(|()| report(progress, &control, &mut reported));

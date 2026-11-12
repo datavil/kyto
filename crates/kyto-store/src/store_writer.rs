@@ -28,6 +28,7 @@ use zarrs::filesystem::FilesystemStore;
 
 use crate::atomic_dir::AtomicDir;
 use crate::cell_block::{CellBlock, CellValues};
+use crate::commit_check::{CommitCheck, proceed};
 use crate::layer_open::{LAYER_KIND, ValueDtype};
 use crate::layer_stream::LayerStream;
 use crate::names::validate_member_name;
@@ -250,10 +251,22 @@ impl StoreWriter {
     /// - `KY-E105` if `n_cells` is above `2^32 - 1`.
     /// - `KY-E118` if the target appeared meanwhile and may not be replaced.
     /// - `KY-E110` if the file system fails, or an earlier write did.
-    pub fn finish(
+    pub fn finish(self, cells: &DataFrame, source: Option<&ImportSource>) -> Result<(), KytoError> {
+        self.finish_checked(cells, source, &proceed)
+    }
+
+    /// [`StoreWriter::finish`] with a last check: `before_commit` runs once the whole
+    /// store is written and synced, right before it is renamed to the target. If it
+    /// fails, the target is as it was and the temporary directory is deleted (the
+    /// executor passes its cancel check, so a cancelled sink leaves no target).
+    ///
+    /// # Errors
+    /// Those of [`StoreWriter::finish`], and the error of `before_commit`.
+    pub fn finish_checked(
         mut self,
         cells: &DataFrame,
         source: Option<&ImportSource>,
+        before_commit: CommitCheck<'_>,
     ) -> Result<(), KytoError> {
         self.check_usable()?;
         check_table(TableAxis::Cells, cells, PlainStrings::Allowed)?;
@@ -331,7 +344,7 @@ impl StoreWriter {
         // ... and the root zarr.json last (format.md §3).
         let kyto = serde_json::json!({ "format_version": FORMAT_VERSION });
         store_group(storage, "/", Some(kyto))?;
-        self.dir.commit()
+        self.dir.commit(before_commit)
     }
 
     /// `KY-E110` if an earlier write failed.

@@ -24,6 +24,7 @@ use std::sync::Arc;
 use kyto_error::KytoError;
 use zarrs::filesystem::FilesystemStore;
 
+use crate::commit_check::CommitCheck;
 use crate::store_version::check_format_version;
 use crate::zarr_arrays::store_io;
 
@@ -144,15 +145,18 @@ impl AtomicDir {
 
     /// Fsync the temporary tree, rename it to the target and fsync the parent
     /// (format.md §10.1 steps 2 and 3). With `overwrite`, an existing store is renamed
-    /// aside first and deleted after the new one is in place.
+    /// aside first and deleted after the new one is in place. `before_rename` runs once
+    /// the tree is synced, right before the first rename.
     ///
     /// # Errors
+    /// - The error of `before_rename`; the target is then as it was.
     /// - `KY-E118` if the target appeared since [`AtomicDir::create`] and may not be
     ///   replaced.
     /// - `KY-E110` if the file system fails; the target is then as it was.
-    pub(crate) fn commit(mut self) -> Result<(), KytoError> {
+    pub(crate) fn commit(mut self, before_rename: CommitCheck<'_>) -> Result<(), KytoError> {
         sync_tree(&self.temporary)?;
         sync_dir(&self.temporary)?;
+        before_rename()?;
         let target_text = self.target.display().to_string();
         let rename_error =
             |error: std::io::Error| store_io("rename the new store to", &target_text, error);

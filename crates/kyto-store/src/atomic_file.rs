@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use kyto_error::KytoError;
 
 use crate::atomic_dir::{random_suffix, sync_dir};
+use crate::commit_check::CommitCheck;
 use crate::zarr_arrays::store_io;
 
 /// Prefix of a temporary file, before its random part.
@@ -85,16 +86,19 @@ impl AtomicFile {
     }
 
     /// Fsync the temporary file, rename it to the target and fsync the parent.
+    /// `before_rename` runs once the file is synced, right before the rename.
     ///
     /// # Errors
+    /// - The error of `before_rename`; the target is then as it was.
     /// - `KY-E123` if the target appeared since [`AtomicFile::create`] and may not be
     ///   replaced.
     /// - `KY-E110` if the file system fails; the target is then as it was.
-    pub(crate) fn commit(mut self) -> Result<(), KytoError> {
+    pub(crate) fn commit(mut self, before_rename: CommitCheck<'_>) -> Result<(), KytoError> {
         let temporary_text = self.temporary.display().to_string();
         std::fs::File::open(&self.temporary)
             .and_then(|file| file.sync_all())
             .map_err(|error| store_io("sync", &temporary_text, error))?;
+        before_rename()?;
         check_target(&self.target, self.overwrite)?;
         std::fs::rename(&self.temporary, &self.target).map_err(|error| {
             store_io(
@@ -145,6 +149,7 @@ fn check_target(target: &Path, overwrite: bool) -> Result<(), KytoError> {
 #[cfg(test)]
 mod tests {
     use super::AtomicFile;
+    use crate::commit_check::proceed;
 
     #[test]
     fn commit_renames_and_drop_cleans_up() {
@@ -152,7 +157,7 @@ mod tests {
         let target = dir.path().join("out.h5ad");
         let file = AtomicFile::create(&target, false).unwrap();
         std::fs::write(file.path(), b"new").unwrap();
-        file.commit().unwrap();
+        file.commit(&proceed).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
 
         let error = AtomicFile::create(&target, false).unwrap_err();
@@ -171,7 +176,7 @@ mod tests {
 
         let file = AtomicFile::create(&target, true).unwrap();
         std::fs::write(file.path(), b"newer").unwrap();
-        file.commit().unwrap();
+        file.commit(&proceed).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"newer");
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }

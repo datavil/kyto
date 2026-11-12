@@ -7,6 +7,14 @@ at the kept positions plus the blocks' computed columns stacked, the gene table 
 hidden `.kyto-sink-*` temporary next to the target, then 2.7's `sink_h5ad`; both
 writers rename on success, so a cancel (`KY-E503`) or error leaves no target.
 
+**Broke (late cancel):** checking the cancel flag per block is not enough for a sink:
+after the last block it still writes tables, syncs and (for `.h5ad`) exports, and
+kyto-py raises a pending Ctrl-C over a worker that has just finished, so the interrupt
+was raised with the target written. The writers take a last check right before their
+rename (`kyto_store::CommitCheck`, `finish_checked`, `sink_h5ad_checked`) and the sink
+passes `control.check()`. Unit tests did not see it; sending a real SIGINT at several
+moments of a multi-block sink did.
+
 **Works (stale columns):** do not copy the lineage rules. Ask the plan:
 `plan.resolve(&CellExpr::column(name))` failing with `KY-E301` at the sink node is
 exactly "stale here"; such columns are dropped, the others keep their lineage
