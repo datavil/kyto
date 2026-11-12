@@ -17,12 +17,14 @@ kyto-error = { path = "../kyto-error" }
 kyto-exec = { path = "../kyto-exec" }
 # The gene table a QC gene set is evaluated on (task 6.1).
 kyto-store = { path = "../kyto-store" }
+# Differential expression (task 6.10) runs a plan's output through the executor.
+kyto-plan = { path = "../kyto-plan" }
+# erf, erfc and lgamma for the tests' p-values (task 6.10); the version already locked.
+libm = "0.2.16"
 # Evaluates a gene-set predicate on the gene table; same version as kyto-core.
 polars = { version = "0.55.2", default-features = false, features = ["lazy", "strings", "dtype-categorical"] }
 
 [dev-dependencies]
-# The 6.1 parity test runs a scan plan through the executor.
-kyto-plan = { path = "../kyto-plan" }
 tempfile = "3.27.0"
 serde_json = "1.0.154"
 polars = { version = "0.55.2", default-features = false }

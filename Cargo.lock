@@ -1868,6 +1868,7 @@ dependencies = [
  "kyto-exec",
  "kyto-plan",
  "kyto-store",
+ "libm",
  "polars",
  "serde_json",
  "tempfile",
