@@ -28,12 +28,17 @@ kyto-error = { path = "../kyto-error" }
 kyto-exec = { path = "../kyto-exec" }
 kyto-plan = { path = "../kyto-plan" }
 kyto-store = { path = "../kyto-store" }
-# Reads the columns of the frame `rank_genes_groups` returns (task 7.2); `ipc` hands the
-# handle terminals' tables to Python Polars as Arrow IPC (task 7.3). Same version as
-# kyto-algo.
-polars = { version = "0.55.2", default-features = false, features = ["ipc"] }
+# The frames the terminals and `rank_genes_groups` return (tasks 7.2, 7.3). Same version
+# as kyto-algo.
+polars = { version = "0.55.2", default-features = false, features = ["dtype-struct"] }
+# Arrow C stream export: hands those frames to Python Polars without a copy (task 7.5;
+# `pyo3-polars` pins an older pyo3). The version polars uses.
+polars-arrow = { version = "0.55.2", default-features = false }
 # NumPy arrays for the handle terminals (task 7.3, 7.5's hand-off): moves a Rust `Vec`
 # into an array without a copy.
 numpy = "0.30.0"
+# Reinterprets a CSR's `u32` indices as SciPy's `int32` (and `u64` offsets as `int64`) in
+# place, without a copy or `unsafe` (task 7.5). The version kyto-store uses.
+bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 # The temporary store `Atlas.collect()` writes (task 7.2).
 tempfile = "3.27.0"

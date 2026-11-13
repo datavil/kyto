@@ -192,7 +192,7 @@ pub fn select_cells<'py>(
     args: RunArgs<'_, 'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let frame = cell_frame(py, function, plan, parameter, named, args)?;
-    handoff::to_polars(py, frame, plan.root().source())
+    handoff::to_polars(py, frame)
 }
 
 /// One cell feature of `plan`'s output as a Polars `Series` named `name`.
@@ -220,7 +220,7 @@ pub fn pull_cells<'py>(
         .with_name(name.as_str().into());
     let frame = DataFrame::new_infer_height(vec![values])
         .map_err(|error| polars_error(py, plan, &error))?;
-    handoff::to_polars(py, frame, plan.root().source())?.call_method1("to_series", (0,))
+    handoff::to_polars(py, frame)?.call_method1("to_series", (0,))
 }
 
 /// One gene feature of `plan`'s output as a Polars `Series` named `name`, one row per
@@ -263,7 +263,7 @@ pub fn pull_genes_column<'py>(
         .with_name(name.as_str().into());
     let frame = DataFrame::new_infer_height(vec![values])
         .map_err(|error| polars_error(py, plan, &error))?;
-    handoff::to_polars(py, frame, plan.root().source())?.call_method1("to_series", (0,))
+    handoff::to_polars(py, frame)?.call_method1("to_series", (0,))
 }
 
 /// `cell_id` and the `named` cell features of `plan`'s output, as a Rust frame.

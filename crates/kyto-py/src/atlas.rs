@@ -1020,7 +1020,8 @@ impl Atlas {
     /// polars.LazyFrame
     ///     Columns ``group``, ``gene_id`` (``String``), ``statistic``,
     ///     ``log_fold_change``, ``p_value``, ``adjusted_p_value`` (``Float64``).
-    ///     Collecting it runs the plan and returns a new frame the caller owns.
+    ///     Collecting it runs the plan and returns a new frame the caller owns
+    ///     (R2), handed to Polars without a copy (the Arrow C stream interface).
     ///
     /// Raises
     /// ------
@@ -1591,6 +1592,7 @@ impl Atlas {
     ///     for a ``GeneExpr``, per gene (``gene_ids()`` order). It is named ``feature``
     ///     for a name, and the expression's text for an expression. A sparse value that
     ///     is absent is 0 (R9).
+    ///     Handed to Polars without a copy (the Arrow C stream interface).
     ///
     /// Raises
     /// ------
@@ -1675,6 +1677,7 @@ impl Atlas {
     ///     A new frame the caller owns (R2): ``cell_id`` (``String``), then one column per
     ///     feature in the order given, one row per cell in ``cell_ids()`` order. Even one
     ///     feature gives a frame (R3). A sparse value that is absent is 0 (R9).
+    ///     Handed to Polars without a copy (the Arrow C stream interface).
     ///
     /// Raises
     /// ------
@@ -1767,6 +1770,7 @@ impl Atlas {
     ///     A new frame the caller owns (R2): ``cell_id``, then one column per gene, one
     ///     row per cell in ``cell_ids()`` order, in the layer's dtype. One gene still
     ///     gives a frame (R3). An absent sparse value is 0 (R9).
+    ///     Handed to Polars without a copy (the Arrow C stream interface).
     ///
     /// Raises
     /// ------
@@ -1850,6 +1854,7 @@ impl Atlas {
     ///     A new frame: ``feature`` (``String``), ``kind`` (``"cell column"``,
     ///     ``"gene"`` or ``"embedding component"``) and ``symbol`` (``String``, null
     ///     except for genes with a symbol). Nothing is read from the store.
+    ///     Handed to Polars without a copy (the Arrow C stream interface).
     ///
     /// Examples
     /// --------
@@ -1866,7 +1871,7 @@ impl Atlas {
             };
             to_py_err(py, &error)
         })?;
-        handoff::to_polars(py, frame, self.plan.root().source())
+        handoff::to_polars(py, frame)
     }
 
     /// The cell IDs of the plan's output, in order, as a Polars ``Series``.

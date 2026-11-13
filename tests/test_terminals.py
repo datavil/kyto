@@ -8,6 +8,10 @@ on ``pca`` and ``neighbors`` plans (task 5.11 writes them into stores).
 ``Embedding.to_torch`` runs only where ``torch`` is installed (it is not a dependency);
 its declared return type is checked in the stub here. Also 7.3's: ``sink_zarr``'s
 ``overwrite`` and the public ``Atlas.sink_h5ad`` (7.2 Open (5)).
+
+Task 7.5 (the hand-off): frames reach Polars without a copy (the Rust buffers, through
+the Arrow C stream interface), arrays reach NumPy and SciPy without a copy (the memory
+a Rust ``Vec`` filled), dtypes are kept, and changing any result changes no later read.
 """
 
 import ast
@@ -22,8 +26,8 @@ import numpy.typing as npt
 import polars as pl
 import pytest
 import scipy.sparse  # pyright: ignore[reportMissingTypeStubs]
-from kyto import _kyto
-from kyto.qc import total_counts
+from kyto import _kyto, gene_column
+from kyto.qc import total_counts, total_counts_in
 
 # The cells x genes counts of the store below (Matrix Market is genes x cells).
 COUNTS = np.array([[5, 0, 1], [0, 7, 0]], dtype=np.uint32)
@@ -249,6 +253,159 @@ def test_results_are_copies(store: Path) -> None:
         "AAAG-1",
     ]
     assert handle.to_dense(max_bytes=24) is not handle.to_dense(max_bytes=24)
+
+
+# Hand-off (task 7.5): what is copied, what is not, and the dtypes.
+
+
+def _rust_owned(array: npt.NDArray[np.generic]) -> bool:
+    """Whether ``array`` views memory a Rust ``Vec`` filled (no copy in Python).
+
+    The ``numpy`` crate hands a ``Vec`` over as an array whose base is its
+    ``PySliceContainer``; SciPy may wrap that array in views, never a copy here.
+    """
+    base: object = array
+    while isinstance(base, np.ndarray):
+        base = base.base
+    return type(base).__name__ == "PySliceContainer"
+
+
+def test_frames_are_handed_over_without_a_copy() -> None:
+    """Polars reads the Rust buffers themselves (Arrow C stream), dtypes kept."""
+    frame, x, n = _kyto.handoff_example()
+    assert type(frame) is pl.DataFrame
+    assert frame.schema == pl.Schema({"x": pl.Float64, "n": pl.UInt32, "s": pl.String})
+    assert frame["x"].to_numpy(allow_copy=False).ctypes.data == x
+    assert frame["n"].to_numpy(allow_copy=False).ctypes.data == n
+    assert frame["x"].sum() == sum(range(1000))
+    assert frame["s"].unique().to_list() == ["a"]
+
+
+def test_table_dtypes_after_the_handoff(store: Path) -> None:
+    genes = kyto.scan(store).genes.to_polars()
+    assert genes.dtypes[0] == pl.String
+    assert genes.schema["symbol"] == pl.Enum(["CD3E", "CD4", "MS4A1"])
+    cells = _with_steps(store).cells.to_polars()
+    assert cells.schema == pl.Schema({"cell_id": pl.String, "total": pl.Float64})
+    assert cells.rows() == [("AAAG-1", 7.0)]
+    lazy = _with_steps(store).cells.lazy()
+    assert lazy.collect().equals(cells)
+
+
+def test_arrays_are_handed_over_without_a_copy(store: Path) -> None:
+    """Every NumPy array (also inside SciPy) is the memory Rust filled, writeable."""
+    layer = kyto.scan(store).layer("counts")
+    matrix = _csr(layer.to_scipy())
+    atlas = _with_graph(store)
+    graph = _csr(atlas.graph("distances").to_scipy())
+    arrays: list[npt.NDArray[np.generic]] = [
+        layer.to_dense(max_bytes=24),
+        atlas.embedding("X_pca").to_numpy(),
+        matrix.data,
+        matrix.indices,
+        matrix.indptr,
+        graph.data,
+        graph.indices,
+        graph.indptr,
+    ]
+    for array in arrays:
+        assert _rust_owned(array), array
+        assert array.flags.writeable and array.flags.c_contiguous
+    assert [array.dtype for array in arrays] == [
+        np.uint32,
+        np.float32,
+        np.uint32,
+        np.int32,
+        np.int32,
+        np.float32,
+        np.int32,
+        np.int32,
+    ]
+
+
+def test_mutating_any_result_changes_no_later_read(store: Path) -> None:
+    """R2 for every terminal (7.5's Done-when, until 7.4's ``pull``)."""
+    atlas = _with_graph(store)
+    embedding = atlas.embedding("X_pca").to_numpy()
+    expected = embedding.copy()
+    embedding[:] = 99
+    graph = _csr(atlas.graph("distances").to_scipy())
+    expected_graph = graph.toarray()
+    graph.data[:] = 99
+    graph.indices[:] = 0
+    matrix = _csr(kyto.scan(store).layer("counts").to_scipy())
+    matrix.indptr[:] = 0
+    np.testing.assert_array_equal(atlas.embedding("X_pca").to_numpy(), expected)
+    np.testing.assert_array_equal(
+        _csr(atlas.graph("distances").to_scipy()).toarray(), expected_graph
+    )
+    np.testing.assert_array_equal(
+        _csr(kyto.scan(store).layer("counts").to_scipy()).toarray(), COUNTS
+    )
+    # Polars frames are immutable; their NumPy views are read-only.
+    edges = atlas.graph("distances").to_edges()
+    assert not edges["weight"].to_numpy(allow_copy=False).flags.writeable
+    collected = atlas.collect()
+    first = collected.embedding("X_pca").to_numpy()
+    first[:] = -1
+    np.testing.assert_array_equal(collected.embedding("X_pca").to_numpy(), expected)
+
+
+def test_mutating_a_returned_array_never_changes_a_later_pull(store: Path) -> None:
+    """7.5's Done-when, with 7.4's ``pull`` and ``select``."""
+    atlas = kyto.scan(store).with_default_layer("counts")
+    dense = atlas.layer("counts").to_dense(max_bytes=24)
+    dense[:] = 99
+    matrix = _csr(atlas.layer("counts").to_scipy())
+    matrix.data[:] = 99
+    pulled = atlas.pull("ENSG01")
+    view = pulled.to_numpy(allow_copy=False)
+    assert not view.flags.writeable  # a frame's buffer cannot be changed through NumPy
+    writable = pulled.to_numpy(writable=True)
+    writable[:] = 99
+    assert atlas.pull("ENSG01").to_list() == [5, 0]
+    assert atlas.pull("ENSG01").dtype == pl.UInt32
+    assert atlas.select("ENSG01", "ENSG03").rows() == [
+        ("AAAC-1", 5, 1),
+        ("AAAG-1", 0, 0),
+    ]
+
+
+def test_rank_genes_groups_dtypes_after_the_handoff(tmp_path: Path) -> None:
+    """The DE frame reaches Polars with the dtypes its deferred schema declares."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "matrix.mtx").write_text(
+        "%%MatrixMarket matrix coordinate integer general\n2 4 6\n"
+        "1 1 5\n2 1 1\n1 2 6\n1 3 1\n2 3 4\n2 4 5\n"
+    )
+    (source / "barcodes.tsv").write_text("A-1\nB-1\nC-1\nD-1\n")
+    (source / "features.tsv.gz").write_bytes(
+        gzip.compress(b"ENSG01\tCD3E\tGene Expression\nENSG02\tCD4\tGene Expression\n")
+    )
+    store = tmp_path / "four.kyto"
+    kyto.convert(source, store, layer="counts")
+    first = gene_column("symbol") == "CD3E"
+    lazy = (
+        kyto.scan(store)
+        .with_default_layer("counts")
+        .with_cells(cd3e=total_counts_in(first, layer="counts") > 2)
+        .rank_genes_groups("cd3e")
+    )
+    frame = lazy.collect()
+    assert frame.schema == lazy.collect_schema()
+    assert frame.schema == pl.Schema(
+        {
+            "group": pl.String,
+            "gene_id": pl.String,
+            "statistic": pl.Float64,
+            "log_fold_change": pl.Float64,
+            "p_value": pl.Float64,
+            "adjusted_p_value": pl.Float64,
+        }
+    )
+    assert sorted(frame["group"].unique().to_list()) == ["false", "true"]
+    assert frame.height == 4
 
 
 def test_progress_and_threads(store: Path) -> None:

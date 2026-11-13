@@ -60,6 +60,7 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;
     module.add_function(wrap_pyfunction!(errors::error_example_text, module)?)?;
+    module.add_function(wrap_pyfunction!(handoff::handoff_example, module)?)?;
     Ok(())
 }
 

@@ -803,7 +803,8 @@ class Atlas:
         polars.LazyFrame
             Columns ``group``, ``gene_id`` (``String``), ``statistic``,
             ``log_fold_change``, ``p_value``, ``adjusted_p_value`` (``Float64``).
-            Collecting it runs the plan and returns a new frame the caller owns.
+            Collecting it runs the plan and returns a new frame the caller owns
+            (R2), handed to Polars without a copy (the Arrow C stream interface).
 
         Raises
         ------
@@ -1388,6 +1389,7 @@ class Atlas:
             for a ``GeneExpr``, per gene (``gene_ids()`` order). It is named ``feature``
             for a name, and the expression's text for an expression. A sparse value that
             is absent is 0 (R9).
+            Handed to Polars without a copy (the Arrow C stream interface).
 
         Raises
         ------
@@ -1451,6 +1453,7 @@ class Atlas:
             A new frame the caller owns (R2): ``cell_id`` (``String``), then one column per
             feature in the order given, one row per cell in ``cell_ids()`` order. Even one
             feature gives a frame (R3). A sparse value that is absent is 0 (R9).
+            Handed to Polars without a copy (the Arrow C stream interface).
 
         Raises
         ------
@@ -1519,6 +1522,7 @@ class Atlas:
             A new frame the caller owns (R2): ``cell_id``, then one column per gene, one
             row per cell in ``cell_ids()`` order, in the layer's dtype. One gene still
             gives a frame (R3). An absent sparse value is 0 (R9).
+            Handed to Polars without a copy (the Arrow C stream interface).
 
         Raises
         ------
@@ -1559,6 +1563,7 @@ class Atlas:
             A new frame: ``feature`` (``String``), ``kind`` (``"cell column"``,
             ``"gene"`` or ``"embedding component"``) and ``symbol`` (``String``, null
             except for genes with a symbol). Nothing is read from the store.
+            Handed to Polars without a copy (the Arrow C stream interface).
 
         Examples
         --------
@@ -1983,8 +1988,10 @@ class Table:
         Returns
         -------
         polars.DataFrame
-            A copy the caller owns (R2): changing it never changes the store or a
-            later read. String columns are ``Enum``, as stored.
+            A copy the caller owns (R2): read from the store into new memory that is
+            handed to Polars without a further copy (the Arrow C stream interface), so
+            changing it never changes the store or a later read. String columns are
+            ``Enum``, as stored.
 
         Raises
         ------
@@ -2029,7 +2036,8 @@ class Table:
         Returns
         -------
         polars.LazyFrame
-            A new lazy frame over a copy the caller owns (R2).
+            A new lazy frame over a copy the caller owns (R2), handed over as
+            ``to_polars``'s.
 
         Raises
         ------
@@ -2139,7 +2147,9 @@ class Matrix:
         scipy.sparse.csr_matrix
             Cells x genes in the layer's stored dtype (``float32`` or ``uint32``), with
             sorted indices and no stored zeros, ``int32`` index arrays (``int64`` when
-            ``nnz`` or the genes need them); a copy the caller owns (R2).
+            ``nnz`` or the genes need them); a copy the caller owns (R2): the arrays
+            hold memory read from the store, handed to NumPy without a further copy
+            (one index array is converted to SciPy's dtype).
 
         Raises
         ------
@@ -2192,7 +2202,8 @@ class Matrix:
         -------
         numpy.ndarray
             Cells x genes, C order, in the layer's stored dtype (``float32`` or
-            ``uint32``); a copy the caller owns (R2).
+            ``uint32``); a copy the caller owns (R2): densified once into new memory,
+            handed to NumPy without a further copy.
 
         Raises
         ------
@@ -2302,7 +2313,9 @@ class Embedding:
         Returns
         -------
         numpy.ndarray
-            Rows x components, C order, in the stored dtype; a copy the caller owns (R2).
+            Rows x components, C order, in the stored dtype; a copy the caller owns
+            (R2): read from the store into new memory, handed to NumPy without a
+            further copy.
 
         Raises
         ------
@@ -2331,9 +2344,10 @@ class Embedding:
     ) -> Any:
         """Run the plan and return the embedding as a PyTorch tensor on ``device``.
 
-        As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: the tensor shares
-        the new array's memory on the CPU and is copied to any other device. A tensor
-        handed over without a copy (DLPack) is task 9.5. Needs ``torch`` installed.
+        As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: on the CPU the
+        tensor shares the new array's memory (no further copy); any other device gets
+        one more copy, from the host. A tensor made on the device without the host
+        copy (DLPack) is task 9.5. Needs ``torch`` installed.
 
         Parameters
         ----------
@@ -2458,7 +2472,8 @@ class Graph:
         -------
         scipy.sparse.csr_matrix
             Cells x cells edge weights in the stored dtype; a copy the caller owns
-            (R2). A stored edge may weigh 0 (format.md section 7).
+            (R2), handed over as ``Matrix.to_scipy``'s. A stored edge may weigh 0
+            (format.md section 7).
 
         Raises
         ------
@@ -2504,7 +2519,7 @@ class Graph:
             One row per stored edge, row by row: ``source`` and ``target`` are cell
             positions (``UInt32``, rows of ``cells.to_polars()`` and of ``to_scipy()``)
             and ``weight`` the stored weight (``Float32`` or ``Float64``); a copy the
-            caller owns (R2).
+            caller owns (R2), handed over as ``Table.to_polars``'s.
 
         Raises
         ------
@@ -3529,6 +3544,9 @@ def raise_error_example(code: str, /) -> bool:
 
 def error_example_text(code: str, /) -> tuple[str, str] | None:
     """Return the Rust message and hint of the example error for `code`."""
+
+def handoff_example() -> tuple[pl.DataFrame, int, int]:
+    """Return a Rust-built frame handed to Polars and its `x` and `n` buffer addresses."""
 
 def convert(
     source: str,

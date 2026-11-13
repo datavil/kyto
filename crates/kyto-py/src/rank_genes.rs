@@ -4,10 +4,10 @@
 //! Does: check the arguments and the plan's members when the method is called (R5, R6:
 //! the layer and the `groupby` column must be in the plan's output), then return a
 //! `pl.LazyFrame` built with `pl.defer`: the plan runs (`kyto_algo::rank_genes_groups`,
-//! GIL released) only when the frame is collected (R1), and the result is copied into a
-//! new `pl.DataFrame` of the six documented columns.
+//! GIL released) only when the frame is collected (R1), and the result is handed to a
+//! new `pl.DataFrame` of the six documented columns without a copy (7.5).
 //! Does not: report progress or react to Ctrl-C while it runs (`run_plan` drains a
-//! pipeline; DE consumes its own), or hand the frame over without a copy (7.5).
+//! pipeline; DE consumes its own).
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use kyto_exec::ExecuteOptions;
 use kyto_plan::{Member, Output, PhysicalOptions, Plan};
 use polars::prelude::DataFrame;
 use pyo3::prelude::*;
-use pyo3::types::{PyCFunction, PyDict, PyList};
+use pyo3::types::{PyCFunction, PyDict};
 
 use crate::errors::to_py_err;
 
@@ -93,35 +93,13 @@ pub fn lazy_frame<'py>(
     polars.call_method("defer", (run,), Some(&keywords))
 }
 
-/// Copy the frame's six columns into a new `pl.DataFrame`.
+/// The frame's six columns, in order, as a new `pl.DataFrame` (handed over without a
+/// copy, `handoff::to_polars`).
 fn to_polars<'py>(py: Python<'py>, frame: &DataFrame) -> PyResult<Bound<'py, PyAny>> {
-    let polars = py.import("polars")?;
-    let data = PyDict::new(py);
-    let schema = PyDict::new(py);
     // The frame's columns and dtypes are kyto-algo's contract (`RANK_GENES_COLUMNS`,
     // tested there): a mismatch is a bug, not a user error.
-    for (index, name) in RANK_GENES_COLUMNS.iter().enumerate() {
-        let Ok(column) = frame.column(name) else {
-            unreachable!("rank_genes_groups returns every column of RANK_GENES_COLUMNS")
-        };
-        let values = if index < 2 {
-            schema.set_item(*name, polars.getattr("String")?)?;
-            let Ok(values) = column.str() else {
-                unreachable!("rank_genes_groups returns `group` and `gene_id` as String")
-            };
-            let values: Vec<Option<&str>> = values.iter().collect();
-            PyList::new(py, values)?
-        } else {
-            schema.set_item(*name, polars.getattr("Float64")?)?;
-            let Ok(values) = column.f64() else {
-                unreachable!("rank_genes_groups returns its statistics as Float64")
-            };
-            let values: Vec<Option<f64>> = values.iter().collect();
-            PyList::new(py, values)?
-        };
-        data.set_item(*name, values)?;
-    }
-    let keywords = PyDict::new(py);
-    keywords.set_item("schema", schema)?;
-    polars.call_method("DataFrame", (data,), Some(&keywords))
+    let Ok(frame) = frame.select(RANK_GENES_COLUMNS.iter().copied()) else {
+        unreachable!("rank_genes_groups returns every column of RANK_GENES_COLUMNS")
+    };
+    crate::handoff::to_polars(py, frame)
 }

@@ -211,7 +211,7 @@ impl PyTable {
         let frame = py
             .detach(|| kyto_store::read_table(&store.store, axis))
             .map_err(|error| to_py_err(py, &error))?;
-        handoff::to_polars(py, frame, &store.store.display().to_string())
+        handoff::to_polars(py, frame)
     }
 }
 
@@ -290,8 +290,10 @@ impl PyTable {
     /// Returns
     /// -------
     /// polars.DataFrame
-    ///     A copy the caller owns (R2): changing it never changes the store or a
-    ///     later read. String columns are ``Enum``, as stored.
+    ///     A copy the caller owns (R2): read from the store into new memory that is
+    ///     handed to Polars without a further copy (the Arrow C stream interface), so
+    ///     changing it never changes the store or a later read. String columns are
+    ///     ``Enum``, as stored.
     ///
     /// Raises
     /// ------
@@ -339,7 +341,8 @@ impl PyTable {
     /// Returns
     /// -------
     /// polars.LazyFrame
-    ///     A new lazy frame over a copy the caller owns (R2).
+    ///     A new lazy frame over a copy the caller owns (R2), handed over as
+    ///     ``to_polars``'s.
     ///
     /// Raises
     /// ------
@@ -552,7 +555,9 @@ impl PyMatrix {
     /// scipy.sparse.csr_matrix
     ///     Cells x genes in the layer's stored dtype (``float32`` or ``uint32``), with
     ///     sorted indices and no stored zeros, ``int32`` index arrays (``int64`` when
-    ///     ``nnz`` or the genes need them); a copy the caller owns (R2).
+    ///     ``nnz`` or the genes need them); a copy the caller owns (R2): the arrays
+    ///     hold memory read from the store, handed to NumPy without a further copy
+    ///     (one index array is converted to SciPy's dtype).
     ///
     /// Raises
     /// ------
@@ -610,7 +615,8 @@ impl PyMatrix {
     /// -------
     /// numpy.ndarray
     ///     Cells x genes, C order, in the layer's stored dtype (``float32`` or
-    ///     ``uint32``); a copy the caller owns (R2).
+    ///     ``uint32``); a copy the caller owns (R2): densified once into new memory,
+    ///     handed to NumPy without a further copy.
     ///
     /// Raises
     /// ------
@@ -804,7 +810,9 @@ impl PyEmbedding {
     /// Returns
     /// -------
     /// numpy.ndarray
-    ///     Rows x components, C order, in the stored dtype; a copy the caller owns (R2).
+    ///     Rows x components, C order, in the stored dtype; a copy the caller owns
+    ///     (R2): read from the store into new memory, handed to NumPy without a
+    ///     further copy.
     ///
     /// Raises
     /// ------
@@ -835,9 +843,10 @@ impl PyEmbedding {
 
     /// Run the plan and return the embedding as a PyTorch tensor on ``device``.
     ///
-    /// As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: the tensor shares
-    /// the new array's memory on the CPU and is copied to any other device. A tensor
-    /// handed over without a copy (DLPack) is task 9.5. Needs ``torch`` installed.
+    /// As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: on the CPU the
+    /// tensor shares the new array's memory (no further copy); any other device gets
+    /// one more copy, from the host. A tensor made on the device without the host
+    /// copy (DLPack) is task 9.5. Needs ``torch`` installed.
     ///
     /// Parameters
     /// ----------
@@ -1026,7 +1035,8 @@ impl PyGraph {
     /// -------
     /// scipy.sparse.csr_matrix
     ///     Cells x cells edge weights in the stored dtype; a copy the caller owns
-    ///     (R2). A stored edge may weigh 0 (format.md section 7).
+    ///     (R2), handed over as ``Matrix.to_scipy``'s. A stored edge may weigh 0
+    ///     (format.md section 7).
     ///
     /// Raises
     /// ------
@@ -1104,7 +1114,7 @@ impl PyGraph {
     ///     One row per stored edge, row by row: ``source`` and ``target`` are cell
     ///     positions (``UInt32``, rows of ``cells.to_polars()`` and of ``to_scipy()``)
     ///     and ``weight`` the stored weight (``Float32`` or ``Float64``); a copy the
-    ///     caller owns (R2).
+    ///     caller owns (R2), handed over as ``Table.to_polars``'s.
     ///
     /// Raises
     /// ------
@@ -1130,9 +1140,8 @@ impl PyGraph {
         progress: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let graph = self.read(py, "Graph.to_edges", memory_limit, threads, progress)?;
-        let name = self.handle.schema().name.clone();
         let frame = handoff::edges(graph).map_err(|error| to_py_err(py, &error))?;
-        handoff::to_polars(py, frame, &name)
+        handoff::to_polars(py, frame)
     }
 
     /// One line, from metadata only.
