@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use kyto_plan::HvgFlavor;
 
+use crate::leiden::ClusterStatistics;
 use crate::neighbors::NeighborStatistics;
 use crate::pca::PcaStatistics;
 
@@ -291,6 +292,9 @@ pub enum NodeStatistics {
     /// `neighbors`: the distance and connectivity graphs (tasks 6.6, 6.7; no statistics
     /// passes, it searches the embedding after the passes of the node that wrote it).
     Neighbors(Box<NeighborStatistics>),
+    /// `leiden`/`louvain`: the clustering of the graph's cells (task 6.8; no
+    /// statistics passes, it clusters the graph of the `neighbors` node below it).
+    Cluster(Box<ClusterStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

@@ -29,7 +29,10 @@
 //! `neighbors` (task 6.6) searches the embedding of the `pca` below it, exactly or
 //! through an HNSW index, and leaves its distance graph and its UMAP connectivities
 //! (task 6.7) as [`NeighborStatistics`] ([`nearest_neighbors`] runs the same search
-//! on any embedding, [`connectivities`] weights any neighbour graph).
+//! on any embedding, [`connectivities`] weights any neighbour graph). `leiden` and
+//! `louvain` (task 6.8) cluster the graph of the `neighbors` node below them
+//! ([`cluster`] on any [`CellGraph`]) and add their labels as a cell column
+//! ([`ClusterStatistics`]).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -37,6 +40,8 @@
 mod block_stream;
 mod cell_block_pool;
 mod cell_steps;
+mod cluster_graph;
+mod cluster_labels;
 mod connectivities;
 mod cross_cell;
 mod elementwise;
@@ -45,6 +50,7 @@ mod gene_steps;
 mod hvg;
 mod hvg_pass;
 mod kernels;
+mod leiden;
 mod loess;
 mod memory_limit;
 mod neighbors;
@@ -63,11 +69,13 @@ mod statistics;
 
 pub use block_stream::BlockStream;
 pub use cell_block_pool::CellBlockPool;
+pub use cluster_graph::CellGraph;
 pub use connectivities::{
     ConnectivityGraph, MIN_K_DIST_SCALE, SMOOTH_K_ITERATIONS, SMOOTH_K_TOLERANCE, connectivities,
 };
 pub use gene_steps::Genes;
 pub use kernels::{KernelValue, Kernels, SUM_LANES, combine_lanes, log1p};
+pub use leiden::{ClusterStatistics, Clustering, cluster, partition_quality};
 pub use loess::loess_fitted;
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,

@@ -36,6 +36,10 @@ dev = [
     "anndata>=0.12.19; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     "scanpy>=1.12.5; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     "scikit-misc>=0.5; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # Leiden and Louvain references (task 6.8): scanpy's tl.leiden runs leidenalg; the
+    # `louvain` package scanpy's tl.louvain uses has no Python 3.13 build, so its
+    # reference runs leidenalg's optimiser without refinement (Louvain).
+    "leidenalg>=0.10; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
 
 [tool.maturin]

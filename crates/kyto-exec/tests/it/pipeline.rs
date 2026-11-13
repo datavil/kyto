@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{
-    CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, connectivities,
-    nearest_neighbors,
+    CellGraph, CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, cluster,
+    connectivities, nearest_neighbors,
 };
 use kyto_plan::{
     Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions,
@@ -31,7 +31,7 @@ use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
     read_ids,
 };
-use polars::prelude::{DataFrame, IntoColumn, NamedFrom, Series};
+use polars::prelude::{DataFrame, DataType, IntoColumn, NamedFrom, Series};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::byte_range::{ByteRange, ByteRangeIterator};
 use zarrs::storage::{MaybeBytesIterator, ReadableStorageTraits, StorageError, StoreKey};
@@ -296,39 +296,50 @@ fn nodes_not_run_yet_are_refused_before_reading() {
     write_store(&store);
     let base = scan(&store);
     // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since
-    // 6.4, `pca` since 6.5, `neighbors` since 6.6.
+    // 6.4, `pca` since 6.5, `neighbors` since 6.6, `leiden`/`louvain` since 6.8; a
+    // clustering past a `take_cells` above its `neighbors` waits for 5.11.
     let leiden = base
         .pca(Some("counts"), "X_pca", 2, 0)
         .unwrap()
-        .neighbors(Neighbors {
-            embedding: "X_pca".to_owned(),
-            n_components: None,
-            n_neighbors: 2,
-            metric: Metric::Euclidean,
-            search: NeighborSearch::Exact,
-            seed: 0,
-            key: None,
-        })
+        .neighbors(neighbors_params(2))
         .unwrap()
-        .cluster(Cluster {
-            method: ClusterMethod::Leiden,
-            graph: "connectivities".to_owned(),
-            resolution: 1.0,
-            seed: 0,
-            into: "leiden".to_owned(),
-        })
+        .take_cells((0..10).map(|cell| format!("c{cell}")))
+        .unwrap()
+        .cluster(cluster_params(ClusterMethod::Leiden, "connectivities"))
         .unwrap();
     let physical = PhysicalPlan::new(leiden.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 0).unwrap_err();
     assert_eq!(error.code(), "KY-E601");
     let message = error.to_string();
     assert!(
-        message.contains("leiden") && message.contains("6.8"),
+        message.contains("leiden") && message.contains("take_cells") && message.contains("5.11"),
         "{message}"
     );
     let physical = PhysicalPlan::new(base.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 1).unwrap_err();
     assert_eq!(error.code(), "KY-E215");
+}
+
+fn neighbors_params(n_neighbors: u64) -> Neighbors {
+    Neighbors {
+        embedding: "X_pca".to_owned(),
+        n_components: None,
+        n_neighbors,
+        metric: Metric::Euclidean,
+        search: NeighborSearch::Exact,
+        seed: 0,
+        key: None,
+    }
+}
+
+fn cluster_params(method: ClusterMethod, graph: &str) -> Cluster {
+    Cluster {
+        method,
+        graph: graph.to_owned(),
+        resolution: 1.0,
+        seed: 3,
+        into: method.name().to_owned(),
+    }
 }
 
 #[test]
@@ -550,4 +561,114 @@ fn neighbors_search_the_embedding_of_the_pca_below() {
         message.contains("take_cells") && message.contains("5.11"),
         "{message}"
     );
+}
+
+#[test]
+fn clusterings_label_the_cells_of_the_graph_below() {
+    use kyto_core::{BinaryOp, CellExpr, Expr, Literal};
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let neighbors = preprocess(&store)
+        .pca(Some("log1p"), "X_pca", 3, 0)
+        .unwrap()
+        .neighbors(neighbors_params(8))
+        .unwrap();
+    let graphs = node_statistics(
+        &neighbors,
+        Member::Graph("connectivities".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Neighbors(neighbors) => Some((**neighbors).clone()),
+            _ => None,
+        },
+    );
+    for (method, graph) in [
+        (ClusterMethod::Leiden, "connectivities"),
+        (ClusterMethod::Louvain, "connectivities"),
+        (ClusterMethod::Leiden, "distances"),
+    ] {
+        let params = cluster_params(method, graph);
+        let expected = match graph {
+            "distances" => cluster(CellGraph::from(graphs.distances()), &params),
+            _ => cluster(CellGraph::from(graphs.connectivities()), &params),
+        }
+        .unwrap();
+        assert!(expected.n_clusters() > 1, "{method:?} on {graph}");
+        let plan = neighbors.cluster(params.clone()).unwrap();
+        let column = Member::CellColumn(params.into.clone());
+        for threads_count in [1, 4] {
+            let found =
+                node_statistics(
+                    &plan,
+                    column.clone(),
+                    threads_count,
+                    |statistics| match statistics {
+                        NodeStatistics::Cluster(found) => Some((**found).clone()),
+                        _ => None,
+                    },
+                );
+            assert_eq!(found.cells(), graphs.cells());
+            assert_eq!(found.clustering(), &expected, "{method:?} on {graph}");
+            // Every block carries the labels as an `Enum` column of all clusters.
+            let output = Output::members(&plan, [column.clone()]).unwrap();
+            let physical =
+                physical_plan(&[output], OptimizeOptions::ALL, PhysicalOptions::default());
+            let blocks = collect(&physical, threads(threads_count));
+            let mut labels: Vec<(u64, String)> = Vec::new();
+            for block in &blocks {
+                let values = block.columns.column(&params.into).unwrap();
+                let DataType::Enum(categories, _) = values.dtype() else {
+                    panic!("labels are an Enum, not {:?}", values.dtype())
+                };
+                let names: Vec<&str> = categories.categories().values_iter().collect();
+                let numbers: Vec<String> = (0..expected.n_clusters())
+                    .map(|label| label.to_string())
+                    .collect();
+                assert_eq!(names, numbers);
+                let values = values.cast(&DataType::String).unwrap();
+                let values = values.str().unwrap();
+                for (row, cell) in block.cells.iter().enumerate() {
+                    labels.push((*cell, values.get(row).unwrap().to_owned()));
+                }
+            }
+            let expected_labels: Vec<(u64, String)> = graphs
+                .cells()
+                .iter()
+                .zip(expected.labels())
+                .map(|(&cell, label)| (cell, label.to_string()))
+                .collect();
+            assert_eq!(labels, expected_labels);
+        }
+    }
+
+    // A filter on the labels keeps the cells of cluster 0.
+    let params = cluster_params(ClusterMethod::Leiden, "connectivities");
+    let expected = cluster(CellGraph::from(graphs.connectivities()), &params).unwrap();
+    let kept = neighbors
+        .cluster(params)
+        .unwrap()
+        .filter_cells(
+            &Expr::binary(
+                CellExpr::column("leiden"),
+                BinaryOp::Eq,
+                Literal::String("0".to_owned()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let output = Output::members(&kept, [Member::CellColumn("leiden".to_owned())]).unwrap();
+    let physical = physical_plan(&[output], OptimizeOptions::ALL, PhysicalOptions::default());
+    let cells: Vec<u64> = collect(&physical, threads(3))
+        .iter()
+        .flat_map(|block| block.cells.clone())
+        .collect();
+    let in_cluster_0: Vec<u64> = graphs
+        .cells()
+        .iter()
+        .zip(expected.labels())
+        .filter(|(_, label)| **label == 0)
+        .map(|(&cell, _)| cell)
+        .collect();
+    assert_eq!(cells, in_cluster_0);
 }

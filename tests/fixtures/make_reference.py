@@ -37,6 +37,8 @@ from fixtures.registry import EXPECTED_DIGESTS, FIXTURE_NAMES, FixtureName, load
 
 VERSIONED_PACKAGES: tuple[str, ...] = (
     "anndata",
+    "igraph",
+    "leidenalg",
     "numpy",
     "scanpy",
     "scikit-learn",
@@ -73,6 +75,8 @@ _TARGET_SUM = 1e4
 _N_NEIGHBORS = 15
 _SCALE_MAX_VALUE = 10.0
 _SEED = 0
+# Leiden and Louvain resolutions: scanpy's default 1 and the clustering tutorial's.
+_RESOLUTIONS: tuple[float, ...] = (0.02, 0.5, 1.0, 2.0)
 # Genes seen in fewer cells are dropped before HVG and later steps on pbmc3k, as in
 # the scanpy tutorial. Without it scanpy's cell_ranger flavour raises ("Bin edges must
 # be unique") on the ~19k all-zero genes. synthetic keeps its empty genes (edge case).
@@ -298,10 +302,24 @@ def pca(name: FixtureName) -> tuple[Parameters, Arrays]:
     }
 
 
-def neighbors(name: FixtureName) -> tuple[Parameters, Arrays]:
-    """Exact kNN distances and UMAP connectivities on the PCA (tasks 6.6, 6.7)."""
+def _neighbors(name: FixtureName) -> AnnData:
+    """The PCA reference with its exact kNN graph and UMAP connectivities."""
     import scanpy as sc
 
+    adata = _pca(name)
+    sc.pp.neighbors(
+        adata,
+        n_neighbors=_N_NEIGHBORS,
+        n_pcs=_N_COMPS[name],
+        method="umap",
+        metric="euclidean",
+        random_state=_SEED,
+    )
+    return adata
+
+
+def neighbors(name: FixtureName) -> tuple[Parameters, Arrays]:
+    """Exact kNN distances and UMAP connectivities on the PCA (tasks 6.6, 6.7)."""
     parameters: Parameters = {
         "function": "scanpy.pp.neighbors",
         "input": "pca reference embedding",
@@ -313,18 +331,115 @@ def neighbors(name: FixtureName) -> tuple[Parameters, Arrays]:
         "transformer": "exact (n_obs < 4096)",
         "random_state": _SEED,
     }
-    adata = _pca(name)
-    sc.pp.neighbors(
-        adata,
-        n_neighbors=_N_NEIGHBORS,
-        n_pcs=_N_COMPS[name],
-        method="umap",
-        metric="euclidean",
-        random_state=_SEED,
-    )
+    adata = _neighbors(name)
     return parameters, _csr_arrays(adata.obsp["distances"], "distances") | _csr_arrays(
         adata.obsp["connectivities"], "connectivities"
     )
+
+
+def _rb_quality(
+    adjacency: object, membership: NDArray[np.int64], resolution: float
+) -> float:
+    """Modularity with a resolution (leidenalg's ``RBConfigurationVertexPartition``
+    on the directed graph scanpy builds) of ``membership``, normalised by the total
+    edge weight: ``sum_c (W_c - resolution * K_out_c * K_in_c / m) / m``."""
+    from scipy.sparse import csr_matrix
+
+    matrix = csr_matrix(adjacency, dtype=np.float64)
+    rows, columns = matrix.nonzero()
+    weights = np.asarray(matrix[rows, columns]).ravel()
+    total = float(weights.sum())
+    inside = float(weights[membership[rows] == membership[columns]].sum())
+    n_clusters = int(membership.max()) + 1
+    out_strength = np.bincount(
+        membership, np.asarray(matrix.sum(axis=1)).ravel(), n_clusters
+    )
+    in_strength = np.bincount(
+        membership, np.asarray(matrix.sum(axis=0)).ravel(), n_clusters
+    )
+    expected = float((out_strength * in_strength).sum()) / total
+    return (inside - resolution * expected) / total
+
+
+def leiden(name: FixtureName) -> tuple[Parameters, Arrays]:
+    """``tl.leiden`` with leidenalg on the connectivities, several resolutions (6.8)."""
+    import scanpy as sc
+
+    parameters: Parameters = {
+        "function": "scanpy.tl.leiden",
+        "input": "neighbors connectivities (as the neighbors reference)",
+        "flavor": "leidenalg",
+        "directed": True,
+        "use_weights": True,
+        "n_iterations": -1,
+        "partition_type": "RBConfigurationVertexPartition",
+        "random_state": _SEED,
+        "resolutions": ", ".join(str(resolution) for resolution in _RESOLUTIONS),
+    }
+    adata = _neighbors(name)
+    arrays: Arrays = {}
+    for resolution in _RESOLUTIONS:
+        sc.tl.leiden(
+            adata,
+            resolution=resolution,
+            random_state=_SEED,
+            flavor="leidenalg",
+            key_added="leiden",
+        )
+        labels = adata.obs["leiden"].astype(np.int64).to_numpy()
+        quality = _rb_quality(adata.obsp["connectivities"], labels, resolution)
+        arrays[f"{resolution}/labels"] = labels.astype(np.int32)
+        arrays[f"{resolution}/quality"] = np.array([quality])
+    return parameters, arrays
+
+
+def louvain(name: FixtureName) -> tuple[Parameters, Arrays]:
+    """Louvain as ``tl.louvain`` (flavor ``vtraag``) runs it, several resolutions (6.8).
+
+    The ``louvain`` package has no Python 3.13 build; its successor leidenalg (same
+    author, same moves and aggregation) runs Louvain with its documented loop. As
+    scanpy's default: the directed graph, no weights,
+    ``RBConfigurationVertexPartition``, levels until one moves nothing."""
+    import leidenalg
+    from scanpy._utils import get_igraph_from_adjacency
+    from scipy.sparse import csr_matrix
+
+    parameters: Parameters = {
+        "function": "leidenalg move_nodes/aggregate_partition loop, as scanpy.tl.louvain",
+        "input": "neighbors connectivities (as the neighbors reference)",
+        "flavor": "vtraag",
+        "directed": True,
+        "use_weights": False,
+        "partition_type": "RBConfigurationVertexPartition",
+        "random_state": _SEED,
+        "resolutions": ", ".join(str(resolution) for resolution in _RESOLUTIONS),
+    }
+    adata = _neighbors(name)
+    adjacency = csr_matrix(adata.obsp["connectivities"])
+    graph = get_igraph_from_adjacency(adjacency, directed=True)
+    unweighted = csr_matrix(
+        (np.ones(adjacency.nnz), adjacency.indices, adjacency.indptr),
+        shape=adjacency.shape,
+    )
+    arrays: Arrays = {}
+    for resolution in _RESOLUTIONS:
+        partition = leidenalg.RBConfigurationVertexPartition(
+            graph, resolution_parameter=resolution
+        )
+        optimiser = leidenalg.Optimiser()
+        optimiser.set_rng_seed(_SEED)
+        # leidenalg's documented Louvain loop (`refine_partition = False` crashes in
+        # leidenalg 0.10.2): move nodes, aggregate, until a level moves nothing.
+        aggregate = partition.aggregate_partition()
+        while optimiser.move_nodes(aggregate) > 0:
+            partition.from_coarse_partition(aggregate)
+            aggregate = aggregate.aggregate_partition()
+        partition.renumber_communities()
+        labels = np.asarray(partition.membership, dtype=np.int64)
+        quality = _rb_quality(unweighted, labels, resolution)
+        arrays[f"{resolution}/labels"] = labels.astype(np.int32)
+        arrays[f"{resolution}/quality"] = np.array([quality])
+    return parameters, arrays
 
 
 def rank_genes(name: FixtureName) -> tuple[Parameters, Arrays]:
@@ -361,6 +476,8 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "scale": scale,
         "pca": pca,
         "neighbors": neighbors,
+        "leiden": leiden,
+        "louvain": louvain,
         "rank_genes": rank_genes,
     },
     "pbmc3k": {
@@ -370,6 +487,8 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "scale": scale,
         "pca": pca,
         "neighbors": neighbors,
+        "leiden": leiden,
+        "louvain": louvain,
     },
 }
 

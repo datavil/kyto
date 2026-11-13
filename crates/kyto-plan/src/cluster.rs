@@ -6,7 +6,8 @@
 //! `String`, with no lineage: scanpy stores cluster labels as categorical strings
 //! (`'0'`, `'1'`, ...), and how many there are is known only when the plan runs, so
 //! the `Enum` category count waits for the sink. Changes no axis; cross-cell.
-//! Does not: cluster (6.8).
+//! Does not: cluster (kyto-exec's `leiden.rs`, task 6.8, which hands the column to the
+//! stream as an `Enum` of the clusters' numbers).
 
 use std::fmt;
 use std::sync::Arc;

@@ -132,6 +132,151 @@
     "n_top_genes": 2000
    }
   },
+  "pbmc3k/leiden": {
+   "arrays": {
+    "0.02/labels": {
+     "digest": "11e1cea45e98e43d4749156b2b5472c91f27ace1f609b5e77eefedf6714cd9ac",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "0.02/quality": {
+     "digest": "7846f3dd32b5ce06e64bc4fd298dec2f51160c98c329e6b49b2ae7c896ab25f7",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "0.5/labels": {
+     "digest": "c260f2c7360f8c618d27f8d7bafc46fbacc18855e9340e903d0bdc413defed40",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "0.5/quality": {
+     "digest": "b2635f79d17a812d9e89690b44df1fa76237e5d3fb520bfdb191b2c94c6769da",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "1.0/labels": {
+     "digest": "55d5679c2547c9e7d441c4f6bb8e1f736754fd19f304b8a7aa187ac2a6fc83cd",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "1.0/quality": {
+     "digest": "5a1538eb60ccdf781b39a4ec42db1abcfcdb8103d0621de203867acab6b0ef39",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "2.0/labels": {
+     "digest": "e795e4b4c4e2f4430af5d9188d6c512deefc6dc0457c55e6c77b50740f86d75d",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "2.0/quality": {
+     "digest": "6629899fd255ca9dfb5c9a78f4f6fab6bd129eb5ffb7e0f5a0e15bf2a7f38823",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    }
+   },
+   "file": "pbmc3k/leiden.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "directed": true,
+    "flavor": "leidenalg",
+    "function": "scanpy.tl.leiden",
+    "input": "neighbors connectivities (as the neighbors reference)",
+    "n_iterations": -1,
+    "partition_type": "RBConfigurationVertexPartition",
+    "random_state": 0,
+    "resolutions": "0.02, 0.5, 1.0, 2.0",
+    "use_weights": true
+   }
+  },
+  "pbmc3k/louvain": {
+   "arrays": {
+    "0.02/labels": {
+     "digest": "0d8f29ad5a7cb4cbdb0bd2568ee0b97eca912cfd5604b4a7c6353d067d4ec658",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "0.02/quality": {
+     "digest": "6a8c22d9a3891137abe5dd5e39a42ffc2abf7c2bbab92e913a04894e02122a90",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "0.5/labels": {
+     "digest": "293fa6a84db5fa909476b99a92a2852f086ffafd9776502a8e3d6dee028be967",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "0.5/quality": {
+     "digest": "1b8437752ae2a1646b8fe998e546ae4cb698fd5fba44e9e871c13b5ba4173085",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "1.0/labels": {
+     "digest": "8ec0c616c34ecf318b62db61325bfb1cee8d58a31f94e09bae39beaf5fcf2eb0",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "1.0/quality": {
+     "digest": "539cb921ed64efed79e789641d1e7d53c3cd96cc316a58a18125a0e1b8a9a4c1",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "2.0/labels": {
+     "digest": "4aff3d5ed0669cd66479a1011836eeb3a4bb4147f48e3fd2b84b9acde804610c",
+     "dtype": "<i4",
+     "shape": [
+      2700
+     ]
+    },
+    "2.0/quality": {
+     "digest": "1a194b01d9069e699f342c520b93e0e378329143603a2904e47a11f5c2a32dae",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    }
+   },
+   "file": "pbmc3k/louvain.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "directed": true,
+    "flavor": "vtraag",
+    "function": "leidenalg move_nodes/aggregate_partition loop, as scanpy.tl.louvain",
+    "input": "neighbors connectivities (as the neighbors reference)",
+    "partition_type": "RBConfigurationVertexPartition",
+    "random_state": 0,
+    "resolutions": "0.02, 0.5, 1.0, 2.0",
+    "use_weights": false
+   }
+  },
   "pbmc3k/neighbors": {
    "arrays": {
     "connectivities/data": {
@@ -780,6 +925,151 @@
     "n_top_genes": 100
    }
   },
+  "synthetic/leiden": {
+   "arrays": {
+    "0.02/labels": {
+     "digest": "6d245f18afe26be824db13d257fd3d0d20b2c99649eb17ec3489653d3688cca7",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "0.02/quality": {
+     "digest": "358633c5200132d99259da7f1a42a7ad6cc98194f936145e0759818fd7281fee",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "0.5/labels": {
+     "digest": "d4b0a02579864ea92fe0847c84770131314716143b8a8b5b1b83c03f6049bafe",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "0.5/quality": {
+     "digest": "394790c1e807b5edd8a7e8c8dd6407f3dc0e9c390b753f888c7d3be1f002d4ca",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "1.0/labels": {
+     "digest": "8a590728e62f443ba256f33e882cab52a1bc6168da0b88fdd13da77c1f8d2267",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "1.0/quality": {
+     "digest": "d0b64bc7efb75a67a9fc204fa776ac4d32a7eb0728866c313efc64966c4ef1ee",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "2.0/labels": {
+     "digest": "6f9b967057b2b3008ecdba918c8a7a64849f4492f93ae69ea161c95f6601d901",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "2.0/quality": {
+     "digest": "a310f2c9ae995641c557cef2188ac20f15ceac089990c4bbbe8fc9afae06a8bf",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    }
+   },
+   "file": "synthetic/leiden.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "directed": true,
+    "flavor": "leidenalg",
+    "function": "scanpy.tl.leiden",
+    "input": "neighbors connectivities (as the neighbors reference)",
+    "n_iterations": -1,
+    "partition_type": "RBConfigurationVertexPartition",
+    "random_state": 0,
+    "resolutions": "0.02, 0.5, 1.0, 2.0",
+    "use_weights": true
+   }
+  },
+  "synthetic/louvain": {
+   "arrays": {
+    "0.02/labels": {
+     "digest": "6d245f18afe26be824db13d257fd3d0d20b2c99649eb17ec3489653d3688cca7",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "0.02/quality": {
+     "digest": "358633c5200132d99259da7f1a42a7ad6cc98194f936145e0759818fd7281fee",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "0.5/labels": {
+     "digest": "5372c6756839b1449a684b3b876b324098d40ff259e31085eeaeb516615f414b",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "0.5/quality": {
+     "digest": "d1458e7531acdaf25ce882e8fccf6954fa30938c3e22f69a86647f6f6c9bf239",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "1.0/labels": {
+     "digest": "c485ed39230afdf4c915256021352a575cdbee95ff5090039a8b670a7b4dd5ab",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "1.0/quality": {
+     "digest": "42c9d0c25f689c569fc1c25b39a898be76552db881de19ec62f92d1316a0e9a8",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "2.0/labels": {
+     "digest": "34108ac1a16292b07698e755faa228462d1e7cc9f7485b074c96bbc164795c5f",
+     "dtype": "<i4",
+     "shape": [
+      500
+     ]
+    },
+    "2.0/quality": {
+     "digest": "7510bd1e374fcdfe97da94b38c7575f159aeb62373c36249552607e454128337",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    }
+   },
+   "file": "synthetic/louvain.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "directed": true,
+    "flavor": "vtraag",
+    "function": "leidenalg move_nodes/aggregate_partition loop, as scanpy.tl.louvain",
+    "input": "neighbors connectivities (as the neighbors reference)",
+    "partition_type": "RBConfigurationVertexPartition",
+    "random_state": 0,
+    "resolutions": "0.02, 0.5, 1.0, 2.0",
+    "use_weights": false
+   }
+  },
   "synthetic/neighbors": {
    "arrays": {
     "connectivities/data": {
@@ -1385,6 +1675,8 @@
  },
  "versions": {
   "anndata": "0.13.4",
+  "igraph": "0.11.9",
+  "leidenalg": "0.10.2",
   "numpy": "2.5.4",
   "scanpy": "1.12.5",
   "scikit-learn": "1.9.1",

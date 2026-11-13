@@ -20,7 +20,9 @@
 //! finished: a later cancel changes nothing.
 //! Does not: write embeddings or graphs (`KY-E601`: the plan has nothing that writes
 //! them yet), remote targets (the path is a local path), or count the tables it holds
-//! in the estimate (5.10). Cluster labels (`String`) become `Enum` with 6.8.
+//! in the estimate (5.10). Cluster labels (6.8) arrive as an `Enum` computed column
+//! and are written as one (a plan with a clustering also carries the neighbour graphs,
+//! so it is refused here until 5.11).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

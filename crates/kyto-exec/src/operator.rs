@@ -2,8 +2,8 @@
 //!
 //! Does: dispatch one block to per-cell maps (`normalize_total`, `log1p`, fused or
 //! not), a cell step (`filter_cells`, `take_cells`, `with_cells`) or a gene selection
-//! (the remap a `filter_genes`/`select_genes` step leaves for later blocks) or
-//! `scale`'s apply pass (task 6.4); say
+//! (the remap a `filter_genes`/`select_genes` step leaves for later blocks),
+//! `scale`'s apply pass (task 6.4) or a clustering's labels (task 6.8); say
 //! whether an operator reads layers; give each new stream counters of its own and
 //! check them at the stream's end.
 //! Does not: compute statistics passes or gene steps (the pipeline does, before the
@@ -13,6 +13,7 @@ use kyto_error::KytoError;
 
 use crate::cell_block_pool::CellBlockPool;
 use crate::cell_steps::CellStep;
+use crate::cluster_labels::ClusterLabels;
 use crate::elementwise::ElementwiseMaps;
 use crate::gene_steps::GeneSelection;
 use crate::pipeline_block::PipelineBlock;
@@ -29,6 +30,8 @@ pub(crate) enum Operator {
     Genes(GeneSelection),
     /// `scale`'s apply pass (task 6.4).
     Scale(ScaleMap),
+    /// A clustering's labels as a computed cell column (task 6.8).
+    Labels(ClusterLabels),
 }
 
 impl Operator {
@@ -48,6 +51,7 @@ impl Operator {
             Self::Cells(step) => step.apply(block, pool),
             Self::Genes(selection) => selection.apply(block, pool),
             Self::Scale(scale) => scale.apply(block, pool, store),
+            Self::Labels(labels) => labels.apply(block),
         }
     }
 
@@ -56,7 +60,7 @@ impl Operator {
         match self {
             Self::Maps(_) | Self::Scale(_) => true,
             Self::Cells(step) => step.reads_layers(),
-            Self::Genes(_) => false,
+            Self::Genes(_) | Self::Labels(_) => false,
         }
     }
 

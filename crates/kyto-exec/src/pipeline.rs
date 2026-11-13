@@ -11,7 +11,9 @@
 //! the steps of task 5.8: cell and gene filters, `select_genes`, `take_cells`,
 //! `with_cells` and `with_genes`), `neighbors` on the embedding of a `pca` below it
 //! (task 6.6: searched once that node's passes are done, in memory, its graph a
-//! statistic), and refuse the rest with `KY-E601` naming the task
+//! statistic), `leiden`/`louvain` on a graph of a `neighbors` node below (task 6.8:
+//! clustered once that graph is built, in memory, its labels a computed cell column on
+//! every block after it), and refuse the rest with `KY-E601` naming the task
 //! that adds it, before anything is read. Cell steps run on every block
 //! (`cell_steps.rs`); gene steps run once, in plan order, between the statistics
 //! passes (`gene_steps.rs`: a step reading a cell's profile streams the store once to
@@ -29,8 +31,9 @@
 //! (4.6's final pass); otherwise it streams the cells' rows alone.
 //! A plan ending in a sink keeps what it writes ([`crate::sink`], task 5.9;
 //! [`Pipeline::sink`] runs it).
-//! Does not: clusterings, neighbours on an embedding read from the store or past a
-//! cell filter or `take_cells` above its `pca` (5.11), expression leaves
+//! Does not: neighbours on an embedding read from the store or past a cell filter or
+//! `take_cells` above its `pca`, clusterings of a graph read from the store or past a
+//! cell filter or `take_cells` above its `neighbors` (5.11), expression leaves
 //! reading embeddings or recomputing stored columns (see the error each one gives), or
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
@@ -43,8 +46,8 @@ use std::sync::Arc;
 use kyto_core::{Axis, ColumnDtype, Expr, ExprAxis, Source};
 use kyto_error::KytoError;
 use kyto_plan::{
-    Blocks, Columns, CrossCellOp, Member, Members, Neighbors, Operation, PhysicalPlan, Plan,
-    Predicate,
+    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Neighbors, Operation, PhysicalPlan,
+    Plan, Predicate,
 };
 use kyto_store::{LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -53,12 +56,15 @@ use zarrs::storage::ReadableStorageTraits;
 
 use crate::block_stream::{BlockStream, StreamSource};
 use crate::cell_steps::{CellLeaf, CellStep, Evaluation, Take, is_block_leaf};
+use crate::cluster_graph::CellGraph;
+use crate::cluster_labels::ClusterLabels;
 use crate::connectivities;
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
 use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
 use crate::hvg;
+use crate::leiden::{self, ClusterStatistics};
 use crate::neighbors::{self, NeighborStatistics};
 use crate::operator::Operator;
 use crate::qc::{CellQc, GeneSet};
@@ -109,6 +115,20 @@ pub(crate) enum Stage {
     /// `neighbors` (tasks 6.6, 6.7), searched and weighted in memory once its embedding
     /// is computed.
     Neighbors(NeighborStage),
+    /// `leiden`/`louvain` (task 6.8), clustered in memory once its graph is built.
+    Cluster(ClusterStage),
+}
+
+/// A clustering node and the `neighbors` node whose statistics hold its graph.
+#[derive(Debug, Clone)]
+pub(crate) struct ClusterStage {
+    /// The node's index in the optimized plan.
+    node: usize,
+    params: Cluster,
+    /// The `neighbors` node writing the graph (resolved by `Pipeline::new`).
+    source: usize,
+    /// Whether the graph is that node's distances (else its connectivities).
+    distances: bool,
 }
 
 /// A `neighbors` node and the node whose statistics hold its embedding.
@@ -318,7 +338,7 @@ impl Pipeline {
         // Every statistics pass and the output's stream compute every cell once.
         let control = options.control.clone();
         let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
-            Stage::Maps(_) | Stage::Cells(_) | Stage::Neighbors(_) => passes,
+            Stage::Maps(_) | Stage::Cells(_) | Stage::Neighbors(_) | Stage::Cluster(_) => passes,
             Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
             Stage::Genes { passes: more, .. } => passes.saturating_add(u64::from(*more)),
         });
@@ -439,6 +459,33 @@ impl Pipeline {
                     statistics
                         .nodes
                         .insert(stage.node, NodeStatistics::Neighbors(Box::new(found)));
+                    continue;
+                }
+                Stage::Cluster(stage) => {
+                    let Some(NodeStatistics::Neighbors(graphs)) =
+                        statistics.nodes.get(&stage.source)
+                    else {
+                        unreachable!("Pipeline::new resolved the neighbors below the clustering")
+                    };
+                    let graph = if stage.distances {
+                        CellGraph::from(graphs.distances())
+                    } else {
+                        CellGraph::from(graphs.connectivities())
+                    };
+                    let clustering = leiden::run(graph, &stage.params, &control)?;
+                    operators.push(Operator::Labels(ClusterLabels::new(
+                        &stage.params.into,
+                        graphs.cells(),
+                        clustering.labels(),
+                        clustering.n_clusters(),
+                    )?));
+                    let found = ClusterStatistics {
+                        cells: Arc::clone(&graphs.cells),
+                        clustering,
+                    };
+                    statistics
+                        .nodes
+                        .insert(stage.node, NodeStatistics::Cluster(Box::new(found)));
                     continue;
                 }
                 Stage::CrossCell(cross_cell) => cross_cell,
@@ -575,7 +622,12 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
             params: node.params().clone(),
             source: usize::MAX,
         }))),
-        Plan::Cluster(_) => Err(not_yet(plan.node().method(), "6.8")),
+        Plan::Cluster(node) => Ok(Some(Stage::Cluster(ClusterStage {
+            node: index,
+            params: node.params().clone(),
+            source: usize::MAX,
+            distances: false,
+        }))),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
             Predicate::Cells(predicate) => Stage::Cells(CellStage::Filter(cell_expression(
                 predicate,
@@ -856,16 +908,19 @@ fn layer_names(members: &Members) -> impl Iterator<Item = String> + '_ {
 }
 
 /// Point every `neighbors` stage at the `pca` stage below it that writes its embedding
-/// (the nearest one: a later `pca` into the same name replaces it). `KY-E601` (5.11)
-/// for an embedding no stage writes (one read from the store), or a cell filter or
-/// `take_cells` between the two (the graph would need the embedding's rows of the
-/// kept cells).
+/// (the nearest one: a later `pca` into the same name replaces it), and every
+/// clustering at the `neighbors` stage below it that writes its graph, the same way.
+/// `KY-E601` (5.11) for an embedding or graph no stage writes (one read from the
+/// store), or a cell filter or `take_cells` between the two (the graph would need the
+/// embedding's rows, the clustering the graph's, of the kept cells).
 fn resolve_embeddings(
     stages: &mut [Stage],
     nodes: &[kyto_plan::OptimizedNode],
 ) -> Result<(), KytoError> {
     // (embedding, pca node, whether cells were removed since)
     let mut written: Vec<(String, usize, bool)> = Vec::new();
+    // (graph, neighbors node, whether it is the distances, whether cells were removed)
+    let mut graphs: Vec<(String, usize, bool, bool)> = Vec::new();
     for stage in stages {
         match stage {
             Stage::CrossCell(cross_cell) => {
@@ -881,11 +936,20 @@ fn resolve_embeddings(
                 for entry in &mut written {
                     entry.2 = true;
                 }
+                for entry in &mut graphs {
+                    entry.3 = true;
+                }
             }
             Stage::Neighbors(neighbors) => {
                 let embedding = &neighbors.params.embedding;
                 match written.iter().find(|(name, _, _)| name == embedding) {
-                    Some((_, source, false)) => neighbors.source = *source,
+                    Some((_, source, false)) => {
+                        neighbors.source = *source;
+                        let (distances, connectivities) = neighbors.params.graph_names();
+                        graphs.retain(|(name, ..)| *name != distances && *name != connectivities);
+                        graphs.push((distances, neighbors.node, true, false));
+                        graphs.push((connectivities, neighbors.node, false, false));
+                    }
                     Some((_, _, true)) => {
                         return Err(not_yet(
                             "neighbors after a cell filter or take_cells above its pca",
@@ -895,6 +959,30 @@ fn resolve_embeddings(
                     None => {
                         return Err(not_yet(
                             &format!("neighbors on embedding '{embedding}' read from the store"),
+                            "5.11",
+                        ));
+                    }
+                }
+            }
+            Stage::Cluster(cluster) => {
+                let graph = &cluster.params.graph;
+                let method = cluster.params.method.name();
+                match graphs.iter().find(|(name, ..)| name == graph) {
+                    Some((_, source, distances, false)) => {
+                        cluster.source = *source;
+                        cluster.distances = *distances;
+                    }
+                    Some((.., true)) => {
+                        return Err(not_yet(
+                            &format!(
+                                "{method} after a cell filter or take_cells above its neighbors"
+                            ),
+                            "5.11",
+                        ));
+                    }
+                    None => {
+                        return Err(not_yet(
+                            &format!("{method} on graph '{graph}' read from the store"),
                             "5.11",
                         ));
                     }
