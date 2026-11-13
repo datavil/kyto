@@ -15,8 +15,10 @@
 //! sink until it renames its target into place, so an exception raised here leaves no
 //! target, unless it arrived after that rename: the sink had then finished, as if the
 //! signal came right after this returned.
-//! Does not: return the data (the terminals are 7.2/7.3: each drains its stream
-//! through [`run_plan`]), or apply a memory limit (5.5's `fit_memory_limit`
+//! [`run_with`] hands the stream to a caller's function instead of draining it (the
+//! feature-access terminals of task 7.4 keep the rows they read).
+//! Does not: convert the data (the terminals are 7.2/7.3/7.4: each drains its stream
+//! through [`run_plan`] or [`run_with`]), or apply a memory limit (5.5's `fit_memory_limit`
 //! is for 7.2's `collect(memory_limit=...)`).
 
 use std::num::NonZeroUsize;
@@ -55,6 +57,28 @@ pub fn run_plan(
     progress: Option<&Bound<'_, PyAny>>,
     overwrite: bool,
 ) -> PyResult<u64> {
+    run_with(py, physical, threads, progress, move |pipeline, options| {
+        drain(pipeline, options, overwrite)
+    })
+}
+
+/// Run output 0 of `physical` as [`run_plan`] does (GIL released, `progress`, Ctrl-C),
+/// handing its pipeline to `consume` on the worker thread; what `consume` returns.
+/// The feature-access terminals (task 7.4) keep the rows they read this way.
+///
+/// # Errors
+/// As [`run_plan`], with `consume`'s errors for the executor's.
+pub fn run_with<T, F>(
+    py: Python<'_>,
+    physical: &PhysicalPlan,
+    threads: NonZeroUsize,
+    progress: Option<&Bound<'_, PyAny>>,
+    consume: F,
+) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&Pipeline, ExecuteOptions) -> Result<T, KytoError> + Send + 'static,
+{
     let pipeline = Pipeline::new(physical, 0).map_err(|error| to_py_err(py, &error))?;
     let control = RunControl::new();
     let options = ExecuteOptions::new(threads).with_control(control.clone());
@@ -63,7 +87,7 @@ pub fn run_plan(
         .name("kyto-run".to_owned())
         .spawn(move || {
             // The receiver may be gone only if this thread outlived the call: never.
-            let _ = sender.send(drain(&pipeline, options, overwrite));
+            let _ = sender.send(consume(&pipeline, options));
         })
         .map_err(|error| {
             let error = KytoError::ThreadStart {
@@ -97,9 +121,9 @@ pub fn run_plan(
             Err(RecvTimeoutError::Timeout) => {}
             Ok(result) => {
                 join(py, worker);
-                let cells = result.map_err(|error| to_py_err(py, &error))?;
+                let value = result.map_err(|error| to_py_err(py, &error))?;
                 report(progress, &control, &mut reported)?;
-                return Ok(cells);
+                return Ok(value);
             }
             Err(RecvTimeoutError::Disconnected) => {
                 // The worker ended without a result: it panicked; re-raise the panic.

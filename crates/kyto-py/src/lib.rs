@@ -12,6 +12,7 @@ pub mod concat;
 pub mod convert;
 pub mod errors;
 pub mod expr;
+pub mod feature_access;
 pub mod handles;
 pub mod handoff;
 pub mod materialize;

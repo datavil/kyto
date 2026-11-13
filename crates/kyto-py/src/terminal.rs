@@ -9,7 +9,9 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use kyto_error::KytoError;
-use kyto_plan::{MemoryLimit, PhysicalOptions, PhysicalPlan, Plan};
+use kyto_plan::{
+    MemoryLimit, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, optimize,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 use std::sync::Arc;
@@ -123,14 +125,34 @@ pub fn run_arguments(
     threads_argument: Option<&Bound<'_, PyAny>>,
     progress: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<RunArguments> {
+    output_run_arguments(
+        py,
+        function,
+        Output::all(plan),
+        limit,
+        threads_argument,
+        progress,
+    )
+}
+
+/// [`run_arguments`] for a terminal that reads only `output`'s members (task 7.4), so
+/// the optimizer leaves out what nothing reads.
+pub fn output_run_arguments(
+    py: Python<'_>,
+    function: &str,
+    output: Output,
+    limit: Option<&Bound<'_, PyAny>>,
+    threads_argument: Option<&Bound<'_, PyAny>>,
+    progress: Option<&Bound<'_, PyAny>>,
+) -> PyResult<RunArguments> {
     let limit = memory_limit(py, function, limit)?;
     let threads = threads(py, function, threads_argument)?;
     check_progress(py, function, progress)?;
     let options = PhysicalOptions::default();
+    let optimized = optimize(&[output], OptimizeOptions::ALL);
     let physical = match limit {
-        None => plan.physical(options),
-        Some(limit) => plan
-            .physical_within_memory_limit(options, limit)
+        None => PhysicalPlan::new(optimized, options),
+        Some(limit) => PhysicalPlan::within_memory_limit(optimized, options, limit)
             .map_err(|error| to_py_err(py, &error))?,
     };
     Ok(RunArguments { physical, threads })

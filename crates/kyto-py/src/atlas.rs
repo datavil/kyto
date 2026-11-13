@@ -18,18 +18,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kyto_algo::RankGenesGroups;
-use kyto_core::GeneIds;
+use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
 use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Umap};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::types::{PyDict, PyString, PyTuple};
 use pyo3::{IntoPyObjectExt, PyAny};
 
 use crate::errors::to_py_err;
 use crate::expr::{PyCellExpr, PyGeneExpr};
+use crate::feature_access::{self, RunArgs};
 use crate::handles::{PyEmbedding, PyGraph, PyMatrix, PyModality, PyTable};
 use crate::run::run_plan;
-use crate::{chain, rank_genes, terminal};
+use crate::{chain, handoff, rank_genes, terminal};
 
 /// A lazy, immutable plan over a kyto store.
 ///
@@ -1559,6 +1560,552 @@ impl Atlas {
             .map_err(|error| to_py_err(py, &error))
     }
 
+    /// One feature of every cell (or gene) of the plan's output, as a Polars ``Series``.
+    ///
+    /// Runs the plan now, computing only what the feature reads (R1): no layer is read
+    /// that the feature does not read, and nothing is written. The feature is resolved
+    /// against this plan when called (R6), so a typo fails before anything runs.
+    ///
+    /// Parameters
+    /// ----------
+    /// feature : str or CellExpr or GeneExpr
+    ///     A feature name, as ``feature`` takes it (a cell column such as
+    ///     ``"total_counts"``, a gene ID of the default layer such as ``"ENSG01"``, or a
+    ///     full name such as ``"meta:cell_type"`` or ``"log1p:ENSG01"``), or an
+    ///     expression. To read a gene by its symbol, pass
+    ///     ``gene_expression("CD3E", by="symbol")`` or use ``pull_genes(..., by="symbol")``.
+    ///     A ``GeneExpr`` gives one value per gene instead of per cell.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it; the
+    ///     result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does not
+    ///     depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan runs.
+    ///
+    /// Returns
+    /// -------
+    /// polars.Series
+    ///     A new series the caller owns (R2): one row per cell (``cell_ids()`` order) or,
+    ///     for a ``GeneExpr``, per gene (``gene_ids()`` order). It is named ``feature``
+    ///     for a name, and the expression's text for an expression. A sparse value that
+    ///     is absent is 0 (R9).
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E210`` (with close matches), ``KY-E201``, ``KY-E204``, ``KY-E211`` and the
+    ///     other errors of ``resolve``.
+    /// ExpressionError
+    ///     ``KY-E205``: ``feature`` is not a ``str``, ``CellExpr`` or ``GeneExpr``.
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).with_default_layer("counts")
+    /// >>> atlas.pull("ENSG01").to_list()
+    /// [5, 0]
+    /// >>> atlas.pull(gene_expression("CD3E", by="symbol") * 2).to_list()
+    /// [10.0, 0.0]
+    /// >>> atlas.pull(gene_column("symbol")).to_list()
+    /// ['CD3E', 'CD4', 'MS4A1']
+    #[pyo3(signature = (feature, /, *, memory_limit = None, threads = None, progress = None))]
+    fn pull<'py>(
+        &self,
+        py: Python<'py>,
+        feature: &Bound<'py, PyAny>,
+        memory_limit: Option<&Bound<'py, PyAny>>,
+        threads: Option<&Bound<'py, PyAny>>,
+        progress: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        if let Ok(expression) = feature.cast::<PyGeneExpr>() {
+            let expression = expression.get().core().clone();
+            let name = expression.to_string();
+            return feature_access::pull_genes_column(
+                py,
+                "Atlas.pull",
+                &self.plan,
+                name,
+                expression,
+                args,
+            );
+        }
+        let (name, expression) = cell_feature(py, "Atlas.pull", feature)?;
+        feature_access::pull_cells(py, "Atlas.pull", &self.plan, name, expression, args)
+    }
+
+    /// Features of every cell of the plan's output, as a Polars ``DataFrame`` with
+    /// ``cell_id`` first.
+    ///
+    /// Runs the plan now, computing only what the features read (R1); nothing is
+    /// written. Each feature is resolved against this plan when called (R6).
+    ///
+    /// Parameters
+    /// ----------
+    /// *features : str
+    ///     Feature names, as ``pull`` takes them; each column is named as written.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it; the
+    ///     result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does not
+    ///     depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan runs.
+    /// **named : str or CellExpr
+    ///     More features, each a name or a cell expression, in a column named by its
+    ///     keyword (after the positional ones). ``memory_limit``, ``threads`` and
+    ///     ``progress`` are taken by the arguments above.
+    ///
+    /// Returns
+    /// -------
+    /// polars.DataFrame
+    ///     A new frame the caller owns (R2): ``cell_id`` (``String``), then one column per
+    ///     feature in the order given, one row per cell in ``cell_ids()`` order. Even one
+    ///     feature gives a frame (R3). A sparse value that is absent is 0 (R9).
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E210`` (with close matches), ``KY-E201``, ``KY-E204``, ``KY-E211`` and the
+    ///     other errors of ``resolve``.
+    /// ExpressionError
+    ///     ``KY-E205``: a positional feature that is not a ``str``, or a keyword one that
+    ///     is not a ``str`` or ``CellExpr``.
+    /// PlanError
+    ///     ``KY-E215``: no feature, a name given twice or ``cell_id``, or a
+    ///     ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).with_default_layer("counts")
+    /// >>> frame = atlas.select("ENSG01", n_counts=total_counts())
+    /// >>> frame.columns
+    /// ['cell_id', 'ENSG01', 'n_counts']
+    /// >>> frame.rows()
+    /// [('AAAC-1', 5, 6.0), ('AAAG-1', 0, 7.0)]
+    #[pyo3(signature = (*features, memory_limit = None, threads = None, progress = None, **named))]
+    fn select<'py>(
+        &self,
+        py: Python<'py>,
+        features: &Bound<'py, PyTuple>,
+        memory_limit: Option<&Bound<'py, PyAny>>,
+        threads: Option<&Bound<'py, PyAny>>,
+        progress: Option<&Bound<'py, PyAny>>,
+        named: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut columns = Vec::new();
+        for feature in features.iter() {
+            let Ok(name) = feature.cast::<PyString>() else {
+                let error = wrong_type(
+                    "Atlas.select",
+                    "a feature name (str); pass an expression as a keyword, select(name=expression)",
+                    &feature,
+                );
+                return Err(to_py_err(py, &error));
+            };
+            let name = name.to_cow()?.into_owned();
+            let expression = CellExpr::feature(&name).map_err(|error| to_py_err(py, &error))?;
+            columns.push((name, expression));
+        }
+        for (name, value) in named.into_iter().flatten() {
+            let (_, expression) = cell_feature(py, "Atlas.select", &value)?;
+            columns.push((name.extract::<String>()?, expression));
+        }
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        feature_access::select_cells(py, "Atlas.select", &self.plan, "features", columns, args)
+    }
+
+    /// Genes' values in every cell of the plan's output, as a Polars ``DataFrame`` with
+    /// ``cell_id`` first: one column per gene, named as given.
+    ///
+    /// The way to read genes by symbol: ``pull_genes(["CD3E"], by="symbol")``. Each
+    /// symbol is resolved to its gene ID when called (R6). Runs the plan now, reading
+    /// only ``layer`` (R1); nothing is written.
+    ///
+    /// Parameters
+    /// ----------
+    /// genes : list of str
+    ///     Gene IDs, or symbols with ``by="symbol"``.
+    /// layer : str or None, default=None
+    ///     The layer to read; ``None`` for the plan's default layer.
+    /// by : {"id", "symbol"}, default="id"
+    ///     Whether ``genes`` holds gene IDs or symbols. A symbol must name exactly one
+    ///     gene (``KY-E204`` lists the genes otherwise).
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it; the
+    ///     result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does not
+    ///     depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan runs.
+    ///
+    /// Returns
+    /// -------
+    /// polars.DataFrame
+    ///     A new frame the caller owns (R2): ``cell_id``, then one column per gene, one
+    ///     row per cell in ``cell_ids()`` order, in the layer's dtype. One gene still
+    ///     gives a frame (R3). An absent sparse value is 0 (R9).
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E210`` (an unknown gene or symbol, with close matches), ``KY-E204`` (a
+    ///     symbol of several genes), ``KY-E203`` (a gene removed by an earlier step),
+    ///     ``KY-E211`` (no ``layer`` and no default layer), ``KY-E214`` (``by`` not
+    ///     ``"id"`` or ``"symbol"``).
+    /// MissingMemberError
+    ///     ``KY-E109``: no layer named ``layer``.
+    /// PlanError
+    ///     ``KY-E215``: ``genes`` is not a list of str, is empty or names a gene twice, or
+    ///     a ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store)
+    /// >>> atlas.pull_genes(["CD3E", "CD4"], layer="counts", by="symbol").rows()
+    /// [('AAAC-1', 5, 0), ('AAAG-1', 0, 7)]
+    #[pyo3(signature = (
+        genes, /, *, layer = None, by = "id", memory_limit = None, threads = None, progress = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn pull_genes<'py>(
+        &self,
+        py: Python<'py>,
+        genes: &Bound<'py, PyAny>,
+        layer: Option<&str>,
+        by: &str,
+        memory_limit: Option<&Bound<'py, PyAny>>,
+        threads: Option<&Bound<'py, PyAny>>,
+        progress: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let function = "Atlas.pull_genes";
+        let genes = chain::strings(py, function, "genes", genes)?;
+        let layer = layer.map(str::to_owned);
+        let build = match by {
+            "id" => CellExpr::expression,
+            "symbol" => CellExpr::expression_by_symbol,
+            _ => {
+                let error = KytoError::InvalidChoice {
+                    function: function.to_owned(),
+                    parameter: "by".to_owned(),
+                    value: PyString::new(py, by).repr()?.to_string(),
+                    accepted: vec!["id".to_owned(), "symbol".to_owned()],
+                };
+                return Err(to_py_err(py, &error));
+            }
+        };
+        let columns = genes
+            .into_iter()
+            .map(|gene| {
+                let expression = build(layer.clone(), gene.clone());
+                (gene, expression)
+            })
+            .collect();
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        feature_access::select_cells(py, function, &self.plan, "genes", columns, args)
+    }
+
+    /// The feature names this plan resolves, as a Polars ``DataFrame``; reads no data.
+    ///
+    /// One row per cell column (``meta:<column>``), per gene of each layer
+    /// (``<layer>:<gene_id>``, with the gene's symbol) and per component of each cell
+    /// embedding (``<embedding>:<component>``): the full names ``feature``, ``pull`` and
+    /// ``select`` take (docs/feature_names.md). Genes removed by ``select_genes`` are
+    /// left out; after a filter on data (``filter`` with a ``GeneExpr``) the genes are
+    /// those that may remain, known only when the plan runs.
+    ///
+    /// Returns
+    /// -------
+    /// polars.DataFrame
+    ///     A new frame: ``feature`` (``String``), ``kind`` (``"cell column"``,
+    ///     ``"gene"`` or ``"embedding component"``) and ``symbol`` (``String``, null
+    ///     except for genes with a symbol). Nothing is read from the store.
+    ///
+    /// Examples
+    /// --------
+    /// >>> frame = scan(store).features()
+    /// >>> frame["feature"].to_list()
+    /// ['meta:cell_id', 'counts:ENSG01', 'counts:ENSG02', 'counts:ENSG03']
+    /// >>> frame.row(1)
+    /// ('counts:ENSG01', 'gene', 'CD3E')
+    fn features<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let frame = feature_access::features(&self.plan).map_err(|error| {
+            let error = KytoError::CorruptTable {
+                path: self.plan.root().source().to_owned(),
+                problem: format!("listing the features failed: {error}"),
+            };
+            to_py_err(py, &error)
+        })?;
+        handoff::to_polars(py, frame, self.plan.root().source())
+    }
+
+    /// The cell IDs of the plan's output, in order, as a Polars ``Series``.
+    ///
+    /// Reads the store's cell IDs in place when no step changes the cells; runs the plan
+    /// (reading only what its filters read) otherwise.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core.
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` while the plan runs; never when nothing
+    ///     runs.
+    ///
+    /// Returns
+    /// -------
+    /// polars.Series
+    ///     A new ``String`` series named ``cell_id`` the caller owns (R2): the row order
+    ///     of every cell result (``select``, ``cells.to_polars()``).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// CorruptStoreError
+    ///     ``KY-E127``: the store changed since it was scanned.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).cell_ids().to_list()
+    /// ['AAAC-1', 'AAAG-1']
+    /// >>> scan(store).filter(total_counts(layer="counts") > 6).cell_ids().to_list()
+    /// ['AAAG-1']
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn cell_ids<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'py, PyAny>>,
+        threads: Option<&Bound<'py, PyAny>>,
+        progress: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        let ids = feature_access::cell_ids(py, "Atlas.cell_ids", &self.plan, args)?;
+        string_series(py, "cell_id", ids)
+    }
+
+    /// The gene IDs of the plan's output, in order, as a Polars ``Series``.
+    ///
+    /// Given by the plan when it knows them (the store's genes, or a ``select_genes``
+    /// selection; nothing is read); runs the plan when a filter on data removes genes.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core.
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` while the plan runs; never when nothing
+    ///     runs.
+    ///
+    /// Returns
+    /// -------
+    /// polars.Series
+    ///     A new ``String`` series named ``gene_id`` the caller owns (R2): the gene order
+    ///     of every gene result (``genes.to_polars()``, a layer's columns).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).gene_ids().to_list()
+    /// ['ENSG01', 'ENSG02', 'ENSG03']
+    /// >>> scan(store).select_genes(["ENSG03", "ENSG01"]).gene_ids().to_list()
+    /// ['ENSG03', 'ENSG01']
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn gene_ids<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'py, PyAny>>,
+        threads: Option<&Bound<'py, PyAny>>,
+        progress: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        let ids = feature_access::gene_ids(py, "Atlas.gene_ids", &self.plan, args)?;
+        string_series(py, "gene_id", ids)
+    }
+
+    /// The number of cells of the plan's output.
+    ///
+    /// Given by the plan when it knows it (no cell filter or ``take_cells``; nothing is
+    /// read); runs the plan, reading only what its filters read, otherwise.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core.
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` while the plan runs; never when nothing
+    ///     runs.
+    ///
+    /// Returns
+    /// -------
+    /// int
+    ///     The cell count.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).count_cells()
+    /// 2
+    /// >>> scan(store).filter(total_counts(layer="counts") > 6).count_cells()
+    /// 1
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn count_cells(
+        &self,
+        py: Python<'_>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<u64> {
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        feature_access::count(
+            py,
+            "Atlas.count_cells",
+            &self.plan,
+            kyto_core::Axis::Cells,
+            args,
+        )
+    }
+
+    /// The number of genes of the plan's output.
+    ///
+    /// Given by the plan when it knows it (no filter on gene data; nothing is read);
+    /// runs the plan otherwise.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core.
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` while the plan runs; never when nothing
+    ///     runs.
+    ///
+    /// Returns
+    /// -------
+    /// int
+    ///     The gene count.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).count_genes()
+    /// 3
+    /// >>> scan(store).filter(gene_column("symbol") != "CD4").count_genes()
+    /// 2
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn count_genes(
+        &self,
+        py: Python<'_>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<u64> {
+        let args = RunArgs {
+            memory_limit,
+            threads,
+            progress,
+        };
+        feature_access::count(
+            py,
+            "Atlas.count_genes",
+            &self.plan,
+            kyto_core::Axis::Genes,
+            args,
+        )
+    }
+
+    /// How the scanned store was made: its ``provenance.json`` (docs/format.md section
+    /// 9), as a ``dict``.
+    ///
+    /// Keys: ``kyto_version``, ``dependencies``, ``plan`` (the plan JSON that wrote the
+    /// store, or ``None`` for an import), ``source``, ``seeds``, ``device`` and ``run``.
+    /// It describes the store this plan scans, not the plan's own steps
+    /// (``to_json()``). kyto stores no free-form metadata such as anndata's ``uns``.
+    ///
+    /// Returns
+    /// -------
+    /// dict
+    ///     A new dict the caller owns, read from the store (no matrix data).
+    ///
+    /// Raises
+    /// ------
+    /// StoreIOError
+    ///     ``KY-E110``: the store has no readable ``provenance.json``.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).metadata()["source"]["kind"]
+    /// 'mtx'
+    fn metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let text = feature_access::provenance(py, &self.plan)?;
+        py.import("json")?.call_method1("loads", (text,))
+    }
+
     /// Write the plan as JSON text, to store it or send it elsewhere.
     ///
     /// The text is versioned (``"version": 1``) and lists the plan's nodes from the
@@ -1770,6 +2317,38 @@ impl Atlas {
 }
 
 /// `KY-E215`: `with_cells()`/`with_genes()` without a column.
+/// A feature of a cell result: a name (`feature(name)`, the column named as written)
+/// or a `CellExpr` (named by its text). `KY-E205` for anything else.
+fn cell_feature(
+    py: Python<'_>,
+    function: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<(String, CellExpr)> {
+    if let Ok(name) = value.cast::<PyString>() {
+        let name = name.to_cow()?.into_owned();
+        let expression = CellExpr::feature(&name).map_err(|error| to_py_err(py, &error))?;
+        return Ok((name, expression));
+    }
+    if let Ok(expression) = value.cast::<PyCellExpr>() {
+        let expression = expression.get().core().clone();
+        return Ok((expression.to_string(), expression));
+    }
+    let error = wrong_type(function, "a feature name (str) or a CellExpr", value);
+    Err(to_py_err(py, &error))
+}
+
+/// `values` as a new Python `polars.Series` of dtype `String` named `name`.
+fn string_series<'py>(
+    py: Python<'py>,
+    name: &str,
+    values: Vec<String>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let polars = py.import("polars")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("dtype", polars.getattr("String")?)?;
+    polars.call_method("Series", (name, values), Some(&kwargs))
+}
+
 fn no_columns(method: &str) -> KytoError {
     KytoError::InvalidArgument {
         function: method.to_owned(),

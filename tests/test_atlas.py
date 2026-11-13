@@ -109,6 +109,16 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "to_json",
         "explain",
         "estimate",
+        # Feature access (task 7.4).
+        "pull",
+        "select",
+        "pull_genes",
+        "features",
+        "cell_ids",
+        "gene_ids",
+        "count_cells",
+        "count_genes",
+        "metadata",
     }
 
 
