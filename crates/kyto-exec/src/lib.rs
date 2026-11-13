@@ -68,6 +68,9 @@ mod reduction;
 mod run_control;
 mod run_members;
 mod scale;
+mod scrublet;
+mod scrublet_pass;
+mod scrublet_threshold;
 mod sink;
 mod statistics;
 mod umap;
@@ -95,6 +98,8 @@ pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
 pub use qc::{CellQc, GeneSet, QcValues};
 pub use run_control::{Progress, RunControl};
+pub use scrublet::{Doublets, ScrubletBatch, ScrubletResult, scrublet};
+pub use scrublet_pass::ScrubletStatistics;
 pub use statistics::{
     BatchStatistics, ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, HvgValues,
     NodeStatistics, ScaleStatistics, Statistics,

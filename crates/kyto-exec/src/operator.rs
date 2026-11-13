@@ -3,7 +3,8 @@
 //! Does: dispatch one block to per-cell maps (`normalize_total`, `log1p`, fused or
 //! not), a cell step (`filter_cells`, `take_cells`, `with_cells`) or a gene selection
 //! (the remap a `filter_genes`/`select_genes` step leaves for later blocks),
-//! `scale`'s apply pass (task 6.4) or a clustering's labels (task 6.8); say
+//! `scale`'s apply pass (task 6.4), a clustering's labels (task 6.8) or Scrublet's
+//! columns (task 6.12); say
 //! whether an operator reads layers; give each new stream counters of its own and
 //! check them at the stream's end.
 //! Does not: compute statistics passes or gene steps (the pipeline does, before the
@@ -18,6 +19,7 @@ use crate::elementwise::ElementwiseMaps;
 use crate::gene_steps::GeneSelection;
 use crate::pipeline_block::PipelineBlock;
 use crate::scale::ScaleMap;
+use crate::scrublet_pass::DoubletColumns;
 
 /// One streamed operator.
 #[derive(Debug, Clone)]
@@ -32,6 +34,8 @@ pub(crate) enum Operator {
     Scale(ScaleMap),
     /// A clustering's labels as a computed cell column (task 6.8).
     Labels(ClusterLabels),
+    /// Scrublet's scores and calls as computed cell columns (task 6.12).
+    Doublets(DoubletColumns),
 }
 
 impl Operator {
@@ -52,6 +56,7 @@ impl Operator {
             Self::Genes(selection) => selection.apply(block, pool),
             Self::Scale(scale) => scale.apply(block, pool, store),
             Self::Labels(labels) => labels.apply(block),
+            Self::Doublets(columns) => columns.apply(block),
         }
     }
 
@@ -60,7 +65,7 @@ impl Operator {
         match self {
             Self::Maps(_) | Self::Scale(_) => true,
             Self::Cells(step) => step.reads_layers(),
-            Self::Genes(_) | Self::Labels(_) => false,
+            Self::Genes(_) | Self::Labels(_) | Self::Doublets(_) => false,
         }
     }
 

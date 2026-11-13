@@ -15,6 +15,8 @@
 //!   `highly_variable_intersection`.
 //! - `pca` adds the cell embedding `into` (`n_components` wide) and the gene embedding
 //!   `<into>_loadings` (scanpy's `varm['PCs']`), both `float32`.
+//! - `scrublet` adds the cell columns of its doublet scores (`Float64`) and calls
+//!   (`Boolean`), replacing columns of the same names (task 6.12, see `scrublet.rs`).
 //!
 //! None changes an axis; all are cross-cell (statistics pass, then output).
 //! Does not: compute anything (6.3, 6.4, 6.5), or check what only data shows (that
@@ -34,6 +36,7 @@ use crate::names::MemberGroup;
 use crate::node::{CellScope, LogicalNode, Transform};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
+use crate::scrublet::Scrublet;
 
 /// The flavour of `highly_variable_genes` (scanpy's `flavor`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -94,6 +97,13 @@ pub enum CrossCellOp {
         n_components: u64,
         /// The random seed (R7: required, never global).
         seed: u64,
+    },
+    /// Doublet scores and calls of the counts in `layer` (Scrublet).
+    Scrublet {
+        /// The input layer (counts).
+        layer: String,
+        /// scanpy's arguments and the columns written.
+        params: Scrublet,
     },
 }
 
@@ -157,6 +167,7 @@ impl LogicalNode for CrossCell {
             CrossCellOp::Scale { .. } => "SCALE",
             CrossCellOp::HighlyVariableGenes { .. } => "HIGHLY_VARIABLE_GENES",
             CrossCellOp::Pca { .. } => "PCA",
+            CrossCellOp::Scrublet { .. } => "SCRUBLET",
         }
     }
 
@@ -165,6 +176,7 @@ impl LogicalNode for CrossCell {
             CrossCellOp::Scale { .. } => "scale",
             CrossCellOp::HighlyVariableGenes { .. } => "highly_variable_genes",
             CrossCellOp::Pca { .. } => "pca",
+            CrossCellOp::Scrublet { .. } => "scrublet",
         }
     }
 
@@ -214,6 +226,7 @@ impl LogicalNode for CrossCell {
                 formatter,
                 "{layer:?} -> {into:?} n_components={n_components} seed={seed}"
             ),
+            CrossCellOp::Scrublet { layer, params } => write!(formatter, "{layer:?} {params}"),
         }
     }
 }
@@ -268,13 +281,21 @@ impl Transform for CrossCell {
                     width: *n_components,
                     dtype: FloatDtype::Float32,
                 }),
+            CrossCellOp::Scrublet { params, .. } => params
+                .columns()
+                .into_iter()
+                .fold(input.clone(), |schema, column| {
+                    schema.with_column(Axis::Cells, column)
+                }),
         }
     }
 
     fn writes_layer(&self) -> Option<&str> {
         match &self.op {
             CrossCellOp::Scale { into, .. } => Some(into),
-            CrossCellOp::HighlyVariableGenes { .. } | CrossCellOp::Pca { .. } => None,
+            CrossCellOp::HighlyVariableGenes { .. }
+            | CrossCellOp::Pca { .. }
+            | CrossCellOp::Scrublet { .. } => None,
         }
     }
 }
@@ -401,6 +422,98 @@ impl Plan {
             n_components,
             seed,
         })
+    }
+
+    /// This plan with Scrublet's doublet scores and calls of the counts in `layer` (or
+    /// the default layer) as the cell columns `params.score_into` (`Float64`) and
+    /// `params.predicted_into` (`Boolean`), each batch of `params.batch_key` scored on
+    /// its own cells. `params.seed` is required (R7).
+    ///
+    /// # Errors
+    /// `KY-E109` and `KY-E211` for the layer as [`Plan::scale`]; any error of
+    /// [`Plan::resolve`] for `cell_column(batch_key)`; `KY-E215` for a
+    /// `sim_doublet_ratio` that is not positive and finite, an `expected_doublet_rate`
+    /// outside `(0, 1)`, a `stdev_doublet_rate` that is negative or not finite,
+    /// `n_prin_comps` or `n_neighbors` of 0, a `threshold` that is not finite, or column
+    /// names that break format.md §5.6, are reserved or are the same; `KY-E216` if this
+    /// plan ends in a sink.
+    pub fn scrublet(
+        self: &Arc<Self>,
+        layer: Option<&str>,
+        params: Scrublet,
+    ) -> Result<Arc<Self>, KytoError> {
+        let method = "scrublet";
+        self.check_open(method)?;
+        let layer = self.input_layer(method, layer)?;
+        let mut params = params;
+        if let Some(name) = &params.batch_key {
+            let resolved = self.resolve(&CellExpr::column(name))?;
+            if let ExprNode::Source(Source::Column { name }) = resolved.node().as_ref() {
+                params.batch_key = Some(name.clone());
+            }
+        }
+        Self::check_positive(method, "sim_doublet_ratio", params.sim_doublet_ratio)?;
+        let rate = params.expected_doublet_rate;
+        if !(rate > 0.0 && rate < 1.0) {
+            return Err(Self::invalid_argument(
+                method,
+                "expected_doublet_rate",
+                &rate.to_string(),
+                "it is a fraction of the cells, strictly between 0 and 1",
+                "a float in (0, 1)",
+            ));
+        }
+        let stdev = params.stdev_doublet_rate;
+        if !(stdev.is_finite() && stdev >= 0.0) {
+            return Err(Self::invalid_argument(
+                method,
+                "stdev_doublet_rate",
+                &stdev.to_string(),
+                "it is not a non-negative finite number",
+                "a finite float of at least 0",
+            ));
+        }
+        for (parameter, value) in [
+            ("n_prin_comps", Some(params.n_prin_comps)),
+            ("n_neighbors", params.n_neighbors),
+        ] {
+            if value == Some(0) {
+                return Err(Self::invalid_argument(
+                    method,
+                    parameter,
+                    "0",
+                    "it must be at least 1",
+                    if parameter == "n_neighbors" {
+                        "a positive int, or None for round(0.5 * sqrt(n_cells))"
+                    } else {
+                        "a positive int"
+                    },
+                ));
+            }
+        }
+        if let Some(threshold) = params.threshold
+            && !threshold.is_finite()
+        {
+            return Err(Self::invalid_argument(
+                method,
+                "threshold",
+                &threshold.to_string(),
+                "it is not finite",
+                "a finite float, or None for the automatic threshold",
+            ));
+        }
+        Self::check_column_name(method, "into", Axis::Cells, &params.score_into)?;
+        Self::check_column_name(method, "into", Axis::Cells, &params.predicted_into)?;
+        if params.score_into == params.predicted_into {
+            return Err(Self::invalid_argument(
+                method,
+                "into",
+                &format!("({:?}, {:?})", params.score_into, params.predicted_into),
+                "the score and the call need two different columns",
+                "two different cell column names",
+            ));
+        }
+        self.cross_cell(CrossCellOp::Scrublet { layer, params })
     }
 
     fn cross_cell(self: &Arc<Self>, op: CrossCellOp) -> Result<Arc<Self>, KytoError> {

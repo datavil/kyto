@@ -255,6 +255,8 @@ fn execution(node: &OptimizedNode, device: Device, cells: u64) -> Execution {
                     HvgFlavor::SeuratV3 => streamed(2, false),
                 },
                 CrossCellOp::Pca { .. } => streamed(2 + PCA_POWER_ITERATIONS, false),
+                // One pass gathers the layer's rows; the columns join the stream after.
+                CrossCellOp::Scrublet { .. } => streamed(1, true),
             },
             Plan::WithColumns(with_columns) => {
                 let metadata_only = match with_columns.params().columns() {

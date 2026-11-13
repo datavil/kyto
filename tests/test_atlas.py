@@ -95,6 +95,7 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "leiden",
         "louvain",
         "umap",
+        "scrublet",
         "rank_genes_groups",
         "on",
         "collect",

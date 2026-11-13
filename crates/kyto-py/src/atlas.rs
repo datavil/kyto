@@ -20,7 +20,7 @@ use std::sync::Arc;
 use kyto_algo::RankGenesGroups;
 use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
-use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Umap};
+use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Scrublet, Umap};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
 use pyo3::{IntoPyObjectExt, PyAny};
@@ -976,6 +976,130 @@ impl Atlas {
             into: into.to_owned(),
         };
         self.derive(py, self.plan.umap(parameters))
+    }
+
+    /// Score every cell as a possible doublet (scanpy's ``pp.scrublet``).
+    ///
+    /// Adds two cell columns: the doublet score (``Float64``) and the call
+    /// (``Boolean``), ``"doublet_score"`` and ``"predicted_doublet"`` unless ``into``
+    /// names them. Each batch (all cells without ``batch_key``) runs scanpy's steps on
+    /// its own: genes in fewer than 3 cells and cells with fewer than 3 genes are left
+    /// out (their score and call are null), then the counts are normalised, the highly
+    /// variable genes kept, doublets simulated from seeded random pairs of cells, the
+    /// cells and doublets embedded by PCA, and each cell scored by the doublets among
+    /// its nearest neighbours. The call compares the score to ``threshold``, or to
+    /// scikit-image's ``threshold_minimum`` of the simulated doublets' scores (no
+    /// doublet is called where it finds no threshold). The layer must hold raw counts.
+    /// The run holds the layer in memory, as scanpy does.
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str or None, default=None
+    ///     The layer scored (raw counts); ``None`` for the plan's default layer.
+    /// batch_key : str or None, default=None
+    ///     A cell column: each of its values is scored on its own.
+    /// sim_doublet_ratio : float, default=2.0
+    ///     Doublets simulated per cell.
+    /// expected_doublet_rate : float, default=0.05
+    ///     The expected share of doublets (above 0, below 1).
+    /// stdev_doublet_rate : float, default=0.02
+    ///     The uncertainty of ``expected_doublet_rate``.
+    /// n_prin_comps : int, default=30
+    ///     Principal components of the embedding (below the cells and the genes kept).
+    /// n_neighbors : int or None, default=None
+    ///     Neighbours per cell; ``None`` for ``round(0.5 * sqrt(cells))``.
+    /// threshold : float or None, default=None
+    ///     The score above which a cell is called a doublet; ``None`` finds it.
+    /// seed : int
+    ///     Seed of the simulated doublets (R7, R11).
+    /// into : tuple of (str, str) or None, default=None
+    ///     The names of the score and call columns; ``None`` for scanpy's names.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: an argument out of range (positive ``sim_doublet_ratio``,
+    ///     ``expected_doublet_rate`` between 0 and 1, ``n_prin_comps`` and
+    ///     ``n_neighbors`` of 1 or more, a finite ``threshold``), or invalid or equal
+    ///     column names in ``into``. When the plan runs: ``n_prin_comps`` not below a
+    ///     batch's cells and genes kept, a batch of fewer than 2 scored cells or no
+    ///     variable gene, a ``sim_doublet_ratio`` giving no doublet or more than the
+    ///     pairs of cells, or a null batch.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``layer`` is not a layer of the plan.
+    /// ResolutionError
+    ///     ``KY-E210``: ``batch_key`` is not a cell column of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(str(scan(store).scrublet(layer="counts", seed=0)).splitlines()[0])
+    /// SCRUBLET "counts" -> ["doublet_score", "predicted_doublet"] sim_doublet_ratio=2 expected_doublet_rate=0.05 stdev_doublet_rate=0.02 n_prin_comps=30 n_neighbors=auto threshold=auto seed=0
+    #[pyo3(signature = (
+        *,
+        layer = None,
+        batch_key = None,
+        sim_doublet_ratio = None,
+        expected_doublet_rate = None,
+        stdev_doublet_rate = None,
+        n_prin_comps = None,
+        n_neighbors = None,
+        threshold = None,
+        seed,
+        into = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn scrublet(
+        &self,
+        py: Python<'_>,
+        layer: Option<&str>,
+        batch_key: Option<&str>,
+        sim_doublet_ratio: Option<&Bound<'_, PyAny>>,
+        expected_doublet_rate: Option<&Bound<'_, PyAny>>,
+        stdev_doublet_rate: Option<&Bound<'_, PyAny>>,
+        n_prin_comps: Option<&Bound<'_, PyAny>>,
+        n_neighbors: Option<&Bound<'_, PyAny>>,
+        threshold: Option<&Bound<'_, PyAny>>,
+        seed: &Bound<'_, PyAny>,
+        into: Option<(String, String)>,
+    ) -> PyResult<Self> {
+        let defaults = Scrublet::default();
+        let float = |parameter: &str, value, default: f64| {
+            chain::optional_float(py, "scrublet", parameter, value)
+                .map(|value| value.unwrap_or(default))
+        };
+        let (score_into, predicted_into) =
+            into.unwrap_or((defaults.score_into.clone(), defaults.predicted_into.clone()));
+        let parameters = Scrublet {
+            batch_key: batch_key.map(str::to_owned),
+            sim_doublet_ratio: float(
+                "sim_doublet_ratio",
+                sim_doublet_ratio,
+                defaults.sim_doublet_ratio,
+            )?,
+            expected_doublet_rate: float(
+                "expected_doublet_rate",
+                expected_doublet_rate,
+                defaults.expected_doublet_rate,
+            )?,
+            stdev_doublet_rate: float(
+                "stdev_doublet_rate",
+                stdev_doublet_rate,
+                defaults.stdev_doublet_rate,
+            )?,
+            n_prin_comps: chain::optional_integer(py, "scrublet", "n_prin_comps", n_prin_comps, 1)?
+                .unwrap_or(defaults.n_prin_comps),
+            n_neighbors: chain::optional_integer(py, "scrublet", "n_neighbors", n_neighbors, 1)?,
+            threshold: chain::optional_float(py, "scrublet", "threshold", threshold)?,
+            seed: chain::integer(py, "scrublet", "seed", seed, 0)?,
+            score_into,
+            predicted_into,
+        };
+        self.derive(py, self.plan.scrublet(layer, parameters))
     }
 
     /// Rank the genes of each group by a differential expression test (scanpy's

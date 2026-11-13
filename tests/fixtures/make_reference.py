@@ -41,6 +41,7 @@ VERSIONED_PACKAGES: tuple[str, ...] = (
     "leidenalg",
     "numpy",
     "scanpy",
+    "scikit-image",
     "scikit-learn",
     "scikit-misc",
     "scipy",
@@ -495,6 +496,64 @@ def umap(name: FixtureName) -> tuple[Parameters, Arrays]:
     return parameters, arrays
 
 
+def _scrublet_arrays(uns: Mapping[str, object], prefix: str) -> Arrays:
+    """One run's simulated doublets (parents, scores) and threshold (NaN for none)."""
+    threshold = uns.get("threshold")
+    return {
+        f"{prefix}/doublet_parents": np.asarray(uns["doublet_parents"], dtype=np.int64),
+        f"{prefix}/doublet_scores_sim": np.asarray(
+            uns["doublet_scores_sim"], dtype=np.float64
+        ),
+        f"{prefix}/threshold": np.asarray(
+            [np.nan if threshold is None else threshold], dtype=np.float64
+        ),
+    }
+
+
+def scrublet(name: FixtureName) -> tuple[Parameters, Arrays]:
+    """``pp.scrublet`` on the counts, alone and per batch where there are (6.12).
+
+    Per run ``<label>`` (``all``, ``by_batch``): the cells' scores (NaN where Scrublet
+    filtered the cell out), calls (False there) and whether each was scored, and per
+    batch (``all`` for one) the simulated doublets' parents (positions among the
+    batch's scored cells), their scores and the threshold.
+    """
+    import scanpy as sc
+
+    parameters: Parameters = {
+        "function": "scanpy.pp.scrublet",
+        "input": "counts (no gene filter)",
+        "random_state": _SEED,
+        "other": "scanpy's defaults",
+    }
+    arrays: Arrays = {}
+    batch_keys: list[str | None] = [None]
+    if "batch" in _counts(name).obs.columns:
+        batch_keys.append("batch")
+    for batch_key in batch_keys:
+        adata = _counts(name)
+        sc.pp.scrublet(adata, batch_key=batch_key, random_state=_SEED, verbose=False)
+        label = "all" if batch_key is None else f"by_{batch_key}"
+        scores = adata.obs["doublet_score"].to_numpy(dtype=np.float64)
+        scored = ~np.isnan(scores)
+        predicted = adata.obs["predicted_doublet"].to_numpy()
+        arrays[f"{label}/cells/doublet_score"] = scores
+        arrays[f"{label}/cells/scored"] = scored
+        arrays[f"{label}/cells/predicted_doublet"] = np.asarray(
+            [
+                bool(value) if ok else False
+                for value, ok in zip(predicted, scored, strict=True)
+            ]
+        )
+        uns = adata.uns["scrublet"]
+        if batch_key is None:
+            arrays |= _scrublet_arrays(uns, f"{label}/batches/all")
+        else:
+            for batch, batch_uns in uns["batches"].items():
+                arrays |= _scrublet_arrays(batch_uns, f"{label}/batches/{batch}")
+    return parameters, arrays
+
+
 def rank_genes(name: FixtureName) -> tuple[Parameters, Arrays]:
     """``rank_genes_groups`` by cell type, t-test and Wilcoxon (task 6.10)."""
     import scanpy as sc
@@ -532,6 +591,7 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "leiden": leiden,
         "louvain": louvain,
         "umap": umap,
+        "scrublet": scrublet,
         "rank_genes": rank_genes,
     },
     "pbmc3k": {
@@ -544,6 +604,7 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "leiden": leiden,
         "louvain": louvain,
         "umap": umap,
+        "scrublet": scrublet,
     },
 }
 

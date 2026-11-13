@@ -734,6 +734,25 @@ fn cross_cell(op: &CrossCellOp, data: &mut Data) -> Result<(), String> {
             data.embeddings
                 .insert(loadings_name(into), (Axis::Genes, loadings));
         }
+        CrossCellOp::Scrublet {
+            layer: name,
+            params,
+        } => {
+            // A stand-in: each cell's total times the expected rate, called above the
+            // threshold (0 when automatic).
+            let scores: Vec<f64> = layer(data, name)?
+                .iter()
+                .map(|row| row.iter().sum::<f64>() * params.expected_doublet_rate)
+                .collect();
+            let threshold = params.threshold.unwrap_or(0.0);
+            let calls: Vec<bool> = scores.iter().map(|score| *score > threshold).collect();
+            data.cells
+                .with_column(Column::new(params.score_into.as_str().into(), scores))
+                .unwrap();
+            data.cells
+                .with_column(Column::new(params.predicted_into.as_str().into(), calls))
+                .unwrap();
+        }
     }
     Ok(())
 }

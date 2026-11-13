@@ -59,7 +59,7 @@ use crate::cell_steps::{CellLeaf, CellStep, Evaluation, Take, is_block_leaf};
 use crate::cluster_graph::CellGraph;
 use crate::cluster_labels::ClusterLabels;
 use crate::connectivities::{self, ConnectivityGraph};
-use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
+use crate::cross_cell::{Accumulator, CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
 use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
@@ -623,6 +623,15 @@ impl Pipeline {
                 )?;
                 accumulator.end_pass(pass, reduced)?;
             }
+            if let Accumulator::Rows(rows) = accumulator {
+                // Scrublet runs its search on the run's pool (task 6.12).
+                let (found, columns) = thread_pool.install(|| rows.finish(&control))?;
+                statistics
+                    .nodes
+                    .insert(cross_cell.node, NodeStatistics::Scrublet(Box::new(found)));
+                operators.push(Operator::Doublets(columns));
+                continue;
+            }
             let (mut node_statistics, apply) = cross_cell.finish(accumulator);
             if let NodeStatistics::Pca(pca) = &mut node_statistics {
                 // The genes its loadings' rows are (task 5.11).
@@ -725,6 +734,15 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                     layer: layer.clone(),
                     n_components: *n_components,
                     seed: *seed,
+                };
+                Ok(Some(Stage::CrossCell(CrossCellStage::new(
+                    index, passes, kind,
+                ))))
+            }
+            CrossCellOp::Scrublet { layer, params } => {
+                let kind = CrossCellKind::Scrublet {
+                    layer: layer.clone(),
+                    params: params.clone(),
                 };
                 Ok(Some(Stage::CrossCell(CrossCellStage::new(
                     index, passes, kind,

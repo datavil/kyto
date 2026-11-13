@@ -16,7 +16,7 @@ use kyto_core::{AtlasSchema, CellExpr, GeneExpr, GeneIds};
 use kyto_plan::{
     ASSUMED_CATEGORY_BYTES, ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, ASSUMED_STRING_BYTES,
     CostEstimate, Device, HvgFlavor, Member, Metric, NeighborSearch, Neighbors, OptimizeOptions,
-    Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Sink, physical_plan,
+    Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Scrublet, Sink, physical_plan,
 };
 
 const N_CELLS: u64 = 10_000;
@@ -342,6 +342,22 @@ fn huge_sizes_saturate() {
     assert_eq!(estimate.bytes_read(), u64::MAX);
     // A block holds 2^63 x 4 096 / (2^32 - 1) entries: computed without overflow.
     assert!(estimate.peak_memory() > 1 << 46);
+}
+
+#[test]
+fn an_absurd_doublet_ratio_saturates() {
+    // `sim_doublet_ratio` 1e300: the doublet rows overflow `u128` and must saturate,
+    // not wrap into a small estimate (bug-hunter, 6.12).
+    let plan = scan()
+        .scrublet(
+            Some("counts"),
+            Scrublet {
+                sim_doublet_ratio: 1e300,
+                ..Scrublet::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(estimate_all(&plan).peak_memory(), u64::MAX);
 }
 
 #[test]

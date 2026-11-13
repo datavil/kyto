@@ -140,7 +140,7 @@ impl HvgAccumulator {
         }
         let rows = layer.indptr().len().saturating_sub(1);
         let labels = match &self.batch {
-            Some(batch) => row_labels(batch, block, rows)?,
+            Some(batch) => row_labels("highly_variable_genes", batch, block, rows)?,
             None => vec![ALL_CELLS.to_owned(); rows],
         };
         match layer.data() {
@@ -336,7 +336,10 @@ impl HvgAccumulator {
 /// # Errors
 /// `KY-E215` for a null value (naming the cell); `KY-E113` if the column cannot be
 /// read or cast to text.
-fn row_labels(
+/// The `batch_key` value of each row of `block` as text (`function` names the method in
+/// the error for a null batch).
+pub(crate) fn row_labels(
+    function: &str,
     batch: &BatchColumn,
     block: &PipelineBlock,
     rows: usize,
@@ -384,7 +387,7 @@ fn row_labels(
                     })
                     .unwrap_or_else(|| format!("at row {row}"));
                 return Err(KytoError::InvalidArgument {
-                    function: "highly_variable_genes".to_owned(),
+                    function: function.to_owned(),
                     parameter: "batch_key".to_owned(),
                     value: format!("'{}'", batch.name),
                     problem: format!("cell '{cell}' has no batch (null)"),

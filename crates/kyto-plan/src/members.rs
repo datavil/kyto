@@ -154,6 +154,12 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
                     reads.insert(Member::CellColumn(batch_key.clone()));
                 }
             }
+            CrossCellOp::Scrublet { layer, params } => {
+                reads.insert(Member::Layer(layer.clone()));
+                if let Some(batch_key) = &params.batch_key {
+                    reads.insert(Member::CellColumn(batch_key.clone()));
+                }
+            }
         },
         Plan::WithColumns(node) => match node.params().columns() {
             Columns::Cells(columns) => {
@@ -209,6 +215,11 @@ pub(crate) fn node_writes(plan: &Plan) -> Members {
             CrossCellOp::Pca { into, .. } => {
                 writes.insert(Member::Embedding(into.clone()));
                 writes.insert(Member::Embedding(loadings_name(into)));
+            }
+            CrossCellOp::Scrublet { params, .. } => {
+                for column in params.columns() {
+                    writes.insert(Member::CellColumn(column.name));
+                }
             }
         },
         Plan::WithColumns(node) => match node.params().columns() {

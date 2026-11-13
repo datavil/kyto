@@ -40,6 +40,9 @@ dev = [
     # `louvain` package scanpy's tl.louvain uses has no Python 3.13 build, so its
     # reference runs leidenalg's optimiser without refinement (Louvain).
     "leidenalg>=0.10; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # Scrublet reference (task 6.12): scanpy's pp.scrublet finds its automatic
+    # threshold with scikit-image's threshold_minimum.
+    "scikit-image>=0.25; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
 
 [tool.maturin]

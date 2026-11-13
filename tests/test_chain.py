@@ -164,6 +164,21 @@ def test_algorithm_arguments_are_coded(store: Path) -> None:
         (
             kyto.PlanError,
             "KY-E215",
+            lambda: counts.scrublet(expected_doublet_rate=1.5, seed=0),
+        ),
+        (
+            kyto.PlanError,
+            "KY-E215",
+            lambda: counts.scrublet(into=("score", "score"), seed=0),
+        ),
+        (
+            kyto.ResolutionError,
+            "KY-E210",
+            lambda: counts.scrublet(batch_key="sample", seed=0),
+        ),
+        (
+            kyto.PlanError,
+            "KY-E215",
             lambda: counts.pca(into="p", n_components=1, seed=0).neighbors(
                 "p",
                 metric="manhattan",  # pyright: ignore[reportArgumentType]
@@ -341,6 +356,7 @@ def _docstrings() -> dict[str, tuple[str | None, str | None]]:
         "leiden",
         "louvain",
         "umap",
+        "scrublet",
         "rank_genes_groups",
         "on",
         "collect",

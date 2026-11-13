@@ -24,6 +24,7 @@ mod pca_parity;
 mod pipeline;
 mod run_control;
 mod scale_parity;
+mod scrublet_parity;
 mod sinks;
 mod thread_scaling;
 mod umap_parity;

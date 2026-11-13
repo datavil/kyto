@@ -69,7 +69,9 @@
 //! [`PCA_OVERSAMPLES`]`, n_genes)`, its means `n_genes x 8` and the embedding's rows
 //! while its last pass builds them (`n_cells x (n_components + 1) x 8`, with each
 //! row's cell) and their `float32` copy (`n_cells x n_components x 4`), and per leaf of its
-//! passes' reductions `n_genes x (l x 8 + 16)` (the sketch or a product).
+//! passes' reductions `n_genes x (l x 8 + 16)` (the sketch or a product), and
+//! `scrublet` (task 6.12) the layer's gathered rows and its dense working matrices
+//! (`scrublet_bytes`, with [`SCRUBLET_ASSUMED_GENES`]).
 //!
 //! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today;
 //! with the per-cell maps, the held block and the pool they are checked within 25% of
@@ -118,6 +120,39 @@ const OPEN_LAYER_BYTES: u128 = 2 * 65_536 * 8;
 /// Extra columns of the streamed randomized PCA's blocks beyond its components
 /// (Halko et al., scikit-learn's default; task 6.5).
 pub const PCA_OVERSAMPLES: u64 = 10;
+
+/// The genes `scrublet` is assumed to keep (its highly variable genes, known only when
+/// it runs; scanpy's `seurat` cutoffs keep 1,000 to 3,000 on typical data, task 6.12).
+pub const SCRUBLET_ASSUMED_GENES: u64 = 4000;
+
+/// What `scrublet` holds once its pass gathered `layer` (task 6.12): the gathered rows
+/// (value and index, 8 bytes a stored value) and four working copies of them (counts,
+/// normalised, `log1p`, their highly variable genes), each cell's position and batch
+/// label (40 bytes), and per cell and simulated doublet (`1 + sim_doublet_ratio` per
+/// cell) a dense `f64` row of the assumed genes ([`SCRUBLET_ASSUMED_GENES`] at most),
+/// a `float32` embedding row and 16 bytes per neighbour; plus the genes' `f64` Gram
+/// matrix and its eigenvectors.
+fn scrublet_bytes(layer: &str, params: &crate::scrublet::Scrublet, input: &PlanSchema) -> u128 {
+    let n_cells = u128::from(input.atlas().n_cells);
+    let genes = u128::from(input.atlas().n_genes.min(SCRUBLET_ASSUMED_GENES));
+    let nnz = u128::from(input.layer(layer).map_or(0, |layer| layer.nnz));
+    // The rows and doublets: n_cells x (1 + ratio), rounded up. Saturating: an absurd
+    // ratio (refused when the plan runs) must not wrap into a small estimate.
+    let ratio = params.sim_doublet_ratio.max(0.0);
+    let rows = n_cells.saturating_add((n_cells as f64 * ratio).ceil() as u128);
+    let neighbors = match params.n_neighbors {
+        Some(n_neighbors) => u128::from(n_neighbors),
+        None => (0.5 * (n_cells as f64).sqrt()).round() as u128,
+    }
+    .saturating_mul((ratio.ceil() as u128).saturating_add(1));
+    let components = u128::from(params.n_prin_comps);
+    let per_row = (genes * 8 + components * 4).saturating_add(neighbors.saturating_mul(16));
+    (nnz * 8 * 5 + n_cells * 40)
+        .saturating_add(rows.saturating_mul(per_row))
+        .saturating_add(genes * genes * 8 * 3)
+        // At most `u64::MAX`, where estimates saturate: the callers add it up in `u128`.
+        .min(u128::from(u64::MAX))
+}
 
 /// Columns of each block of a PCA of `n_components` over `n_genes` genes.
 fn pca_block_columns(n_components: u64, n_genes: u128) -> u128 {
@@ -663,7 +698,7 @@ fn node_resident(node: &OptimizedNode, schema: &PlanSchema, input: Option<&PlanS
             }),
         };
     }
-    bytes + statistics_bytes(node, input.unwrap_or(schema))
+    bytes.saturating_add(statistics_bytes(node, input.unwrap_or(schema)))
 }
 
 /// The leaves a statistics pass of a per-gene node holds at once (task 5.6,
@@ -678,6 +713,8 @@ fn reduction_bytes(node: &OptimizedNode, input: &PlanSchema, window: u128, n_blo
                 CrossCellOp::Pca { n_components, .. } => {
                     n_genes * (pca_block_columns(*n_components, n_genes) * 8 + 16)
                 }
+                // Its leaves hold the gathered rows, counted in `statistics_bytes`.
+                CrossCellOp::Scrublet { .. } => 0,
             },
             _ => 0,
         },
@@ -719,6 +756,7 @@ fn statistics_bytes(node: &OptimizedNode, input: &PlanSchema) -> u128 {
                         + n_cells * (u128::from(*n_components) + 1) * 8
                         + n_cells * u128::from(*n_components) * 4
                 }
+                CrossCellOp::Scrublet { layer, params } => scrublet_bytes(layer, params, input),
             },
             _ => 0,
         },

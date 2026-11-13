@@ -54,6 +54,7 @@ mod plan_json;
 mod plan_schema;
 mod plan_validate;
 mod scan;
+mod scrublet;
 mod select_genes;
 mod sink;
 mod take_cells;
@@ -63,7 +64,10 @@ mod with_default_layer;
 
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
-pub use estimate::{ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES};
+pub use estimate::{
+    ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES,
+    SCRUBLET_ASSUMED_GENES,
+};
 pub use estimate_tables::{ASSUMED_CATEGORY_BYTES, ASSUMED_STRING_BYTES};
 pub use explain::{Explain, LogicalEntry, OptimizedEntry, OutputEntry};
 pub use filter::{Filter, Predicate};
@@ -84,6 +88,7 @@ pub use plan_json::{PLAN_JSON_FORMAT, PLAN_JSON_VERSION};
 pub use plan_schema::{PlanSchema, SparseMember};
 pub use plan_validate::{PLAN_JSON_SCHEMA, PlanDiagnostic, validate_plan_json};
 pub use scan::Scan;
+pub use scrublet::Scrublet;
 pub use select_genes::SelectGenes;
 pub use sink::Sink;
 pub use take_cells::TakeCells;

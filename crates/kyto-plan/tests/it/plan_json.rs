@@ -21,7 +21,7 @@ use kyto_core::{
 use kyto_error::KytoError;
 use kyto_plan::{
     Cluster, ClusterMethod, HvgFlavor, Metric, NeighborSearch, Neighbors, PLAN_JSON_VERSION, Plan,
-    Sink, Umap, UmapInit,
+    Scrublet, Sink, Umap, UmapInit,
 };
 use proptest::prelude::*;
 use serde_json::Value;
@@ -458,6 +458,26 @@ fn corpus() -> Vec<Arc<Plan>> {
                 ..Umap::default()
             })
             .unwrap(),
+    );
+    // Doublets.
+    plans.push(base.scrublet(Some("counts"), Scrublet::default()).unwrap());
+    plans.push(
+        base.scrublet(
+            None,
+            Scrublet {
+                batch_key: Some("batch".to_owned()),
+                sim_doublet_ratio: 0.1 + 0.2,
+                expected_doublet_rate: 0.06,
+                stdev_doublet_rate: 0.0,
+                n_prin_comps: 2,
+                n_neighbors: Some(5),
+                threshold: Some(-0.25),
+                seed: u64::MAX,
+                score_into: "Ünï score".to_owned(),
+                predicted_into: "doublet".to_owned(),
+            },
+        )
+        .unwrap(),
     );
     // Sinks end plans.
     for sink in [

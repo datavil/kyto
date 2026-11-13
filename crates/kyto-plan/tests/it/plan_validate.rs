@@ -159,7 +159,7 @@ fn the_schema_is_a_draft_2020_12_schema_naming_every_method_and_op() {
             "{method}: {diagnostics:#?}"
         );
     }
-    assert_eq!(methods.len(), 19);
+    assert_eq!(methods.len(), 20);
     let ops = schema["$defs"]["expr_entry"]["properties"]["op"]["enum"]
         .as_array()
         .unwrap();

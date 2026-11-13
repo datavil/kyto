@@ -661,6 +661,61 @@
     "zero_center": true
    }
   },
+  "pbmc3k/scrublet": {
+   "arrays": {
+    "all/batches/all/doublet_parents": {
+     "digest": "11e21d2d3e1ccf5ce71719aa284d3b370c5e3e851cdc0d0fec557854d037bb25",
+     "dtype": "<i8",
+     "shape": [
+      5400,
+      2
+     ]
+    },
+    "all/batches/all/doublet_scores_sim": {
+     "digest": "a2469cef27147ecefef0096a55e341e0629f9a3e6198c3180408667131f12b7c",
+     "dtype": "<f8",
+     "shape": [
+      5400
+     ]
+    },
+    "all/batches/all/threshold": {
+     "digest": "48c8c8df88a1c7356342f0fbafb1070676066d0c81ec8d1be16fc5183016be75",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "all/cells/doublet_score": {
+     "digest": "43ae81879254a80ef8f3fd7a5b9fde267ed0fbf2789100ef04390b1134cce859",
+     "dtype": "<f8",
+     "shape": [
+      2700
+     ]
+    },
+    "all/cells/predicted_doublet": {
+     "digest": "795d1320ac821141099025440f97cea5b7b54b64f7f6802273895150531530a7",
+     "dtype": "|b1",
+     "shape": [
+      2700
+     ]
+    },
+    "all/cells/scored": {
+     "digest": "9db95b0c01f2d65e7e24290692466104daed5d351cb61bb5bad6464219d4468d",
+     "dtype": "|b1",
+     "shape": [
+      2700
+     ]
+    }
+   },
+   "file": "pbmc3k/scrublet.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.pp.scrublet",
+    "input": "counts (no gene filter)",
+    "other": "scanpy's defaults",
+    "random_state": 0
+   }
+  },
   "pbmc3k/umap": {
    "arrays": {
     "a": {
@@ -1734,6 +1789,148 @@
     "zero_center": true
    }
   },
+  "synthetic/scrublet": {
+   "arrays": {
+    "all/batches/all/doublet_parents": {
+     "digest": "4a459f6c5c730cfe1d147fb5c8ab168d4528e5a9464e6a45bcaeeb065ea1e12d",
+     "dtype": "<i8",
+     "shape": [
+      992,
+      2
+     ]
+    },
+    "all/batches/all/doublet_scores_sim": {
+     "digest": "766297f9107d3de5fd82a08596bdf91a3a3bbc140b72a64315d871db18fc1a68",
+     "dtype": "<f8",
+     "shape": [
+      992
+     ]
+    },
+    "all/batches/all/threshold": {
+     "digest": "7787cddfe9e480fed6bb37ed38c559d0d938ab060190d64e6651efe9893fcc6a",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "all/cells/doublet_score": {
+     "digest": "7a1eaf2ca6cd3786d15fef40ba09498d4f7d1de8d016e9f2c4133d727d86e56b",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "all/cells/predicted_doublet": {
+     "digest": "f8b1d1c21b389a0760e9d5833cb6aef0d00afc7c8d40681bcc09786bc254377c",
+     "dtype": "|b1",
+     "shape": [
+      500
+     ]
+    },
+    "all/cells/scored": {
+     "digest": "cdcdc56bedbf359436383da5cd705bacf998d55bf0d89c370c7de8d330fe1e4c",
+     "dtype": "|b1",
+     "shape": [
+      500
+     ]
+    },
+    "by_batch/batches/batch_0/doublet_parents": {
+     "digest": "87363e42ce2a17c1379cefb54f6d2809e70b0b5cc30755cf8832f8c6a49fd0fc",
+     "dtype": "<i8",
+     "shape": [
+      316,
+      2
+     ]
+    },
+    "by_batch/batches/batch_0/doublet_scores_sim": {
+     "digest": "c83a2b78092ad23fee97e9620b457174dd9f42ee2ee4dd5570d3cc5a20accc80",
+     "dtype": "<f8",
+     "shape": [
+      316
+     ]
+    },
+    "by_batch/batches/batch_0/threshold": {
+     "digest": "42b16c925bf0fb0490a9cac51ca4399fc0e139b15d4cb6cc07fd74c3b0394ace",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "by_batch/batches/batch_1/doublet_parents": {
+     "digest": "f5049d442eedf8bd292b4bac7ed79e00a950f733a26d09854b14270e5e855353",
+     "dtype": "<i8",
+     "shape": [
+      346,
+      2
+     ]
+    },
+    "by_batch/batches/batch_1/doublet_scores_sim": {
+     "digest": "a5edb6a3cf405eb7a066db4a0a3cd62550a8b23d4435b689e348ee5c5df8ef5e",
+     "dtype": "<f8",
+     "shape": [
+      346
+     ]
+    },
+    "by_batch/batches/batch_1/threshold": {
+     "digest": "53b217e71b9513c28c6c1a8bbb89227f6f9ce26de3cb90295ac48c5c30510bed",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "by_batch/batches/batch_2/doublet_parents": {
+     "digest": "0d9b746d63c1611f23cf14749e48093a8f4a018a9911fb6b7c822a45408dbc60",
+     "dtype": "<i8",
+     "shape": [
+      330,
+      2
+     ]
+    },
+    "by_batch/batches/batch_2/doublet_scores_sim": {
+     "digest": "31a01ac0f06c522845cfec8c1bd7e417f0729a41f979f001716b06eddddf9358",
+     "dtype": "<f8",
+     "shape": [
+      330
+     ]
+    },
+    "by_batch/batches/batch_2/threshold": {
+     "digest": "fcc23481321793aab00f86fecbffc68336eb3689a862c157f97755d667328c45",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "by_batch/cells/doublet_score": {
+     "digest": "81099da0f830cb28b23471372903205f7cc332b181146e271936871bbf12bbcf",
+     "dtype": "<f8",
+     "shape": [
+      500
+     ]
+    },
+    "by_batch/cells/predicted_doublet": {
+     "digest": "89bfb8c645e5da44b46ce24109efd6837f809375e9e634af6b34fe3a75d6ca70",
+     "dtype": "|b1",
+     "shape": [
+      500
+     ]
+    },
+    "by_batch/cells/scored": {
+     "digest": "4ed16a9fb5bf490d226e34957d29cf9b505eb93d564119a91f6ffcc330884e04",
+     "dtype": "|b1",
+     "shape": [
+      500
+     ]
+    }
+   },
+   "file": "synthetic/scrublet.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.pp.scrublet",
+    "input": "counts (no gene filter)",
+    "other": "scanpy's defaults",
+    "random_state": 0
+   }
+  },
   "synthetic/umap": {
    "arrays": {
     "a": {
@@ -1803,6 +2000,7 @@
   "leidenalg": "0.10.2",
   "numpy": "2.5.4",
   "scanpy": "1.12.5",
+  "scikit-image": "0.26.0",
   "scikit-learn": "1.9.1",
   "scikit-misc": "0.5.3",
   "scipy": "1.18.1",

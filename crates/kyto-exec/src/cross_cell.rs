@@ -19,13 +19,15 @@
 //! `scale.rs`).
 //! `pca` (task 6.5): a sketch pass, the Krylov product passes and a projection pass
 //! (see `pca.rs`); a product pass after its basis stopped growing is skipped.
+//! `scrublet` (task 6.12): one pass gathering its input's rows, then Scrublet on them
+//! (see `scrublet_pass.rs`; run by the pipeline, which holds the thread pool).
 //! Does not: run passes (see `reduction.rs`).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use kyto_error::KytoError;
-use kyto_plan::{ElementwiseOp, HvgFlavor, MapElementwise};
+use kyto_plan::{ElementwiseOp, HvgFlavor, MapElementwise, Scrublet};
 use kyto_store::{CellBlock, CellValues};
 use polars::prelude::DataFrame;
 
@@ -36,6 +38,7 @@ use crate::operator::Operator;
 use crate::pca::{PCA_PASSES, PcaAccumulator, PcaPartial};
 use crate::pipeline_block::PipelineBlock;
 use crate::scale::{ScaleMap, ScaleStatistics, fold_moments};
+use crate::scrublet_pass::{GatheredRows, ScrubletAccumulator};
 use crate::statistics::{GeneMoments, NodeStatistics};
 
 /// A cross-cell node of the stream, with the statistics passes the physical plan
@@ -78,6 +81,8 @@ pub(crate) enum CrossCellKind {
         n_components: u64,
         seed: u64,
     },
+    /// `scrublet` of `layer`.
+    Scrublet { layer: String, params: Scrublet },
 }
 
 impl CrossCellStage {
@@ -88,7 +93,9 @@ impl CrossCellStage {
     /// (kyto-plan) and the executor disagree, a kyto bug.
     pub(crate) fn new(node: usize, passes: u32, kind: CrossCellKind) -> Self {
         let needed = match &kind {
-            CrossCellKind::MedianNormalize { .. } | CrossCellKind::Scale { .. } => 1,
+            CrossCellKind::MedianNormalize { .. }
+            | CrossCellKind::Scale { .. }
+            | CrossCellKind::Scrublet { .. } => 1,
             CrossCellKind::HighlyVariableGenes { flavor, .. } => match flavor {
                 HvgFlavor::Seurat | HvgFlavor::CellRanger => 1,
                 HvgFlavor::SeuratV3 => 2,
@@ -110,7 +117,8 @@ impl CrossCellStage {
             }
             CrossCellKind::HighlyVariableGenes { layer, .. }
             | CrossCellKind::Scale { layer, .. }
-            | CrossCellKind::Pca { layer, .. } => layer,
+            | CrossCellKind::Pca { layer, .. }
+            | CrossCellKind::Scrublet { layer, .. } => layer,
         }
     }
 
@@ -118,6 +126,7 @@ impl CrossCellStage {
     pub(crate) fn batch_key(&self) -> Option<&str> {
         match &self.kind {
             CrossCellKind::HighlyVariableGenes { batch_key, .. } => batch_key.as_deref(),
+            CrossCellKind::Scrublet { params, .. } => params.batch_key.as_deref(),
             CrossCellKind::MedianNormalize { .. }
             | CrossCellKind::Scale { .. }
             | CrossCellKind::Pca { .. } => None,
@@ -165,6 +174,18 @@ impl CrossCellStage {
                     layer, *flavor, n_genes, batch,
                 )))
             }
+            CrossCellKind::Scrublet { params, .. } => {
+                let batch = params
+                    .batch_key
+                    .as_ref()
+                    .zip(cells)
+                    .map(|(name, table)| BatchColumn {
+                        name: name.clone(),
+                        table,
+                        store: store.to_owned(),
+                    });
+                Accumulator::Rows(Box::new(ScrubletAccumulator::new(params, n_genes, batch)))
+            }
         }
     }
 
@@ -210,6 +231,9 @@ impl CrossCellStage {
             (Accumulator::Totals(_) | Accumulator::Moments(_), _) => {
                 unreachable!("a stage's accumulator comes from CrossCellStage::accumulator")
             }
+            (Accumulator::Rows(_), _) => {
+                unreachable!("the pipeline runs scrublet itself (ScrubletAccumulator::finish)")
+            }
         }
     }
 }
@@ -225,6 +249,8 @@ pub(crate) enum Accumulator {
     Moments(Box<GeneMoments>),
     /// `pca`'s sketch, basis and rows.
     Pca(Box<PcaAccumulator>),
+    /// `scrublet`'s gathered rows.
+    Rows(Box<ScrubletAccumulator>),
 }
 
 /// What one leaf of a pass's reduction holds (task 5.6): the sums over one store cell
@@ -239,6 +265,8 @@ pub(crate) enum Partial {
     Moments(Box<GeneMoments>),
     /// A leaf of a `pca` pass.
     Pca(Box<PcaPartial>),
+    /// Gathered rows (`scrublet`).
+    Rows(Box<GatheredRows>),
 }
 
 impl Partial {
@@ -256,6 +284,7 @@ impl Partial {
                 Self::Moments(left)
             }
             (Self::Pca(left), Self::Pca(right)) => Self::Pca(Box::new(left.combine(*right))),
+            (Self::Rows(left), Self::Rows(right)) => Self::Rows(Box::new(left.combine(*right))),
             _ => unreachable!("one pass's partials come from Accumulator::leaf"),
         }
     }
@@ -271,6 +300,7 @@ impl Accumulator {
                 Partial::Moments(Box::new(GeneMoments::new(moments.sums.len(), false)))
             }
             Self::Pca(pca) => Partial::Pca(Box::new(pca.leaf(pass))),
+            Self::Rows(rows) => Partial::Rows(Box::new(rows.leaf())),
         }
     }
 
@@ -278,7 +308,7 @@ impl Accumulator {
     /// depend on the order of the cells: `seurat_v3`'s Welford moments with batches).
     pub(crate) fn sequential(&self, pass: u32) -> bool {
         match self {
-            Self::Totals(_) | Self::Moments(_) | Self::Pca(_) => false,
+            Self::Totals(_) | Self::Moments(_) | Self::Pca(_) | Self::Rows(_) => false,
             Self::Genes(genes) => genes.sequential(pass),
         }
     }
@@ -288,7 +318,7 @@ impl Accumulator {
     pub(crate) fn skips(&self, pass: u32) -> bool {
         match self {
             Self::Pca(pca) => pca.skips(pass),
-            Self::Totals(_) | Self::Moments(_) | Self::Genes(_) => false,
+            Self::Totals(_) | Self::Moments(_) | Self::Genes(_) | Self::Rows(_) => false,
         }
     }
 
@@ -330,6 +360,7 @@ impl Accumulator {
             (Self::Genes(genes), Partial::Groups(groups)) => genes.fold(pass, groups, layer, block),
             (Self::Moments(_), Partial::Moments(moments)) => fold_moments(moments, layer),
             (Self::Pca(pca), Partial::Pca(partial)) => pca.fold(partial, layer, block),
+            (Self::Rows(rows), Partial::Rows(partial)) => rows.fold(partial, layer, block),
             _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
         }
     }
@@ -357,6 +388,8 @@ impl Accumulator {
             }
             (Self::Pca(pca), Some(Partial::Pca(reduced))) => pca.end_pass(pass, Some(*reduced))?,
             (Self::Pca(pca), None) => pca.end_pass(pass, None)?,
+            (Self::Rows(rows), Some(Partial::Rows(reduced))) => rows.end_pass(Some(*reduced)),
+            (Self::Rows(rows), None) => rows.end_pass(None),
             _ => unreachable!("a pass's reduction comes from Accumulator::leaf"),
         }
         Ok(())
@@ -366,7 +399,7 @@ impl Accumulator {
 /// `np.median` of `values` (`float32` values held as `f64`, sorted here): the middle
 /// value, or the mean of the two middle values in `float32` as numpy's `float32` mean
 /// (`f32(f32(a + b) / 2)`, task 6.2); NaN for none.
-fn median(values: &mut [f64]) -> f64 {
+pub(crate) fn median(values: &mut [f64]) -> f64 {
     values.sort_unstable_by(f64::total_cmp);
     let n = values.len();
     match n {

@@ -41,6 +41,7 @@ use crate::map_elementwise::ElementwiseOp;
 use crate::neighbors::{Metric, NeighborSearch, Neighbors};
 use crate::node::NodeId;
 use crate::plan::Plan;
+use crate::scrublet::Scrublet;
 use crate::sink::Sink;
 use crate::umap::{Umap, UmapInit};
 use crate::with_columns::Columns;
@@ -129,6 +130,19 @@ enum Step {
         into: String,
         n_components: u64,
         seed: u64,
+    },
+    Scrublet {
+        layer: String,
+        batch_key: Option<String>,
+        sim_doublet_ratio: f64,
+        expected_doublet_rate: f64,
+        stdev_doublet_rate: f64,
+        n_prin_comps: u64,
+        n_neighbors: Option<u64>,
+        threshold: Option<f64>,
+        seed: u64,
+        score_into: String,
+        predicted_into: String,
     },
     WithCells {
         columns: Vec<ColumnJson>,
@@ -269,6 +283,33 @@ impl Step {
                     n_components,
                     seed,
                 },
+                CrossCellOp::Scrublet { layer, params } => {
+                    let Scrublet {
+                        batch_key,
+                        sim_doublet_ratio,
+                        expected_doublet_rate,
+                        stdev_doublet_rate,
+                        n_prin_comps,
+                        n_neighbors,
+                        threshold,
+                        seed,
+                        score_into,
+                        predicted_into,
+                    } = params;
+                    Self::Scrublet {
+                        layer,
+                        batch_key,
+                        sim_doublet_ratio,
+                        expected_doublet_rate,
+                        stdev_doublet_rate,
+                        n_prin_comps,
+                        n_neighbors,
+                        threshold,
+                        seed,
+                        score_into,
+                        predicted_into,
+                    }
+                }
             },
             Plan::WithColumns(node) => match node.params().columns() {
                 Columns::Cells(columns) => Self::WithCells {
@@ -370,6 +411,7 @@ impl Step {
             Self::Scale { .. } => "scale",
             Self::HighlyVariableGenes { .. } => "highly_variable_genes",
             Self::Pca { .. } => "pca",
+            Self::Scrublet { .. } => "scrublet",
             Self::WithCells { .. } => "with_cells",
             Self::WithGenes { .. } => "with_genes",
             Self::Neighbors { .. } => "neighbors",
@@ -423,6 +465,33 @@ impl Step {
                 n_components,
                 seed,
             } => input.pca(Some(&layer), &into, n_components, seed),
+            Self::Scrublet {
+                layer,
+                batch_key,
+                sim_doublet_ratio,
+                expected_doublet_rate,
+                stdev_doublet_rate,
+                n_prin_comps,
+                n_neighbors,
+                threshold,
+                seed,
+                score_into,
+                predicted_into,
+            } => input.scrublet(
+                Some(&layer),
+                Scrublet {
+                    batch_key,
+                    sim_doublet_ratio,
+                    expected_doublet_rate,
+                    stdev_doublet_rate,
+                    n_prin_comps,
+                    n_neighbors,
+                    threshold,
+                    seed,
+                    score_into,
+                    predicted_into,
+                },
+            ),
             Self::WithCells { columns } => {
                 input.with_cells(columns_from_json::<kyto_core::CellAxis>(columns, node)?)
             }

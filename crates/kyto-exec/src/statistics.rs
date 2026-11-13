@@ -17,6 +17,7 @@ use kyto_plan::HvgFlavor;
 use crate::leiden::ClusterStatistics;
 use crate::neighbors::NeighborStatistics;
 use crate::pca::PcaStatistics;
+use crate::scrublet_pass::ScrubletStatistics;
 use crate::umap::UmapStatistics;
 
 pub use crate::scale::ScaleStatistics;
@@ -299,6 +300,8 @@ pub enum NodeStatistics {
     /// `umap`: the layout of a `neighbors` node's connectivities (task 6.9; no
     /// statistics passes, it runs after that node's search).
     Umap(Box<UmapStatistics>),
+    /// `scrublet`: doublet scores and calls (task 6.12; one pass gathers its input).
+    Scrublet(Box<ScrubletStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the
