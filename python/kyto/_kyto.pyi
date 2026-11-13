@@ -1933,7 +1933,56 @@ def plan_json_schema() -> builtins.str:
     """
 
 def scan(store: str | os.PathLike[str], /) -> Atlas:
-    """Build the root `Atlas` of the local store at `store` (private until 7.1)."""
+    """Open the kyto store at ``store`` as the root of a lazy plan.
+
+    Reads the store's ``schema.json`` and its gene IDs (and gene symbols, when the gene
+    table has a ``symbol`` column), so names can be resolved and checked when the plan
+    is built (R6). Reads no matrix tile and no other column (R1). Every method of the
+    returned ``Atlas`` builds a new plan on top of this one (R2).
+
+    Parameters
+    ----------
+    store : str or os.PathLike[str]
+        Path of a local kyto store, as ``convert`` writes it.
+
+    Returns
+    -------
+    Atlas
+        A new plan with one ``SCAN`` step. Nothing of the matrix is read or copied.
+
+    Raises
+    ------
+    CorruptStoreError
+        ``KY-E116``: ``store`` does not exist or is not a kyto store.
+        ``KY-E113``, ``KY-E122``: its gene table or ``schema.json`` breaks the format.
+    FormatVersionError
+        ``KY-E115``: the store has a ``format_version`` this kyto does not read.
+    StoreIOError
+        ``KY-E110``: a file of the store cannot be read.
+
+    Examples
+    --------
+    >>> import tempfile
+    >>> from pathlib import Path
+    >>> folder = Path(tempfile.mkdtemp())
+    >>> _ = (folder / "matrix.mtx").write_text(
+    ...     "%%MatrixMarket matrix coordinate integer general\\n3 2 3\\n"
+    ...     "1 1 5\\n3 1 1\\n2 2 7\\n"
+    ... )
+    >>> _ = (folder / "barcodes.tsv").write_text("AAAC-1\\nAAAG-1\\n")
+    >>> _ = (folder / "features.tsv").write_text(
+    ...     "ENSG01\\tCD3E\\tGene Expression\\nENSG02\\tCD4\\tGene Expression\\n"
+    ...     "ENSG03\\tMS4A1\\tGene Expression\\n"
+    ... )
+    >>> convert(folder, folder / "pbmc.kyto")
+    >>> atlas = scan(folder / "pbmc.kyto")
+    >>> print(atlas)
+    SCAN "..." (2 cells x 3 genes)
+    >>> scan(folder / "missing.kyto")
+    Traceback (most recent call last):
+        ...
+    kyto.errors.CorruptStoreError: KY-E116: ...
+    """
 
 def raise_error_example(code: str, /) -> bool:
     """Raise the registered example error for `code`; return False if unknown."""

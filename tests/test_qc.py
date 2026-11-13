@@ -18,16 +18,8 @@ from typing import Any
 import kyto
 import numpy as np
 import pytest
-from kyto import (
-    _kyto,
-    cell_column,
-    dtypes,
-    gene_column,
-    genes_detected,
-    percent_counts_in,
-    total_counts,
-    total_counts_in,
-)
+from kyto import _kyto, cell_column, dtypes, gene_column
+from kyto.qc import genes_detected, percent_counts_in, total_counts, total_counts_in
 
 MITOCHONDRIAL = gene_column("symbol").str.starts_with("MT-")
 

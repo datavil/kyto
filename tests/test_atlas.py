@@ -1,8 +1,8 @@
 """Task 3.2: ``Atlas`` is an immutable plan; every method returns a new ``Atlas`` (R2).
 
 Done when: the original plan is unchanged after 10 chained calls. The stores are built
-with ``kyto.convert`` from a tiny Matrix Market directory and opened with the private
-``kyto._kyto.scan`` (the public ``kyto.scan`` is task 7.1). Rust tests:
+with ``kyto.convert`` from a tiny Matrix Market directory and opened with
+``kyto._kyto.scan`` (exported as ``kyto.scan`` since task 7.1). Rust tests:
 ``crates/kyto-plan/tests/it/plan_chain.rs``.
 """
 

@@ -10,17 +10,10 @@ off here, so each ignore names only the error under test.
 # pyright: reportUnnecessaryTypeIgnoreComment=error
 # pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
-from kyto import (
-    cell_column,
-    gene_column,
-    gene_expression,
-    genes_detected,
-    percent_counts_in,
-    total_counts,
-    total_counts_in,
-)
+from kyto import cell_column, gene_column, gene_expression
 from kyto._kyto import Atlas, CellExpr, GeneExpr
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
+from kyto.qc import genes_detected, percent_counts_in, total_counts, total_counts_in
 
 
 def accepted(
