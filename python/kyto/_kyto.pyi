@@ -4,6 +4,7 @@ import builtins
 import os
 from collections.abc import Callable, Sequence
 from typing import (
+    Any,
     ClassVar,
     Generic,
     Literal,
@@ -915,6 +916,7 @@ class Atlas:
         path: str | os.PathLike[str],
         /,
         *,
+        overwrite: bool = False,
         memory_limit: str | int | None = None,
         threads: int | None = None,
         progress: Callable[[int, int], object] | None = None,
@@ -924,20 +926,24 @@ class Atlas:
         Writes the plan's layers, and its cell and gene tables with the computed columns
         (derived columns keep their lineage; stale ones are dropped), streaming one cell
         block at a time. The store is written next to ``path`` and renamed into place
-        when complete, so a failed or cancelled run leaves nothing. The GIL is released
-        while the plan computes; Ctrl-C cancels the run cleanly.
+        when complete, so a failed or cancelled run leaves nothing (and an overwritten
+        store is as it was). The GIL is released while the plan computes; Ctrl-C
+        cancels the run cleanly.
 
         Parameters
         ----------
         path : str or os.PathLike[str]
-            The new store. It must not exist.
+            The new store.
+        overwrite : bool, default=False
+            Replace a kyto store already at ``path``, once the new one is complete.
+            Anything else at ``path`` is never replaced, nor the store the plan reads.
         memory_limit : str or int or None, default=None
             The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
             of bytes: blocks shrink to fit, and a plan that cannot fit raises before
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
             Threads that read and compute blocks; ``None`` for one per CPU core. The
-            store does not depend on it (R11).
+            result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved (cell rows, summed over the passes).
@@ -950,7 +956,8 @@ class Atlas:
         Raises
         ------
         StoreInputError
-            ``KY-E118``: ``path`` exists (overwriting arrives with task 7.3).
+            ``KY-E118``: ``path`` exists and ``overwrite`` is false, it is not a kyto
+            store, or it is (or lies inside) the store the plan reads.
         PlanError
             ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
             accepted. ``KY-E216``: the plan already ends in a sink.
@@ -972,6 +979,81 @@ class Atlas:
         >>> scan(store).normalize_total(1e4, layer="counts", into="normalized").sink_zarr(target)
         >>> scan(target).layer("normalized").schema()["dtype"]
         'float32'
+        >>> scan(store).log1p(layer="counts", into="log1p").sink_zarr(target, overwrite=True)
+        >>> scan(target).layer("log1p").schema()["dtype"]
+        'float32'
+        """
+    def sink_h5ad(
+        self,
+        path: str | os.PathLike[str],
+        /,
+        *,
+        overwrite: bool = False,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> None:
+        """Run the plan and write its output as an ``.h5ad`` file at ``path``, for
+        scanpy and anndata.
+
+        The plan's default layer becomes ``X`` (no ``X`` without one) and every other
+        layer goes under ``layers``, all as CSR; the cell and gene tables with the
+        computed columns become ``obs`` and ``var``. The plan is streamed into a
+        temporary kyto store next to ``path``, exported, and the store deleted; the
+        file is renamed into place when complete, so a failed or cancelled run leaves
+        nothing. The GIL is released while the plan computes; Ctrl-C cancels the run
+        cleanly.
+
+        Parameters
+        ----------
+        path : str or os.PathLike[str]
+            The new file.
+        overwrite : bool, default=False
+            Replace a file already at ``path``, once the new one is complete. A
+            directory is never replaced.
+        memory_limit : str or int or None, default=None
+            The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+            of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+            anything is read. ``None`` runs with the default blocks.
+        threads : int or None, default=None
+            Threads that read and compute blocks; ``None`` for one per CPU core. The
+            result does not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread whenever the run
+            moved (cell rows, summed over the passes).
+
+        Returns
+        -------
+        None
+            The data are written to ``path``; this plan is unchanged.
+
+        Raises
+        ------
+        StoreInputError
+            ``KY-E123``: ``path`` exists and ``overwrite`` is false, or is a directory.
+            ``KY-E124``: a name ``.h5ad`` cannot hold.
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted. ``KY-E216``: the plan already ends in a sink.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
+        DeviceError
+            ``KY-E502``: the system cannot start ``threads`` threads.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        KeyboardInterrupt
+            Ctrl-C while the plan computes; the run has stopped and nothing is left.
+
+        Examples
+        --------
+        >>> target = store.parent / "pbmc.h5ad"
+        >>> scan(store).with_default_layer("counts").sink_h5ad(target)
+        >>> target.exists()
+        True
+        >>> scan(store).sink_h5ad(target)
+        Traceback (most recent call last):
+        ...
+        kyto.errors.StoreInputError: KY-E123: cannot write '...pbmc.h5ad': ...
         """
     @overload
     def explain(self, *, format: Literal["text"] = "text") -> str:
@@ -1462,46 +1544,98 @@ class Table:
         >>> scan(store).genes.estimate()
         {'n_rows': 3, 'n_columns': 3, 'nnz': None, 'dense_bytes': None}
         """
-    def to_polars(self) -> pl.DataFrame:
+    def to_polars(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> pl.DataFrame:
         """Run the plan and return the table as a Polars ``DataFrame``.
+
+        The table after every step of the plan: its rows are the cells (or genes) the
+        plan keeps, in store order, and its columns those of ``names()``, computed
+        columns included. A plan with steps is run into a temporary store first (as
+        ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+        while the plan runs; Ctrl-C cancels it cleanly.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         polars.DataFrame
             A copy the caller owns (R2): changing it never changes the store or a
-            later read.
+            later read. String columns are ``Enum``, as stored.
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store).cells.to_polars()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Table.to_polars' is not implemented yet...
+        >>> scan(store).genes.to_polars()["gene_id"].to_list()
+        ['ENSG01', 'ENSG02', 'ENSG03']
         """
-    def lazy(self) -> pl.LazyFrame:
-        """The table as a Polars ``LazyFrame`` over the plan.
+    def lazy(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> pl.LazyFrame:
+        """Run the plan and return the table as a Polars ``LazyFrame``.
+
+        Runs the plan now, as ``to_polars`` (the table's schema, such as the
+        categories of an ``Enum`` column, is known only then), and returns a lazy
+        query over the result, to go on with in Polars.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         polars.LazyFrame
-            A new lazy frame; collecting it returns a copy the caller owns (R2).
+            A new lazy frame over a copy the caller owns (R2).
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store).cells.lazy()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Table.lazy' is not implemented yet...
+        >>> scan(store).cells.lazy().select("cell_id").collect()["cell_id"].to_list()
+        ['AAAC-1', 'AAAG-1']
         """
 
 @final
@@ -1565,30 +1699,69 @@ class Matrix:
         >>> scan(store).layer("counts").estimate()
         {'n_rows': 2, 'n_columns': 3, 'nnz': 3, 'dense_bytes': 24}
         """
-    def to_scipy(self) -> scipy.sparse.csr_matrix:
+    def to_scipy(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> scipy.sparse.csr_matrix:
         """Run the plan and return the matrix as a SciPy CSR matrix.
+
+        The layer after every step of the plan: the cells and genes the plan keeps, in
+        store order. A plan with steps is run into a temporary store first (as
+        ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+        while the plan runs; Ctrl-C cancels it cleanly.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         scipy.sparse.csr_matrix
-            Cells x genes in the layer's stored dtype; a copy the caller owns (R2).
+            Cells x genes in the layer's stored dtype (``float32`` or ``uint32``), with
+            sorted indices and no stored zeros, ``int32`` index arrays (``int64`` when
+            ``nnz`` or the genes need them); a copy the caller owns (R2).
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store).layer("counts").to_scipy()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Matrix.to_scipy' is not implemented yet...
+        >>> matrix = scan(store).layer("counts").to_scipy()
+        >>> matrix.shape, matrix.dtype, matrix.nnz
+        ((2, 3), dtype('uint32'), 3)
         """
-    def to_dense(self, *, max_bytes: int) -> npt.NDArray[np.float32 | np.uint32]:
+    def to_dense(
+        self,
+        *,
+        max_bytes: int,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> npt.NDArray[np.float32 | np.uint32]:
         """Run the plan and return the matrix as a dense NumPy array, if it fits.
 
-        The only way to get a dense matrix (R8): absent entries become 0 (R9).
+        The only way to get a dense matrix (R8): absent entries become 0 (R9). When the
+        size is known from metadata (``estimate()["dense_bytes"]``) it is checked
+        before the plan runs; otherwise (after a filter) once the plan has run, before
+        the layer is read.
 
         Parameters
         ----------
@@ -1596,23 +1769,42 @@ class Matrix:
             The largest array, in bytes, the caller accepts. Required: there is no
             default, so densifying is always a stated choice. ``estimate()["dense_bytes"]``
             gives the size without reading the matrix.
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         numpy.ndarray
-            Cells x genes in the layer's stored dtype; a copy the caller owns (R2).
+            Cells x genes, C order, in the layer's stored dtype (``float32`` or
+            ``uint32``); a copy the caller owns (R2).
 
         Raises
         ------
+        MemoryLimitError
+            ``KY-E402``: the array is larger than ``max_bytes``, or cannot be
+            allocated. ``KY-E401``: the plan cannot run within ``memory_limit``.
+        PlanError
+            ``KY-E215``: a ``max_bytes`` that is not an int of 0 or more, or a
+            ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
         >>> scan(store).layer("counts").to_dense(max_bytes=1024)
+        array([[5, 0, 1],
+               [0, 7, 0]], dtype=uint32)
+        >>> scan(store).layer("counts").to_dense(max_bytes=8)
         Traceback (most recent call last):
         ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Matrix.to_dense' is not implemented yet...
+        kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
         """
 
 @final
@@ -1621,9 +1813,8 @@ class Embedding:
     lazy.
 
     Taken from ``Atlas.embedding(name)``. It reads nothing: ``names()``, ``schema()``
-    and ``estimate()`` answer from metadata, and the terminal ``to_numpy()`` runs the
-    plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing
-    (R8). It has no method that changes it or the plan (R2).
+    and ``estimate()`` answer from metadata, and the terminals ``to_numpy()`` and
+    ``to_torch(device=...)`` run the plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing (R8). It has no method that changes it or the plan (R2).
 
     Examples
     --------
@@ -1675,25 +1866,104 @@ class Embedding:
         >>> scan(store_with_members).embedding("X_pca").estimate()
         {'n_rows': 2, 'n_columns': 2, 'nnz': None, 'dense_bytes': 16}
         """
-    def to_numpy(self) -> npt.NDArray[np.float32 | np.float64]:
+    def to_numpy(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> npt.NDArray[np.float32 | np.float64]:
         """Run the plan and return the embedding as a NumPy array.
+
+        The embedding after every step of the plan: one row per cell (or gene) the
+        plan keeps, in store order. It is stored dense, so this densifies nothing (R8).
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         numpy.ndarray
-            Rows x components in the stored dtype; a copy the caller owns (R2).
+            Rows x components, C order, in the stored dtype; a copy the caller owns (R2).
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store_with_members).embedding("X_pca").to_numpy()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Embedding.to_numpy' is not implemented yet...
+        >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+        >>> array = atlas.embedding("X_pca").to_numpy()
+        >>> array.shape, array.dtype
+        ((2, 1), dtype('float32'))
+        """
+    def to_torch(
+        self,
+        *,
+        device: builtins.str,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> Any:
+        """Run the plan and return the embedding as a PyTorch tensor on ``device``.
+
+        As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: the tensor shares
+        the new array's memory on the CPU and is copied to any other device. A tensor
+        handed over without a copy (DLPack) is task 9.5. Needs ``torch`` installed.
+
+        Parameters
+        ----------
+        device : str
+            A device PyTorch accepts, such as ``"cpu"``, ``"cuda"``, ``"cuda:1"`` or
+            ``"mps"``. Required (R7: the device is always an argument).
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
+
+        Returns
+        -------
+        torch.Tensor
+            Rows x components in the stored dtype, on ``device``; a copy the caller
+            owns (R2).
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        ModuleNotFoundError
+            ``torch`` is not installed.
+
+        Examples
+        --------
+        >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+        >>> atlas.embedding("X_pca").to_torch(device="cpu").shape  # doctest: +SKIP
+        torch.Size([2, 1])
         """
 
 @final
@@ -1703,8 +1973,8 @@ class Graph:
 
     Taken from ``Atlas.graph(name)``. It reads nothing: ``names()``, ``schema()`` and
     ``estimate()`` answer from metadata, and the terminals ``to_scipy()`` and
-    ``to_edges()`` run the plan (task 7.3). It has no method that changes it or the
-    plan (R2).
+    ``to_edges()`` run the plan (task 7.3). It has no
+    method that changes it or the plan (R2).
 
     Examples
     --------
@@ -1754,8 +2024,26 @@ class Graph:
         >>> scan(store_with_members).graph("connectivities").estimate()
         {'n_rows': 2, 'n_columns': 2, 'nnz': 3, 'dense_bytes': 16}
         """
-    def to_scipy(self) -> scipy.sparse.csr_matrix:
+    def to_scipy(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> scipy.sparse.csr_matrix:
         """Run the plan and return the graph as a SciPy CSR matrix.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
@@ -1765,36 +2053,65 @@ class Graph:
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store_with_members).graph("connectivities").to_scipy()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Graph.to_scipy' is not implemented yet...
+        >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0).neighbors("X_pca", n_neighbors=2)
+        >>> graph = atlas.graph("distances").to_scipy()
+        >>> graph.shape, graph.dtype
+        ((2, 2), dtype('float32'))
         """
-    def to_edges(self) -> pl.DataFrame:
+    def to_edges(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> pl.DataFrame:
         """Run the plan and return the edges as a Polars ``DataFrame``.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
 
         Returns
         -------
         polars.DataFrame
-            One row per stored edge, with the columns ``names()``; a copy the caller
-            owns (R2).
+            One row per stored edge, row by row: ``source`` and ``target`` are cell
+            positions (``UInt32``, rows of ``cells.to_polars()`` and of ``to_scipy()``)
+            and ``weight`` the stored weight (``Float32`` or ``Float64``); a copy the
+            caller owns (R2).
 
         Raises
         ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
         NotImplementedYetError
-            ``KY-E601``: terminals run with task 7.3.
+            ``KY-E601``: the plan has a step the executor does not run yet.
 
         Examples
         --------
-        >>> scan(store_with_members).graph("connectivities").to_edges()
-        Traceback (most recent call last):
-        ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Graph.to_edges' is not implemented yet...
+        >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0).neighbors("X_pca", n_neighbors=2)
+        >>> atlas.graph("distances").to_edges().columns
+        ['source', 'target', 'weight']
         """
 
 @final

@@ -2126,6 +2126,7 @@ dependencies = [
  "kyto-exec",
  "kyto-plan",
  "kyto-store",
+ "numpy",
  "polars",
  "pyo3",
  "tempfile",
@@ -2607,6 +2608,22 @@ checksum = "91df4bbde75afed763b708b7eee1e8e7651e02d97f6d5dd763e89367e957b23b"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "numpy"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa0b9111761885449e894981fa8051dcf69e0bd114aecbd4bcdd830b6be4ed92"
+dependencies = [
+ "libc",
+ "ndarray",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "pyo3",
+ "pyo3-build-config",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -3366,6 +3383,7 @@ dependencies = [
  "polars-utils",
  "rayon",
  "recursive",
+ "serde_json",
  "slotmap",
  "tokio",
  "uuid",

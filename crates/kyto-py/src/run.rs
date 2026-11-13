@@ -10,8 +10,8 @@
 //! `RunControl`, waits for the worker (the run has stopped and its buffers are freed
 //! before this returns; the rayon pool's threads exit just after) and is re-raised as it is. Other Python threads run while
 //! the plan computes.
-//! A plan ending in a sink writes it (task 5.9; never over an existing target: the
-//! public `sink_zarr`/`sink_h5ad` and their `overwrite` are 7.3). A cancel reaches the
+//! A plan ending in a sink writes it (task 5.9; over an existing target only with
+//! `overwrite`, as the public `sink_zarr`/`sink_h5ad` pass it, task 7.3). A cancel reaches the
 //! sink until it renames its target into place, so an exception raised here leaves no
 //! target, unless it arrived after that rename: the sink had then finished, as if the
 //! signal came right after this returned.
@@ -35,7 +35,8 @@ use crate::errors::to_py_err;
 pub const TICK: Duration = Duration::from_millis(20);
 
 /// Run output 0 of `physical` on `threads` threads and drain its stream; the number of
-/// cell rows the output streamed.
+/// cell rows the output streamed. A sink replaces an existing target only with
+/// `overwrite`.
 ///
 /// `progress`, when given, is called on this thread as `progress(done, total)` (cell
 /// rows computed and in the whole run, summed over its passes) whenever they changed
@@ -52,6 +53,7 @@ pub fn run_plan(
     physical: &PhysicalPlan,
     threads: NonZeroUsize,
     progress: Option<&Bound<'_, PyAny>>,
+    overwrite: bool,
 ) -> PyResult<u64> {
     let pipeline = Pipeline::new(physical, 0).map_err(|error| to_py_err(py, &error))?;
     let control = RunControl::new();
@@ -61,7 +63,7 @@ pub fn run_plan(
         .name("kyto-run".to_owned())
         .spawn(move || {
             // The receiver may be gone only if this thread outlived the call: never.
-            let _ = sender.send(drain(&pipeline, options));
+            let _ = sender.send(drain(&pipeline, options, overwrite));
         })
         .map_err(|error| {
             let error = KytoError::ThreadStart {
@@ -109,10 +111,11 @@ pub fn run_plan(
 }
 
 /// Run `pipeline` and drain its stream, recycling every block; the cell rows streamed.
-/// A sink writes its target instead (task 5.9); the cells written.
-fn drain(pipeline: &Pipeline, options: ExecuteOptions) -> Result<u64, KytoError> {
+/// A sink writes its target instead (task 5.9), replacing an existing one only with
+/// `overwrite`; the cells written.
+fn drain(pipeline: &Pipeline, options: ExecuteOptions, overwrite: bool) -> Result<u64, KytoError> {
     if pipeline.is_sink() {
-        return pipeline.sink(options, false);
+        return pipeline.sink(options, overwrite);
     }
     let mut stream = pipeline.run(options)?;
     let mut cells = 0_u64;

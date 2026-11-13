@@ -305,6 +305,7 @@ class MemoryLimitError(KytoError, MemoryError):
     Subclasses `KytoError` and `MemoryError`. Raised with these codes:
 
     - ``KY-E401``: A plan needs more memory than its limit, even with the smallest blocks.
+    - ``KY-E402``: A dense array is larger than the max_bytes its caller accepts (R8), or cannot be allocated.
 
     See `KytoError` for the parameters and attributes.
 
@@ -380,6 +381,7 @@ class CorruptStoreError(KytoError, ValueError):
     - ``KY-E116``: A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3).
     - ``KY-E122``: A store's schema.json is missing, is not JSON, or breaks format.md section 8.
     - ``KY-E126``: A stored embedding or graph breaks the store format (format.md sections 6 and 7), or disagrees with schema.json.
+    - ``KY-E127``: A store was changed on disk after a plan scanned it.
 
     See `KytoError` for the parameters and attributes.
 
@@ -858,6 +860,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("problem", "str"),
         ),
     ),
+    "KY-E127": _Entry(
+        class_name="CorruptStoreError",
+        message="the store at '{store}' changed since it was scanned: {problem}",
+        hint="scan the store again and rebuild the plan; a plan answers from the store as it was when scanned",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e127",
+        fields=(
+            _Field("store", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
     "KY-E201": _Entry(
         class_name="ResolutionError",
         message="ambiguous name '{name}': it matches {candidates}",
@@ -1091,6 +1103,19 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("required_bytes", "int"),
             _Field("limit_bytes", "int"),
+        ),
+    ),
+    "KY-E402": _Entry(
+        class_name="MemoryLimitError",
+        message="'{method}' cannot allocate a dense {n_rows} x {n_columns} array of {required_bytes} bytes: {problem}",
+        hint="select fewer cells or genes first, take a sparse copy with to_scipy(), or raise max_bytes if the memory is there",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e402",
+        fields=(
+            _Field("method", "str"),
+            _Field("n_rows", "int"),
+            _Field("n_columns", "int"),
+            _Field("required_bytes", "int"),
+            _Field("problem", "str"),
         ),
     ),
     "KY-E501": _Entry(

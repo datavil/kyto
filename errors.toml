@@ -441,6 +441,18 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E127"
+variant = "StoreChanged"
+class = "CorruptStoreError"
+summary = "A store was changed on disk after a plan scanned it."
+message = "the store at '{store}' changed since it was scanned: {problem}"
+hint = "scan the store again and rebuild the plan; a plan answers from the store as it was when scanned"
+fields = [
+    { name = "store", type = "str", doc = "The store path.", example = "pbmc.kyto" },
+    { name = "problem", type = "str", doc = "What differs from the scan's snapshot.", example = "its schema.json is not the one the plan read" },
+]
+
+[[errors]]
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"
@@ -719,6 +731,21 @@ hint = "raise memory_limit to at least {required_bytes} bytes, or select fewer c
 fields = [
     { name = "required_bytes", type = "int", doc = "The smallest peak memory the plan can run in, in bytes.", example = 6000000000 },
     { name = "limit_bytes", type = "int", doc = "The memory limit given, in bytes.", example = 4000000000 },
+]
+
+[[errors]]
+code = "KY-E402"
+variant = "DenseTooLarge"
+class = "MemoryLimitError"
+summary = "A dense array is larger than the max_bytes its caller accepts (R8), or cannot be allocated."
+message = "'{method}' cannot allocate a dense {n_rows} x {n_columns} array of {required_bytes} bytes: {problem}"
+hint = "select fewer cells or genes first, take a sparse copy with to_scipy(), or raise max_bytes if the memory is there"
+fields = [
+    { name = "method", type = "str", doc = "The terminal called, as Class.method.", example = "Matrix.to_dense" },
+    { name = "n_rows", type = "int", doc = "Rows of the dense array.", example = 2700 },
+    { name = "n_columns", type = "int", doc = "Columns of the dense array.", example = 32738 },
+    { name = "required_bytes", type = "int", doc = "Bytes of the dense array.", example = 353570400 },
+    { name = "problem", type = "str", doc = "Why: max_bytes is smaller, or the system has no memory for it.", example = "max_bytes is 1000000" },
 ]
 
 [[errors]]

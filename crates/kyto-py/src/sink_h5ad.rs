@@ -3,7 +3,8 @@
 //! Does: turn the Python arguments into [`kyto_store::SinkH5adOptions`], run
 //! [`kyto_store::sink_h5ad`] with the GIL released, and raise its coded error.
 //! Does not: define the public surface: `sink_h5ad()` becomes a terminal of the lazy
-//! plan in 7.2/7.3 (user decision, Nov 7, 2026); until then it is private, for tests.
+//! plan (user decision, Nov 7, 2026): `Atlas.sink_h5ad` since 7.3; this one stays
+//! private, for tests.
 
 use std::path::PathBuf;
 

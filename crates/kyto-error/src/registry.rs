@@ -263,6 +263,14 @@ pub enum KytoError {
         /// The invariant that fails and where.
         problem: String,
     },
+    /// KY-E127: A store was changed on disk after a plan scanned it.
+    #[error("KY-E127: the store at '{store}' changed since it was scanned: {problem}")]
+    StoreChanged {
+        /// The store path.
+        store: String,
+        /// What differs from the scan's snapshot.
+        problem: String,
+    },
     /// KY-E201: A feature name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -473,6 +481,20 @@ pub enum KytoError {
         /// The memory limit given, in bytes.
         limit_bytes: u64,
     },
+    /// KY-E402: A dense array is larger than the max_bytes its caller accepts (R8), or cannot be allocated.
+    #[error("KY-E402: '{method}' cannot allocate a dense {n_rows} x {n_columns} array of {required_bytes} bytes: {problem}")]
+    DenseTooLarge {
+        /// The terminal called, as Class.method.
+        method: String,
+        /// Rows of the dense array.
+        n_rows: u64,
+        /// Columns of the dense array.
+        n_columns: u64,
+        /// Bytes of the dense array.
+        required_bytes: u64,
+        /// Why: max_bytes is smaller, or the system has no memory for it.
+        problem: String,
+    },
     /// KY-E501: The requested device has no kernel for an operation.
     #[error("KY-E501: no {device} kernel for '{operation}'")]
     MissingKernel {
@@ -509,7 +531,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 52] = [
+    pub const CODES: [&'static str; 54] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -536,6 +558,7 @@ impl KytoError {
         "KY-E124",
         "KY-E125",
         "KY-E126",
+        "KY-E127",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -558,6 +581,7 @@ impl KytoError {
         "KY-E302",
         "KY-E303",
         "KY-E401",
+        "KY-E402",
         "KY-E501",
         "KY-E502",
         "KY-E503",
@@ -593,6 +617,7 @@ impl KytoError {
             Self::UnsupportedExport { .. } => "KY-E124",
             Self::InvalidRemoteStore { .. } => "KY-E125",
             Self::CorruptMember { .. } => "KY-E126",
+            Self::StoreChanged { .. } => "KY-E127",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -615,6 +640,7 @@ impl KytoError {
             Self::NoLineage { .. } => "KY-E302",
             Self::NoRecipe { .. } => "KY-E303",
             Self::MemoryLimit { .. } => "KY-E401",
+            Self::DenseTooLarge { .. } => "KY-E402",
             Self::MissingKernel { .. } => "KY-E501",
             Self::ThreadStart { .. } => "KY-E502",
             Self::Cancelled { .. } => "KY-E503",
@@ -651,6 +677,7 @@ impl KytoError {
             Self::UnsupportedExport { .. } => "StoreInputError",
             Self::InvalidRemoteStore { .. } => "StoreInputError",
             Self::CorruptMember { .. } => "CorruptStoreError",
+            Self::StoreChanged { .. } => "CorruptStoreError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -673,6 +700,7 @@ impl KytoError {
             Self::NoLineage { .. } => "LineageError",
             Self::NoRecipe { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
+            Self::DenseTooLarge { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
             Self::ThreadStart { .. } => "DeviceError",
             Self::Cancelled { .. } => "RunCancelledError",
@@ -761,6 +789,9 @@ impl KytoError {
             Self::CorruptMember { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e126"
             }
+            Self::StoreChanged { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e127"
+            }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
             }
@@ -826,6 +857,9 @@ impl KytoError {
             }
             Self::MemoryLimit { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e401"
+            }
+            Self::DenseTooLarge { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e402"
             }
             Self::MissingKernel { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e501"
@@ -923,6 +957,9 @@ impl KytoError {
             Self::CorruptMember { kind, .. } => {
                 format!("the store breaks docs/format.md sections 6 and 7; write the {kind} again with kyto, or report a bug if kyto wrote it")
             }
+            Self::StoreChanged { .. } => {
+                String::from("scan the store again and rebuild the plan; a plan answers from the store as it was when scanned")
+            }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass one full name instead, one of {}; where two share a full name, use cell_column(...), gene_expression(..., layer=...) or cell_embedding(...)", quoted_list(candidates))
             }
@@ -988,6 +1025,9 @@ impl KytoError {
             }
             Self::MemoryLimit { required_bytes, .. } => {
                 format!("raise memory_limit to at least {required_bytes} bytes, or select fewer cells or genes before this step")
+            }
+            Self::DenseTooLarge { .. } => {
+                String::from("select fewer cells or genes first, take a sparse copy with to_scipy(), or raise max_bytes if the memory is there")
             }
             Self::MissingKernel { .. } => {
                 String::from("pass device='auto' to fall back to the CPU for this step, or device='cpu'")
@@ -1135,6 +1175,10 @@ impl KytoError {
                 ("name", FieldValue::Str(name.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
             ],
+            Self::StoreChanged { store, problem } => vec![
+                ("store", FieldValue::Str(store.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
                 ("candidates", FieldValue::StrList(candidates.clone())),
@@ -1239,6 +1283,13 @@ impl KytoError {
             Self::MemoryLimit { required_bytes, limit_bytes } => vec![
                 ("required_bytes", FieldValue::Int(*required_bytes)),
                 ("limit_bytes", FieldValue::Int(*limit_bytes)),
+            ],
+            Self::DenseTooLarge { method, n_rows, n_columns, required_bytes, problem } => vec![
+                ("method", FieldValue::Str(method.clone())),
+                ("n_rows", FieldValue::Int(*n_rows)),
+                ("n_columns", FieldValue::Int(*n_columns)),
+                ("required_bytes", FieldValue::Int(*required_bytes)),
+                ("problem", FieldValue::Str(problem.clone())),
             ],
             Self::MissingKernel { operation, device } => vec![
                 ("operation", FieldValue::Str(operation.clone())),
@@ -1391,6 +1442,10 @@ impl KytoError {
                 name: "connectivities".to_owned(),
                 problem: "row 4: index 7 follows 9; indices must be strictly increasing".to_owned(),
             },
+            Self::StoreChanged {
+                store: "pbmc.kyto".to_owned(),
+                problem: "its schema.json is not the one the plan read".to_owned(),
+            },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),
                 candidates: vec!["meta:CD3E".to_owned(), "log1p:CD3E".to_owned()],
@@ -1495,6 +1550,13 @@ impl KytoError {
             Self::MemoryLimit {
                 required_bytes: 6000000000,
                 limit_bytes: 4000000000,
+            },
+            Self::DenseTooLarge {
+                method: "Matrix.to_dense".to_owned(),
+                n_rows: 2700,
+                n_columns: 32738,
+                required_bytes: 353570400,
+                problem: "max_bytes is 1000000".to_owned(),
             },
             Self::MissingKernel {
                 operation: "leiden".to_owned(),

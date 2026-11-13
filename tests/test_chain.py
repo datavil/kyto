@@ -251,7 +251,7 @@ def test_sink_zarr_writes_the_plan_output(store: Path, tmp_path: Path) -> None:
         "n_counts",
     ]
     assert written.layer("normalized").schema()["dtype"] == "float32"
-    # Never over an existing target (overwrite is 7.3's).
+    # Never over an existing target without overwrite (7.3, tests/test_terminals.py).
     with pytest.raises(kyto.StoreInputError) as raised:
         plan.sink_zarr(target)
     assert raised.value.code == "KY-E118"
@@ -324,7 +324,7 @@ def test_rank_genes_groups_runs_only_when_collected(store: Path) -> None:
 
 
 def _docstrings() -> dict[str, tuple[str | None, str | None]]:
-    """Runtime and stub docstrings of the methods 7.2 adds."""
+    """Runtime and stub docstrings of the methods 7.2 adds (and 7.3's ``sink_h5ad``)."""
     methods = (
         "filter",
         "select_genes",
@@ -345,6 +345,7 @@ def _docstrings() -> dict[str, tuple[str | None, str | None]]:
         "on",
         "collect",
         "sink_zarr",
+        "sink_h5ad",
     )
     stub = Path(_kyto.__file__).with_name("_kyto.pyi")
     tree = ast.parse(stub.read_text(encoding="utf-8"))

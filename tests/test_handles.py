@@ -4,8 +4,8 @@ Done when: no handle exposes a method that mutates, checked by a stub test
 (``test_stub_handles_expose_no_mutation``, which reads ``_kyto.pyi``, and its run-time
 twin ``test_runtime_handles_match_stub``). Each handle is read-only and lazy:
 ``names()``, ``schema()`` and ``estimate()`` answer from metadata; the ``to_*``
-terminals raise ``KY-E601`` until task 7.3. The accessors on ``Atlas`` are 7.3's, taken
-early. Rust tests: ``crates/kyto-plan/tests/it/handles.rs``; frozen pyclasses:
+terminals run with task 7.3 (``tests/test_terminals.py``). The accessors on ``Atlas``
+are 7.3's, taken early. Rust tests: ``crates/kyto-plan/tests/it/handles.rs``; frozen pyclasses:
 ``crates/kyto-py/src/handles.rs``.
 
 No store kyto writes holds an embedding or a graph yet (the importers bring none), and
@@ -42,7 +42,7 @@ INSPECTION = {"names", "schema", "estimate"}
 TERMINALS = {
     "Table": {"to_polars", "lazy"},
     "Matrix": {"to_scipy", "to_dense"},
-    "Embedding": {"to_numpy"},
+    "Embedding": {"to_numpy", "to_torch"},
     "Graph": {"to_scipy", "to_edges"},
     "Modality": set[str](),
 }
@@ -212,40 +212,6 @@ def test_missing_member(store: Path, kind: str) -> None:
     assert raised.value.fields["kind"] == kind
     assert raised.value.fields["name"] == "Counts"
     assert f"no {kind} named 'Counts'" in str(raised.value)
-
-
-def _terminal_calls(atlas: _kyto.Atlas) -> list[tuple[str, Callable[[], object]]]:
-    matrix = atlas.layer("counts")
-    embedding = atlas.embedding("X_pca")
-    graph = atlas.graph("connectivities")
-    return [
-        ("Table.to_polars", atlas.cells.to_polars),
-        ("Table.lazy", atlas.genes.lazy),
-        ("Matrix.to_scipy", matrix.to_scipy),
-        ("Matrix.to_dense", lambda: matrix.to_dense(max_bytes=1 << 20)),
-        ("Embedding.to_numpy", embedding.to_numpy),
-        ("Graph.to_scipy", graph.to_scipy),
-        ("Graph.to_edges", graph.to_edges),
-    ]
-
-
-def test_terminals_are_not_implemented_yet(store_with_members: Path) -> None:
-    calls = _terminal_calls(_kyto.scan(store_with_members))
-    # Every terminal of every constructible handle is covered.
-    covered = {method for method, _ in calls}
-    assert covered == {
-        f"{handle}.{terminal}"
-        for handle, terminals in TERMINALS.items()
-        for terminal in terminals
-    }
-    for method, call in calls:
-        with pytest.raises(kyto.NotImplementedYetError) as raised:
-            call()
-        assert isinstance(raised.value, NotImplementedError)
-        assert raised.value.code == "KY-E601"
-        assert raised.value.fields["method"] == method
-        assert raised.value.fields["task"] == "7.3"
-        assert "names(), schema() and estimate()" in str(raised.value)
 
 
 def test_to_dense_needs_max_bytes(store: Path) -> None:

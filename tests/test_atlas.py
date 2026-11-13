@@ -99,6 +99,7 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "on",
         "collect",
         "sink_zarr",
+        "sink_h5ad",
         "cells",
         "genes",
         "layer",

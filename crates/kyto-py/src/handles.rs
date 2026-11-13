@@ -3,33 +3,51 @@
 //! Does: wrap the kyto-plan handles in frozen pyclasses with no constructor, no setter
 //! and no method that mutates (R2); convert `names()`, `schema()` (the handle's part of
 //! `schema.json`, format.md §8, as new dicts and lists) and `estimate()` to Python; give
-//! each handle its fixed `to_*` terminals, which raise `KY-E601` until task 7.3 runs
-//! them.
-//! Does not: read data, or expose `__getitem__`, `.X`, `obs`, `var` (R4) or
-//! `__array__` (no implicit dense array, R8).
+//! each handle its fixed `to_*` terminals (task 7.3): they run the plan into a store
+//! (`materialize.rs`; a bare scan is read in place), read the member and hand it over
+//! as a new Polars, NumPy or SciPy object (`handoff.rs`). Every handle keeps the
+//! temporary store of a `collect()`ed `Atlas` alive (7.2 Open (4)).
+//! Does not: read data outside the terminals, or expose `__getitem__`,
+//! `.X`, `obs`, `var` (R4) or `__array__` (no implicit dense array, R8).
+
+use std::sync::Arc;
 
 use kyto_core::{
     Axis, ColumnDtype, ColumnSchema, EmbeddingSchema, FloatDtype, GraphSchema, LayerDtype,
     LayerSchema, ModalitySchema, TableSchema,
 };
 use kyto_error::KytoError;
-use kyto_plan::Estimate;
+use kyto_plan::{Estimate, Plan};
+use kyto_store::{CsrMatrix, FloatValues, TableAxis};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::errors::to_py_err;
+use crate::handoff;
+use crate::materialize::{Materialized, materialize};
 
-/// The task that implements the handle terminals.
-const TERMINALS_TASK: &str = "7.3";
+/// The temporary store of a `collect()`ed `Atlas`, shared by the handles taken from it.
+type Collected = Option<Arc<tempfile::TempDir>>;
 
-/// `KY-E601` for the terminal `method` (written `Class.method`).
-fn not_implemented(py: Python<'_>, method: &str) -> PyErr {
-    to_py_err(
+/// The store holding `plan`'s output, for the terminal `method`, with the shared run
+/// arguments.
+fn run(
+    py: Python<'_>,
+    method: &str,
+    plan: &Arc<Plan>,
+    collected: &Collected,
+    memory_limit: Option<&Bound<'_, PyAny>>,
+    threads: Option<&Bound<'_, PyAny>>,
+    progress: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Materialized> {
+    materialize(
         py,
-        &KytoError::NotImplementedYet {
-            method: method.to_owned(),
-            task: TERMINALS_TASK.to_owned(),
-        },
+        method,
+        plan,
+        collected.as_ref(),
+        memory_limit,
+        threads,
+        progress,
     )
 }
 
@@ -158,12 +176,42 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: Estimate) -> PyResult<Bound<'py
 #[pyclass(frozen, module = "kyto", name = "Table")]
 pub struct PyTable {
     handle: kyto_plan::Table,
+    collected: Collected,
 }
 
 impl PyTable {
-    /// Wrap a kyto-plan table handle.
-    pub fn new(handle: kyto_plan::Table) -> Self {
-        Self { handle }
+    /// Wrap a kyto-plan table handle, keeping `collected` (the plan's `collect()`
+    /// store, if any) alive.
+    pub fn new(handle: kyto_plan::Table, collected: Collected) -> Self {
+        Self { handle, collected }
+    }
+
+    /// Run the plan and read the table as a new Python Polars frame (task 7.3).
+    fn frame<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = run(
+            py,
+            method,
+            self.handle.plan(),
+            &self.collected,
+            memory_limit,
+            threads,
+            progress,
+        )?;
+        let axis = match self.handle.axis() {
+            Axis::Cells => TableAxis::Cells,
+            Axis::Genes => TableAxis::Genes,
+        };
+        let frame = py
+            .detach(|| kyto_store::read_table(&store.store, axis))
+            .map_err(|error| to_py_err(py, &error))?;
+        handoff::to_polars(py, frame, &store.store.display().to_string())
     }
 }
 
@@ -221,47 +269,102 @@ impl PyTable {
 
     /// Run the plan and return the table as a Polars ``DataFrame``.
     ///
+    /// The table after every step of the plan: its rows are the cells (or genes) the
+    /// plan keeps, in store order, and its columns those of ``names()``, computed
+    /// columns included. A plan with steps is run into a temporary store first (as
+    /// ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+    /// while the plan runs; Ctrl-C cancels it cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
     /// Returns
     /// -------
     /// polars.DataFrame
     ///     A copy the caller owns (R2): changing it never changes the store or a
-    ///     later read.
+    ///     later read. String columns are ``Enum``, as stored.
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store).cells.to_polars()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Table.to_polars' is not implemented yet...
-    fn to_polars(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Table.to_polars"))
+    /// >>> scan(store).genes.to_polars()["gene_id"].to_list()
+    /// ['ENSG01', 'ENSG02', 'ENSG03']
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn to_polars<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.frame(py, "Table.to_polars", memory_limit, threads, progress)
     }
 
-    /// The table as a Polars ``LazyFrame`` over the plan.
+    /// Run the plan and return the table as a Polars ``LazyFrame``.
+    ///
+    /// Runs the plan now, as ``to_polars`` (the table's schema, such as the
+    /// categories of an ``Enum`` column, is known only then), and returns a lazy
+    /// query over the result, to go on with in Polars.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
     ///
     /// Returns
     /// -------
     /// polars.LazyFrame
-    ///     A new lazy frame; collecting it returns a copy the caller owns (R2).
+    ///     A new lazy frame over a copy the caller owns (R2).
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store).cells.lazy()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Table.lazy' is not implemented yet...
-    fn lazy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Table.lazy"))
+    /// >>> scan(store).cells.lazy().select("cell_id").collect()["cell_id"].to_list()
+    /// ['AAAC-1', 'AAAG-1']
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn lazy<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.frame(py, "Table.lazy", memory_limit, threads, progress)?
+            .call_method0("lazy")
     }
 
     /// One line, from metadata only.
@@ -296,12 +399,79 @@ fn count(value: Option<u64>) -> String {
 #[pyclass(frozen, module = "kyto", name = "Matrix")]
 pub struct PyMatrix {
     handle: kyto_plan::Matrix,
+    collected: Collected,
+}
+
+/// A layer read whole, in its stored value dtype.
+enum Layer {
+    Float32(CsrMatrix<f32>),
+    Uint32(CsrMatrix<u32>),
 }
 
 impl PyMatrix {
-    /// Wrap a kyto-plan matrix handle.
-    pub fn new(handle: kyto_plan::Matrix) -> Self {
-        Self { handle }
+    /// Wrap a kyto-plan matrix handle, keeping `collected` (the plan's `collect()`
+    /// store, if any) alive.
+    pub fn new(handle: kyto_plan::Matrix, collected: Collected) -> Self {
+        Self { handle, collected }
+    }
+
+    /// Run the plan and read the layer whole (task 7.3). With `max_bytes`, a dense
+    /// copy larger than it is refused (`KY-E402`) before the layer is read.
+    #[allow(clippy::too_many_arguments)]
+    fn read(
+        &self,
+        py: Python<'_>,
+        method: &str,
+        max_bytes: Option<u64>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Layer> {
+        let store = run(
+            py,
+            method,
+            self.handle.plan(),
+            &self.collected,
+            memory_limit,
+            threads,
+            progress,
+        )?;
+        let name = self.handle.schema().name.as_str();
+        let dtype = self.handle.schema().dtype;
+        py.detach(|| {
+            let schema = kyto_store::open_atlas_schema(&store.store)?;
+            let (n_cells, n_genes, tiling) = (schema.n_cells, schema.n_genes, schema.tiling);
+            // Both layer dtypes are 4 bytes a value.
+            let bytes = handoff::dense_bytes::<u32>(n_cells, n_genes);
+            if let Some(max_bytes) = max_bytes
+                && bytes > u128::from(max_bytes)
+            {
+                return Err(handoff::dense_too_large(
+                    method,
+                    n_cells,
+                    n_genes,
+                    bytes,
+                    format!("max_bytes is {max_bytes}"),
+                ));
+            }
+            Ok(match dtype {
+                LayerDtype::Float32 => Layer::Float32(kyto_store::read_layer(
+                    &store.store,
+                    name,
+                    n_cells,
+                    n_genes,
+                    tiling,
+                )?),
+                LayerDtype::Uint32 => Layer::Uint32(kyto_store::read_layer(
+                    &store.store,
+                    name,
+                    n_cells,
+                    n_genes,
+                    tiling,
+                )?),
+            })
+        })
+        .map_err(|error: KytoError| to_py_err(py, &error))
     }
 }
 
@@ -360,29 +530,65 @@ impl PyMatrix {
 
     /// Run the plan and return the matrix as a SciPy CSR matrix.
     ///
+    /// The layer after every step of the plan: the cells and genes the plan keeps, in
+    /// store order. A plan with steps is run into a temporary store first (as
+    /// ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+    /// while the plan runs; Ctrl-C cancels it cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
     /// Returns
     /// -------
     /// scipy.sparse.csr_matrix
-    ///     Cells x genes in the layer's stored dtype; a copy the caller owns (R2).
+    ///     Cells x genes in the layer's stored dtype (``float32`` or ``uint32``), with
+    ///     sorted indices and no stored zeros, ``int32`` index arrays (``int64`` when
+    ///     ``nnz`` or the genes need them); a copy the caller owns (R2).
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store).layer("counts").to_scipy()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Matrix.to_scipy' is not implemented yet...
-    fn to_scipy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Matrix.to_scipy"))
+    /// >>> matrix = scan(store).layer("counts").to_scipy()
+    /// >>> matrix.shape, matrix.dtype, matrix.nnz
+    /// ((2, 3), dtype('uint32'), 3)
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn to_scipy<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self.read(py, "Matrix.to_scipy", None, memory_limit, threads, progress)? {
+            Layer::Float32(matrix) => handoff::to_scipy(py, matrix),
+            Layer::Uint32(matrix) => handoff::to_scipy(py, matrix),
+        }
     }
 
     /// Run the plan and return the matrix as a dense NumPy array, if it fits.
     ///
-    /// The only way to get a dense matrix (R8): absent entries become 0 (R9).
+    /// The only way to get a dense matrix (R8): absent entries become 0 (R9). When the
+    /// size is known from metadata (``estimate()["dense_bytes"]``) it is checked
+    /// before the plan runs; otherwise (after a filter) once the plan has run, before
+    /// the layer is read.
     ///
     /// Parameters
     /// ----------
@@ -390,28 +596,71 @@ impl PyMatrix {
     ///     The largest array, in bytes, the caller accepts. Required: there is no
     ///     default, so densifying is always a stated choice. ``estimate()["dense_bytes"]``
     ///     gives the size without reading the matrix.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
     ///
     /// Returns
     /// -------
     /// numpy.ndarray
-    ///     Cells x genes in the layer's stored dtype; a copy the caller owns (R2).
+    ///     Cells x genes, C order, in the layer's stored dtype (``float32`` or
+    ///     ``uint32``); a copy the caller owns (R2).
     ///
     /// Raises
     /// ------
+    /// MemoryLimitError
+    ///     ``KY-E402``: the array is larger than ``max_bytes``, or cannot be
+    ///     allocated. ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// PlanError
+    ///     ``KY-E215``: a ``max_bytes`` that is not an int of 0 or more, or a
+    ///     ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
     /// >>> scan(store).layer("counts").to_dense(max_bytes=1024)
+    /// array([[5, 0, 1],
+    ///        [0, 7, 0]], dtype=uint32)
+    /// >>> scan(store).layer("counts").to_dense(max_bytes=8)
     /// Traceback (most recent call last):
     /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Matrix.to_dense' is not implemented yet...
-    #[pyo3(signature = (*, max_bytes))]
-    fn to_dense(&self, py: Python<'_>, max_bytes: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        // Checked by task 7.3, which defines what values it takes.
-        let _ = max_bytes;
-        Err(not_implemented(py, "Matrix.to_dense"))
+    /// kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
+    #[pyo3(signature = (*, max_bytes, memory_limit = None, threads = None, progress = None))]
+    fn to_dense<'py>(
+        &self,
+        py: Python<'py>,
+        max_bytes: &Bound<'_, PyAny>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        const METHOD: &str = "Matrix.to_dense";
+        let max_bytes = crate::chain::integer(py, METHOD, "max_bytes", max_bytes, 0)?;
+        let estimate = self.handle.estimate();
+        if let (Some(rows), Some(columns), Some(bytes)) =
+            (estimate.n_rows, estimate.n_columns, estimate.dense_bytes)
+            && bytes > u128::from(max_bytes)
+        {
+            let error = handoff::dense_too_large(
+                METHOD,
+                rows,
+                columns,
+                bytes,
+                format!("max_bytes is {max_bytes}"),
+            );
+            return Err(to_py_err(py, &error));
+        }
+        match self.read(py, METHOD, Some(max_bytes), memory_limit, threads, progress)? {
+            Layer::Float32(matrix) => handoff::to_dense(py, METHOD, &matrix, max_bytes),
+            Layer::Uint32(matrix) => handoff::to_dense(py, METHOD, &matrix, max_bytes),
+        }
     }
 
     /// One line, from metadata only.
@@ -433,9 +682,8 @@ impl PyMatrix {
 /// lazy.
 ///
 /// Taken from ``Atlas.embedding(name)``. It reads nothing: ``names()``, ``schema()``
-/// and ``estimate()`` answer from metadata, and the terminal ``to_numpy()`` runs the
-/// plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing
-/// (R8). It has no method that changes it or the plan (R2).
+/// and ``estimate()`` answer from metadata, and the terminals ``to_numpy()`` and
+/// ``to_torch(device=...)`` run the plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing (R8). It has no method that changes it or the plan (R2).
 ///
 /// Examples
 /// --------
@@ -444,12 +692,43 @@ impl PyMatrix {
 #[pyclass(frozen, module = "kyto", name = "Embedding")]
 pub struct PyEmbedding {
     handle: kyto_plan::Embedding,
+    collected: Collected,
 }
 
 impl PyEmbedding {
-    /// Wrap a kyto-plan embedding handle.
-    pub fn new(handle: kyto_plan::Embedding) -> Self {
-        Self { handle }
+    /// Wrap a kyto-plan embedding handle, keeping `collected` (the plan's `collect()`
+    /// store, if any) alive.
+    pub fn new(handle: kyto_plan::Embedding, collected: Collected) -> Self {
+        Self { handle, collected }
+    }
+
+    /// Run the plan and read the embedding as a new rows x components NumPy array.
+    fn array<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = run(
+            py,
+            method,
+            self.handle.plan(),
+            &self.collected,
+            memory_limit,
+            threads,
+            progress,
+        )?;
+        let name = self.handle.schema().name.as_str();
+        let embedding = py
+            .detach(|| kyto_store::read_embedding(&store.store, name))
+            .map_err(|error| to_py_err(py, &error))?;
+        let (rows, width) = (embedding.n_rows(), embedding.width);
+        match embedding.values {
+            FloatValues::F32(values) => handoff::to_array2(py, rows, width, values),
+            FloatValues::F64(values) => handoff::to_array2(py, rows, width, values),
+        }
     }
 }
 
@@ -507,24 +786,112 @@ impl PyEmbedding {
 
     /// Run the plan and return the embedding as a NumPy array.
     ///
+    /// The embedding after every step of the plan: one row per cell (or gene) the
+    /// plan keeps, in store order. It is stored dense, so this densifies nothing (R8).
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
     /// Returns
     /// -------
     /// numpy.ndarray
-    ///     Rows x components in the stored dtype; a copy the caller owns (R2).
+    ///     Rows x components, C order, in the stored dtype; a copy the caller owns (R2).
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store_with_members).embedding("X_pca").to_numpy()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Embedding.to_numpy' is not implemented yet...
-    fn to_numpy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Embedding.to_numpy"))
+    /// >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+    /// >>> array = atlas.embedding("X_pca").to_numpy()
+    /// >>> array.shape, array.dtype
+    /// ((2, 1), dtype('float32'))
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn to_numpy<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.array(py, "Embedding.to_numpy", memory_limit, threads, progress)
+    }
+
+    /// Run the plan and return the embedding as a PyTorch tensor on ``device``.
+    ///
+    /// As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: the tensor shares
+    /// the new array's memory on the CPU and is copied to any other device. A tensor
+    /// handed over without a copy (DLPack) is task 9.5. Needs ``torch`` installed.
+    ///
+    /// Parameters
+    /// ----------
+    /// device : str
+    ///     A device PyTorch accepts, such as ``"cpu"``, ``"cuda"``, ``"cuda:1"`` or
+    ///     ``"mps"``. Required (R7: the device is always an argument).
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
+    /// Returns
+    /// -------
+    /// torch.Tensor
+    ///     Rows x components in the stored dtype, on ``device``; a copy the caller
+    ///     owns (R2).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    /// ModuleNotFoundError
+    ///     ``torch`` is not installed.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+    /// >>> atlas.embedding("X_pca").to_torch(device="cpu").shape  # doctest: +SKIP
+    /// torch.Size([2, 1])
+    #[pyo3(signature = (*, device, memory_limit = None, threads = None, progress = None))]
+    fn to_torch<'py>(
+        &self,
+        py: Python<'py>,
+        device: &str,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let array = self.array(py, "Embedding.to_torch", memory_limit, threads, progress)?;
+        let keywords = PyDict::new(py);
+        keywords.set_item("device", device)?;
+        py.import("torch")?
+            .call_method1("from_numpy", (array,))?
+            .call_method("to", (), Some(&keywords))
     }
 
     /// One line, from metadata only.
@@ -547,8 +914,8 @@ impl PyEmbedding {
 ///
 /// Taken from ``Atlas.graph(name)``. It reads nothing: ``names()``, ``schema()`` and
 /// ``estimate()`` answer from metadata, and the terminals ``to_scipy()`` and
-/// ``to_edges()`` run the plan (task 7.3). It has no method that changes it or the
-/// plan (R2).
+/// ``to_edges()`` run the plan (task 7.3). It has no
+/// method that changes it or the plan (R2).
 ///
 /// Examples
 /// --------
@@ -557,12 +924,37 @@ impl PyEmbedding {
 #[pyclass(frozen, module = "kyto", name = "Graph")]
 pub struct PyGraph {
     handle: kyto_plan::Graph,
+    collected: Collected,
 }
 
 impl PyGraph {
-    /// Wrap a kyto-plan graph handle.
-    pub fn new(handle: kyto_plan::Graph) -> Self {
-        Self { handle }
+    /// Wrap a kyto-plan graph handle, keeping `collected` (the plan's `collect()`
+    /// store, if any) alive.
+    pub fn new(handle: kyto_plan::Graph, collected: Collected) -> Self {
+        Self { handle, collected }
+    }
+
+    /// Run the plan and read the graph whole.
+    fn read(
+        &self,
+        py: Python<'_>,
+        method: &str,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<kyto_store::Graph> {
+        let store = run(
+            py,
+            method,
+            self.handle.plan(),
+            &self.collected,
+            memory_limit,
+            threads,
+            progress,
+        )?;
+        let name = self.handle.schema().name.as_str();
+        py.detach(|| kyto_store::read_graph(&store.store, name))
+            .map_err(|error| to_py_err(py, &error))
     }
 }
 
@@ -618,6 +1010,18 @@ impl PyGraph {
 
     /// Run the plan and return the graph as a SciPy CSR matrix.
     ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
     /// Returns
     /// -------
     /// scipy.sparse.csr_matrix
@@ -626,40 +1030,109 @@ impl PyGraph {
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store_with_members).graph("connectivities").to_scipy()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Graph.to_scipy' is not implemented yet...
-    fn to_scipy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Graph.to_scipy"))
+    /// >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0).neighbors("X_pca", n_neighbors=2)
+    /// >>> graph = atlas.graph("distances").to_scipy()
+    /// >>> graph.shape, graph.dtype
+    /// ((2, 2), dtype('float32'))
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn to_scipy<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let graph = self.read(py, "Graph.to_scipy", memory_limit, threads, progress)?;
+        let n_cells = graph.n_cells();
+        let kyto_store::Graph {
+            indptr,
+            indices,
+            weights,
+            ..
+        } = graph;
+        match weights {
+            FloatValues::F32(data) => handoff::to_scipy(
+                py,
+                CsrMatrix {
+                    n_cells,
+                    n_genes: n_cells,
+                    indptr,
+                    indices,
+                    data,
+                },
+            ),
+            FloatValues::F64(data) => handoff::to_scipy(
+                py,
+                CsrMatrix {
+                    n_cells,
+                    n_genes: n_cells,
+                    indptr,
+                    indices,
+                    data,
+                },
+            ),
+        }
     }
 
     /// Run the plan and return the edges as a Polars ``DataFrame``.
     ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
     /// Returns
     /// -------
     /// polars.DataFrame
-    ///     One row per stored edge, with the columns ``names()``; a copy the caller
-    ///     owns (R2).
+    ///     One row per stored edge, row by row: ``source`` and ``target`` are cell
+    ///     positions (``UInt32``, rows of ``cells.to_polars()`` and of ``to_scipy()``)
+    ///     and ``weight`` the stored weight (``Float32`` or ``Float64``); a copy the
+    ///     caller owns (R2).
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
     /// NotImplementedYetError
-    ///     ``KY-E601``: terminals run with task 7.3.
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
     ///
     /// Examples
     /// --------
-    /// >>> scan(store_with_members).graph("connectivities").to_edges()
-    /// Traceback (most recent call last):
-    /// ...
-    /// kyto.errors.NotImplementedYetError: KY-E601: 'Graph.to_edges' is not implemented yet...
-    fn to_edges(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        Err(not_implemented(py, "Graph.to_edges"))
+    /// >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0).neighbors("X_pca", n_neighbors=2)
+    /// >>> atlas.graph("distances").to_edges().columns
+    /// ['source', 'target', 'weight']
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn to_edges<'py>(
+        &self,
+        py: Python<'py>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let graph = self.read(py, "Graph.to_edges", memory_limit, threads, progress)?;
+        let name = self.handle.schema().name.clone();
+        let frame = handoff::edges(graph).map_err(|error| to_py_err(py, &error))?;
+        handoff::to_polars(py, frame, &name)
     }
 
     /// One line, from metadata only.

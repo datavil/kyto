@@ -13,6 +13,8 @@ pub mod convert;
 pub mod errors;
 pub mod expr;
 pub mod handles;
+pub mod handoff;
+pub mod materialize;
 pub mod plan_validate;
 pub mod qc;
 pub mod rank_genes;

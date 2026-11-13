@@ -6,7 +6,7 @@
 //! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
 //! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early);
 //! the chain methods (task 7.2: filters, selections, columns, the algorithms of 6.x, and
-//! the terminals `collect` and `sink_zarr`); write the
+//! the terminals `collect` and `sink_zarr`, and `sink_h5ad`, task 7.3); write the
 //! plan JSON (`to_json`) and read it back (`from_json`, task 4.3); run the plan to
 //! nowhere (`_execute`, task 5.7's private hook: GIL, progress, cancel).
 //! Does not: read the matrix outside the terminals (R1); hold any state besides the plan
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use kyto_algo::RankGenesGroups;
 use kyto_core::GeneIds;
 use kyto_error::KytoError;
-use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Sink, Umap};
+use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Umap};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use pyo3::{IntoPyObjectExt, PyAny};
@@ -82,27 +82,6 @@ impl Atlas {
             into: into.to_owned(),
         };
         self.derive(py, self.plan.cluster(parameters))
-    }
-
-    /// Run this plan into a kyto store at `target` (`collect`, `sink_zarr`), through
-    /// `run_plan`: GIL released, progress, Ctrl-C.
-    fn run_sink(
-        &self,
-        py: Python<'_>,
-        function: &str,
-        target: &std::path::Path,
-        memory_limit: Option<&Bound<'_, PyAny>>,
-        threads: Option<&Bound<'_, PyAny>>,
-        progress: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let plan = self
-            .plan
-            .sink(Sink::Zarr {
-                path: target.display().to_string(),
-            })
-            .map_err(|error| to_py_err(py, &error))?;
-        let run = terminal::run_arguments(py, function, &plan, memory_limit, threads, progress)?;
-        run_plan(py, &run.physical, run.threads, progress).map(|_| ())
     }
 }
 
@@ -1221,7 +1200,16 @@ impl Atlas {
                 to_py_err(py, &error)
             })?;
         let target = folder.path().join("atlas.kyto");
-        self.run_sink(py, "collect", &target, memory_limit, threads, progress)?;
+        crate::materialize::sink(
+            py,
+            "collect",
+            &self.plan,
+            crate::materialize::zarr(&target),
+            false,
+            memory_limit,
+            threads,
+            progress,
+        )?;
         let mut plan = open_plan(py, target)?;
         if let Some(layer) = self.plan.default_layer()
             && plan
@@ -1245,20 +1233,24 @@ impl Atlas {
     /// Writes the plan's layers, and its cell and gene tables with the computed columns
     /// (derived columns keep their lineage; stale ones are dropped), streaming one cell
     /// block at a time. The store is written next to ``path`` and renamed into place
-    /// when complete, so a failed or cancelled run leaves nothing. The GIL is released
-    /// while the plan computes; Ctrl-C cancels the run cleanly.
+    /// when complete, so a failed or cancelled run leaves nothing (and an overwritten
+    /// store is as it was). The GIL is released while the plan computes; Ctrl-C
+    /// cancels the run cleanly.
     ///
     /// Parameters
     /// ----------
     /// path : str or os.PathLike[str]
-    ///     The new store. It must not exist.
+    ///     The new store.
+    /// overwrite : bool, default=False
+    ///     Replace a kyto store already at ``path``, once the new one is complete.
+    ///     Anything else at ``path`` is never replaced, nor the store the plan reads.
     /// memory_limit : str or int or None, default=None
     ///     The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
     ///     of bytes: blocks shrink to fit, and a plan that cannot fit raises before
     ///     anything is read. ``None`` runs with the default blocks.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
-    ///     store does not depend on it (R11).
+    ///     result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
     ///     moved (cell rows, summed over the passes).
@@ -1271,7 +1263,8 @@ impl Atlas {
     /// Raises
     /// ------
     /// StoreInputError
-    ///     ``KY-E118``: ``path`` exists (overwriting arrives with task 7.3).
+    ///     ``KY-E118``: ``path`` exists and ``overwrite`` is false, it is not a kyto
+    ///     store, or it is (or lies inside) the store the plan reads.
     /// PlanError
     ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
     ///     accepted. ``KY-E216``: the plan already ends in a sink.
@@ -1293,16 +1286,119 @@ impl Atlas {
     /// >>> scan(store).normalize_total(1e4, layer="counts", into="normalized").sink_zarr(target)
     /// >>> scan(target).layer("normalized").schema()["dtype"]
     /// 'float32'
-    #[pyo3(signature = (path, /, *, memory_limit = None, threads = None, progress = None))]
+    /// >>> scan(store).log1p(layer="counts", into="log1p").sink_zarr(target, overwrite=True)
+    /// >>> scan(target).layer("log1p").schema()["dtype"]
+    /// 'float32'
+    #[pyo3(signature = (
+        path, /, *, overwrite = false, memory_limit = None, threads = None, progress = None
+    ))]
     fn sink_zarr(
         &self,
         py: Python<'_>,
         path: PathBuf,
+        overwrite: bool,
         memory_limit: Option<&Bound<'_, PyAny>>,
         threads: Option<&Bound<'_, PyAny>>,
         progress: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.run_sink(py, "sink_zarr", &path, memory_limit, threads, progress)
+        crate::materialize::sink(
+            py,
+            "sink_zarr",
+            &self.plan,
+            crate::materialize::zarr(&path),
+            overwrite,
+            memory_limit,
+            threads,
+            progress,
+        )
+    }
+
+    /// Run the plan and write its output as an ``.h5ad`` file at ``path``, for
+    /// scanpy and anndata.
+    ///
+    /// The plan's default layer becomes ``X`` (no ``X`` without one) and every other
+    /// layer goes under ``layers``, all as CSR; the cell and gene tables with the
+    /// computed columns become ``obs`` and ``var``. The plan is streamed into a
+    /// temporary kyto store next to ``path``, exported, and the store deleted; the
+    /// file is renamed into place when complete, so a failed or cancelled run leaves
+    /// nothing. The GIL is released while the plan computes; Ctrl-C cancels the run
+    /// cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// path : str or os.PathLike[str]
+    ///     The new file.
+    /// overwrite : bool, default=False
+    ///     Replace a file already at ``path``, once the new one is complete. A
+    ///     directory is never replaced.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+    ///     of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+    ///     anything is read. ``None`` runs with the default blocks.
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     result does not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread whenever the run
+    ///     moved (cell rows, summed over the passes).
+    ///
+    /// Returns
+    /// -------
+    /// None
+    ///     The data are written to ``path``; this plan is unchanged.
+    ///
+    /// Raises
+    /// ------
+    /// StoreInputError
+    ///     ``KY-E123``: ``path`` exists and ``overwrite`` is false, or is a directory.
+    ///     ``KY-E124``: a name ``.h5ad`` cannot hold.
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted. ``KY-E216``: the plan already ends in a sink.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// DeviceError
+    ///     ``KY-E502``: the system cannot start ``threads`` threads.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    /// KeyboardInterrupt
+    ///     Ctrl-C while the plan computes; the run has stopped and nothing is left.
+    ///
+    /// Examples
+    /// --------
+    /// >>> target = store.parent / "pbmc.h5ad"
+    /// >>> scan(store).with_default_layer("counts").sink_h5ad(target)
+    /// >>> target.exists()
+    /// True
+    /// >>> scan(store).sink_h5ad(target)
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.StoreInputError: KY-E123: cannot write '...pbmc.h5ad': ...
+    #[pyo3(signature = (
+        path, /, *, overwrite = false, memory_limit = None, threads = None, progress = None
+    ))]
+    fn sink_h5ad(
+        &self,
+        py: Python<'_>,
+        path: PathBuf,
+        overwrite: bool,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let target = kyto_plan::Sink::H5ad {
+            path: path.display().to_string(),
+        };
+        crate::materialize::sink(
+            py,
+            "sink_h5ad",
+            &self.plan,
+            target,
+            overwrite,
+            memory_limit,
+            threads,
+            progress,
+        )
     }
 
     /// The cell table: a read-only, lazy handle (nothing is read).
@@ -1318,7 +1414,10 @@ impl Atlas {
     /// ['cell_id']
     #[getter]
     fn cells(&self) -> PyTable {
-        PyTable::new(kyto_plan::Table::new(&self.plan, kyto_core::Axis::Cells))
+        PyTable::new(
+            kyto_plan::Table::new(&self.plan, kyto_core::Axis::Cells),
+            self.collected.clone(),
+        )
     }
 
     /// The gene table: a read-only, lazy handle (nothing is read).
@@ -1334,7 +1433,10 @@ impl Atlas {
     /// ['gene_id', 'symbol', 'feature_type']
     #[getter]
     fn genes(&self) -> PyTable {
-        PyTable::new(kyto_plan::Table::new(&self.plan, kyto_core::Axis::Genes))
+        PyTable::new(
+            kyto_plan::Table::new(&self.plan, kyto_core::Axis::Genes),
+            self.collected.clone(),
+        )
     }
 
     /// A layer, as a read-only, lazy matrix handle (nothing is read).
@@ -1361,7 +1463,7 @@ impl Atlas {
     #[pyo3(signature = (name, /))]
     fn layer(&self, py: Python<'_>, name: &str) -> PyResult<PyMatrix> {
         kyto_plan::Matrix::new(&self.plan, name)
-            .map(PyMatrix::new)
+            .map(|handle| PyMatrix::new(handle, self.collected.clone()))
             .map_err(|error| to_py_err(py, &error))
     }
 
@@ -1391,7 +1493,7 @@ impl Atlas {
     #[pyo3(signature = (name, /))]
     fn embedding(&self, py: Python<'_>, name: &str) -> PyResult<PyEmbedding> {
         kyto_plan::Embedding::new(&self.plan, name)
-            .map(PyEmbedding::new)
+            .map(|handle| PyEmbedding::new(handle, self.collected.clone()))
             .map_err(|error| to_py_err(py, &error))
     }
 
@@ -1421,7 +1523,7 @@ impl Atlas {
     #[pyo3(signature = (name, /))]
     fn graph(&self, py: Python<'_>, name: &str) -> PyResult<PyGraph> {
         kyto_plan::Graph::new(&self.plan, name)
-            .map(PyGraph::new)
+            .map(|handle| PyGraph::new(handle, self.collected.clone()))
             .map_err(|error| to_py_err(py, &error))
     }
 
@@ -1653,7 +1755,7 @@ impl Atlas {
             threads,
             progress.as_ref(),
         )?;
-        run_plan(py, &run.physical, run.threads, progress.as_ref())
+        run_plan(py, &run.physical, run.threads, progress.as_ref(), false)
     }
 
     /// The plan, one node per line, from the last step down to the scan.

@@ -8,8 +8,8 @@ shape, index, columns and values; differences are exactly the rows of
 ``deviations.md`` (layer dtypes ``float32``/``uint32``, dense layers as CSR, numeric
 categoricals as plain columns). Skips where anndata has no wheels.
 
-What it does not: test the public surface; ``sink_h5ad()`` becomes a plan terminal in
-7.2/7.3 (user decision, Nov 7, 2026). Rust tests: ``crates/kyto-store/tests/export_h5ad.rs``.
+What it does not: test the public surface, ``Atlas.sink_h5ad`` (the plan terminal the
+user decided on, Nov 7, 2026; added by 7.3, tested in ``tests/test_terminals.py``). Rust tests: ``crates/kyto-store/tests/export_h5ad.rs``.
 """
 
 # pandas, scipy and anndata ship without complete type information; strict pyright
