@@ -3,31 +3,36 @@
 //! Does: check the target and the options before reading the matrix, then write the
 //! anndata 0.13 layout (encodings as anndata's h5py writer, the ones the 2.6 importer
 //! reads): `obs` and `var` dataframes from the tables (`export_h5ad_table`), the chosen
-//! layer as `X` and every other layer under `layers/`, all as `csr_matrix` 0.1.0, and
-//! empty `obsm`, `varm`, `obsp`, `varp` and `uns`. Each layer is streamed one cell
+//! layer as `X` and every other layer under `layers/`, all as `csr_matrix` 0.1.0, the
+//! cell embeddings under `obsm` and the gene embeddings under `varm` (dense `array`
+//! 0.2.0, rows x components, task 5.11), the graphs under `obsp` (`csr_matrix` 0.1.0),
+//! and empty `varp` and `uns`. Each layer is streamed one cell
 //! block at a time through the tile reader (R8): memory is the two tables and
 //! `blocks_in_flight` cell blocks. The file is written next to the target and renamed
 //! into place only when complete (`atomic_file`), after a last check the caller may
 //! pass ([`sink_h5ad_checked`]).
-//! Does not: export embeddings or graphs (not stored yet), compress, or write dense
-//! matrices (R8; anndata reads CSR as scipy CSR).
+//! Embeddings and graphs are read whole (they are small next to the matrix, §6, §7).
+//! Does not: compress, or write dense matrices (R8; anndata reads CSR as scipy CSR).
 
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
 use hdf5_metno::{Dataset, H5Type};
+use kyto_core::Axis;
 use kyto_error::KytoError;
 use zarrs::filesystem::FilesystemStore;
 
 use crate::atomic_file::AtomicFile;
 use crate::cell_block::CellValues;
 use crate::commit_check::{CommitCheck, proceed};
+use crate::embedding_io::{FloatValues, read_embedding};
 use crate::export_h5::H5Out;
 use crate::export_h5ad_table::write_table;
+use crate::graph_io::read_graph;
 use crate::layer_open::ValueDtype;
 use crate::selection::AxisSelection;
-use crate::store_schema::{SchemaLayer, StoreSchema, read_schema};
+use crate::store_schema::{SchemaLayer, StoreSchema, read_atlas_schema, read_schema};
 use crate::store_version::check_format_version;
 use crate::table_axis::TableAxis;
 use crate::table_io::read_table;
@@ -205,8 +210,59 @@ fn write_file(
         let member = format!("layers/{}", layer.name);
         write_layer(out, &member, storage, store, schema, layer, options)?;
     }
-    for member in ["obsm", "varm", "obsp", "varp", "uns"] {
+    write_members(out, Path::new(store))?;
+    for member in ["varp", "uns"] {
         out.group(member, ("dict", "0.1.0"))?;
+    }
+    Ok(())
+}
+
+/// The embeddings as `obsm`/`varm` arrays and the graphs as `obsp` CSR matrices.
+fn write_members(out: &H5Out, store: &Path) -> Result<(), KytoError> {
+    let schema = read_atlas_schema(store)?;
+    out.group("obsm", ("dict", "0.1.0"))?;
+    out.group("varm", ("dict", "0.1.0"))?;
+    for entry in &schema.embeddings {
+        let embedding = read_embedding(store, &entry.name)?;
+        let group = match embedding.axis {
+            Axis::Cells => "obsm",
+            Axis::Genes => "varm",
+        };
+        let member = format!("{group}/{}", embedding.name);
+        let shape = (embedding.n_rows() as usize, embedding.width as usize);
+        match &embedding.values {
+            FloatValues::F32(values) => out.matrix(&member, shape, values)?,
+            FloatValues::F64(values) => out.matrix(&member, shape, values)?,
+        }
+    }
+    out.group("obsp", ("dict", "0.1.0"))?;
+    for entry in &schema.graphs {
+        let graph = read_graph(store, &entry.name)?;
+        let member = format!("obsp/{}", graph.name);
+        let group = out.group(&member, ("csr_matrix", "0.1.0"))?;
+        let n_cells = graph.n_cells();
+        out.attr_array(&member, &group, "shape", &[n_cells as i64, n_cells as i64])?;
+        match &graph.weights {
+            FloatValues::F32(values) => out.dataset(&format!("{member}/data"), values, None)?,
+            FloatValues::F64(values) => out.dataset(&format!("{member}/data"), values, None)?,
+        };
+        // int32 when every index fits, as scipy keeps them (as the layers).
+        let fits = |value: u64| value <= i32::MAX as u64;
+        if fits(n_cells) && fits(graph.nnz()) {
+            let indices: Vec<i32> = graph.indices.iter().map(|&index| index as i32).collect();
+            let indptr: Vec<i32> = graph.indptr.iter().map(|&offset| offset as i32).collect();
+            out.dataset(&format!("{member}/indices"), &indices, None)?;
+            out.dataset(&format!("{member}/indptr"), &indptr, None)?;
+        } else {
+            let indices: Vec<i64> = graph
+                .indices
+                .iter()
+                .map(|&index| i64::from(index))
+                .collect();
+            let indptr: Vec<i64> = graph.indptr.iter().map(|&offset| offset as i64).collect();
+            out.dataset(&format!("{member}/indices"), &indices, None)?;
+            out.dataset(&format!("{member}/indptr"), &indptr, None)?;
+        }
     }
     Ok(())
 }

@@ -43,6 +43,8 @@ use crate::pipeline_block::PipelineBlock;
 pub struct PcaStatistics {
     n_components: usize,
     pub(crate) cells: Arc<Vec<u64>>,
+    /// The store table position of each loadings row (set by the pipeline).
+    pub(crate) genes: Arc<Vec<u64>>,
     embedding: Arc<Vec<f32>>,
     loadings: Arc<Vec<f32>>,
     variance: Vec<f64>,
@@ -60,6 +62,12 @@ impl PcaStatistics {
     /// in stream order.
     pub fn cells(&self) -> &[u64] {
         &self.cells
+    }
+
+    /// The store table position of each loadings row: the genes of the stream at the
+    /// node, in its order (task 5.11).
+    pub fn genes(&self) -> &[u64] {
+        &self.genes
     }
 
     /// The cell embedding (scanpy's `X_pca`), row-major: `cells().len()` rows of
@@ -518,6 +526,7 @@ impl PcaAccumulator {
         PcaStatistics {
             n_components: self.n_components,
             cells: Arc::new(self.cells),
+            genes: Arc::new(Vec::new()),
             embedding: Arc::new(self.rows.iter().map(|&value| value as f32).collect()),
             loadings: Arc::new(loadings.values.iter().map(|&value| value as f32).collect()),
             variance,

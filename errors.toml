@@ -428,6 +428,19 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E126"
+variant = "CorruptMember"
+class = "CorruptStoreError"
+summary = "A stored embedding or graph breaks the store format (format.md sections 6 and 7), or disagrees with schema.json."
+message = "{kind} '{name}' is corrupt: {problem}"
+hint = "the store breaks docs/format.md sections 6 and 7; write the {kind} again with kyto, or report a bug if kyto wrote it"
+fields = [
+    { name = "kind", type = "str", doc = "`embedding` or `graph`.", example = "graph" },
+    { name = "name", type = "str", doc = "The member being read.", example = "connectivities" },
+    { name = "problem", type = "str", doc = "The invariant that fails and where.", example = "row 4: index 7 follows 9; indices must be strictly increasing" },
+]
+
+[[errors]]
 code = "KY-E201"
 variant = "AmbiguousName"
 class = "ResolutionError"
@@ -680,6 +693,20 @@ fields = [
     { name = "expression", type = "str", doc = "The expression, as code.", example = "cell_column('n_genes').recompute()" },
     { name = "kind", type = "str", doc = "`cell column` or `gene column`.", example = "cell column" },
     { name = "column", type = "str", doc = "The column.", example = "n_genes" },
+]
+
+[[errors]]
+code = "KY-E303"
+variant = "NoRecipe"
+class = "LineageError"
+summary = "A column with lineage is asked to be recomputed, but the store does not hold the plan that computed it."
+message = "{expression} asks to recompute {kind} '{column}', but {problem}"
+hint = "only stores written by a kyto sink hold the plan that computed a column (provenance.json); read '{column}' as stored, or compute it again from the matrix"
+fields = [
+    { name = "expression", type = "str", doc = "The expression, as code.", example = "cell_column('n_genes').recompute()" },
+    { name = "kind", type = "str", doc = "`cell column` or `gene column`.", example = "cell column" },
+    { name = "column", type = "str", doc = "The column.", example = "n_genes" },
+    { name = "problem", type = "str", doc = "Why the recipe is missing.", example = "provenance.json records no plan (lineage names node 3)" },
 ]
 
 [[errors]]

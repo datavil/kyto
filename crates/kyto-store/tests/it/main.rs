@@ -10,6 +10,7 @@ mod export_h5ad;
 mod gene_symbols;
 mod import_parity;
 mod layer_format;
+mod members;
 mod missing_values;
 mod remote_storage;
 mod round_trip;

@@ -39,6 +39,16 @@ pub struct ConnectivityGraph {
 }
 
 impl ConnectivityGraph {
+    /// A graph of these CSR arrays, as given: the caller checked them (a stored or
+    /// re-indexed graph, task 5.11; `CellGraph::new` checks the same invariants).
+    pub(crate) fn from_parts(indptr: Vec<u64>, indices: Vec<u32>, weights: Vec<f32>) -> Self {
+        Self {
+            indptr,
+            indices,
+            weights,
+        }
+    }
+
     /// The number of rows (and columns).
     pub fn n_cells(&self) -> usize {
         self.indptr.len() - 1

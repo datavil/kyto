@@ -253,6 +253,16 @@ pub enum KytoError {
         /// How to fix it.
         advice: String,
     },
+    /// KY-E126: A stored embedding or graph breaks the store format (format.md sections 6 and 7), or disagrees with schema.json.
+    #[error("KY-E126: {kind} '{name}' is corrupt: {problem}")]
+    CorruptMember {
+        /// `embedding` or `graph`.
+        kind: String,
+        /// The member being read.
+        name: String,
+        /// The invariant that fails and where.
+        problem: String,
+    },
     /// KY-E201: A feature name matches more than one feature.
     #[error("KY-E201: ambiguous name '{name}': it matches {}", quoted_list(.candidates))]
     AmbiguousName {
@@ -443,6 +453,18 @@ pub enum KytoError {
         /// The column.
         column: String,
     },
+    /// KY-E303: A column with lineage is asked to be recomputed, but the store does not hold the plan that computed it.
+    #[error("KY-E303: {expression} asks to recompute {kind} '{column}', but {problem}")]
+    NoRecipe {
+        /// The expression, as code.
+        expression: String,
+        /// `cell column` or `gene column`.
+        kind: String,
+        /// The column.
+        column: String,
+        /// Why the recipe is missing.
+        problem: String,
+    },
     /// KY-E401: A plan needs more memory than its limit, even with the smallest blocks.
     #[error("KY-E401: the plan needs at least {required_bytes} bytes but memory_limit is {limit_bytes} bytes")]
     MemoryLimit {
@@ -487,7 +509,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 50] = [
+    pub const CODES: [&'static str; 52] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -513,6 +535,7 @@ impl KytoError {
         "KY-E123",
         "KY-E124",
         "KY-E125",
+        "KY-E126",
         "KY-E201",
         "KY-E202",
         "KY-E203",
@@ -533,6 +556,7 @@ impl KytoError {
         "KY-E218",
         "KY-E301",
         "KY-E302",
+        "KY-E303",
         "KY-E401",
         "KY-E501",
         "KY-E502",
@@ -568,6 +592,7 @@ impl KytoError {
             Self::OutputExists { .. } => "KY-E123",
             Self::UnsupportedExport { .. } => "KY-E124",
             Self::InvalidRemoteStore { .. } => "KY-E125",
+            Self::CorruptMember { .. } => "KY-E126",
             Self::AmbiguousName { .. } => "KY-E201",
             Self::MixedAxes { .. } => "KY-E202",
             Self::RemovedGene { .. } => "KY-E203",
@@ -588,6 +613,7 @@ impl KytoError {
             Self::PlanJsonVersion { .. } => "KY-E218",
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
+            Self::NoRecipe { .. } => "KY-E303",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::MissingKernel { .. } => "KY-E501",
             Self::ThreadStart { .. } => "KY-E502",
@@ -624,6 +650,7 @@ impl KytoError {
             Self::OutputExists { .. } => "StoreInputError",
             Self::UnsupportedExport { .. } => "StoreInputError",
             Self::InvalidRemoteStore { .. } => "StoreInputError",
+            Self::CorruptMember { .. } => "CorruptStoreError",
             Self::AmbiguousName { .. } => "ResolutionError",
             Self::MixedAxes { .. } => "AxisError",
             Self::RemovedGene { .. } => "RemovedFeatureError",
@@ -644,6 +671,7 @@ impl KytoError {
             Self::PlanJsonVersion { .. } => "PlanError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
+            Self::NoRecipe { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
             Self::ThreadStart { .. } => "DeviceError",
@@ -730,6 +758,9 @@ impl KytoError {
             Self::InvalidRemoteStore { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e125"
             }
+            Self::CorruptMember { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e126"
+            }
             Self::AmbiguousName { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e201"
             }
@@ -789,6 +820,9 @@ impl KytoError {
             }
             Self::NoLineage { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e302"
+            }
+            Self::NoRecipe { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e303"
             }
             Self::MemoryLimit { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e401"
@@ -886,6 +920,9 @@ impl KytoError {
             Self::InvalidRemoteStore { advice, .. } => {
                 format!("{advice}, then open the store again")
             }
+            Self::CorruptMember { kind, .. } => {
+                format!("the store breaks docs/format.md sections 6 and 7; write the {kind} again with kyto, or report a bug if kyto wrote it")
+            }
             Self::AmbiguousName { candidates, .. } => {
                 format!("pass one full name instead, one of {}; where two share a full name, use cell_column(...), gene_expression(..., layer=...) or cell_embedding(...)", quoted_list(candidates))
             }
@@ -945,6 +982,9 @@ impl KytoError {
             }
             Self::NoLineage { column, .. } => {
                 format!("only derived columns written by kyto record their lineage (schema.json); read '{column}' as stored, or compute it again from the matrix")
+            }
+            Self::NoRecipe { column, .. } => {
+                format!("only stores written by a kyto sink hold the plan that computed a column (provenance.json); read '{column}' as stored, or compute it again from the matrix")
             }
             Self::MemoryLimit { required_bytes, .. } => {
                 format!("raise memory_limit to at least {required_bytes} bytes, or select fewer cells or genes before this step")
@@ -1090,6 +1130,11 @@ impl KytoError {
                 ("problem", FieldValue::Str(problem.clone())),
                 ("advice", FieldValue::Str(advice.clone())),
             ],
+            Self::CorruptMember { kind, name, problem } => vec![
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
             Self::AmbiguousName { name, candidates } => vec![
                 ("name", FieldValue::Str(name.clone())),
                 ("candidates", FieldValue::StrList(candidates.clone())),
@@ -1184,6 +1229,12 @@ impl KytoError {
                 ("expression", FieldValue::Str(expression.clone())),
                 ("kind", FieldValue::Str(kind.clone())),
                 ("column", FieldValue::Str(column.clone())),
+            ],
+            Self::NoRecipe { expression, kind, column, problem } => vec![
+                ("expression", FieldValue::Str(expression.clone())),
+                ("kind", FieldValue::Str(kind.clone())),
+                ("column", FieldValue::Str(column.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
             ],
             Self::MemoryLimit { required_bytes, limit_bytes } => vec![
                 ("required_bytes", FieldValue::Int(*required_bytes)),
@@ -1335,6 +1386,11 @@ impl KytoError {
                 problem: "unknown storage option 'aws_acess_key_id'".to_owned(),
                 advice: "use an option key object_store accepts for s3, such as aws_access_key_id, aws_secret_access_key, aws_region, aws_endpoint or allow_http".to_owned(),
             },
+            Self::CorruptMember {
+                kind: "graph".to_owned(),
+                name: "connectivities".to_owned(),
+                problem: "row 4: index 7 follows 9; indices must be strictly increasing".to_owned(),
+            },
             Self::AmbiguousName {
                 name: "CD3E".to_owned(),
                 candidates: vec!["meta:CD3E".to_owned(), "log1p:CD3E".to_owned()],
@@ -1429,6 +1485,12 @@ impl KytoError {
                 expression: "cell_column('n_genes').recompute()".to_owned(),
                 kind: "cell column".to_owned(),
                 column: "n_genes".to_owned(),
+            },
+            Self::NoRecipe {
+                expression: "cell_column('n_genes').recompute()".to_owned(),
+                kind: "cell column".to_owned(),
+                column: "n_genes".to_owned(),
+                problem: "provenance.json records no plan (lineage names node 3)".to_owned(),
             },
             Self::MemoryLimit {
                 required_bytes: 6000000000,

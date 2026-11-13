@@ -9,7 +9,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kyto_core::{AtlasSchema, ColumnSchema, LayerSchema, TableSchema, Tiling};
+use kyto_core::{
+    AtlasSchema, ColumnSchema, EmbeddingSchema, GraphSchema, LayerSchema, TableSchema, Tiling,
+};
 use serde_json::{Value, json};
 
 /// The input file of an import, recorded as `source` in `provenance.json` (format.md §9).
@@ -23,17 +25,31 @@ pub struct ImportSource {
     pub sha256: String,
 }
 
-/// The [`AtlasSchema`] of a new store (format.md §8), layers sorted by name in byte
-/// order. The store has no embeddings or graphs yet (their writers come with 6.x).
+/// The members of a new store besides its tables: layers, embeddings and graphs.
+pub(crate) struct StoreMembers {
+    pub(crate) layers: Vec<LayerSchema>,
+    pub(crate) embeddings: Vec<EmbeddingSchema>,
+    pub(crate) graphs: Vec<GraphSchema>,
+}
+
+/// The [`AtlasSchema`] of a new store (format.md §8), layers, embeddings and graphs
+/// each sorted by name in byte order.
 pub(crate) fn atlas_schema(
     n_cells: u64,
     n_genes: u64,
     tiling: Tiling,
     cell_columns: Vec<ColumnSchema>,
     gene_columns: Vec<ColumnSchema>,
-    mut layers: Vec<LayerSchema>,
+    members: StoreMembers,
 ) -> AtlasSchema {
+    let StoreMembers {
+        mut layers,
+        mut embeddings,
+        mut graphs,
+    } = members;
     layers.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
+    embeddings.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
+    graphs.sort_by(|left, right| left.name.as_bytes().cmp(right.name.as_bytes()));
     AtlasSchema {
         n_cells,
         n_genes,
@@ -45,8 +61,8 @@ pub(crate) fn atlas_schema(
             columns: gene_columns,
         },
         layers,
-        embeddings: Vec::new(),
-        graphs: Vec::new(),
+        embeddings,
+        graphs,
         modalities: Vec::new(),
     }
 }
@@ -55,6 +71,7 @@ pub(crate) fn atlas_schema(
 /// `source.path` (§10.3).
 pub(crate) fn provenance_json(
     source: Option<&ImportSource>,
+    plan: Option<Value>,
     started_at: SystemTime,
     finished_at: SystemTime,
 ) -> Value {
@@ -65,7 +82,7 @@ pub(crate) fn provenance_json(
             "zarrs": zarrs::version::version_str(),
             "zstd": zstd_safe::version_string(),
         },
-        "plan": null,
+        "plan": plan,
         "source": source.map(|source| json!({
             "kind": source.kind,
             "path": source.path,

@@ -290,14 +290,15 @@ fn a_scan_streams_the_stored_counts() {
 }
 
 #[test]
-fn nodes_not_run_yet_are_refused_before_reading() {
+fn every_node_runs_and_a_missing_output_is_refused() {
     let work = tempfile::tempdir().unwrap();
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let base = scan(&store);
     // `select_genes` and the other 5.8 steps run now, sinks since 5.9, `scale` since
-    // 6.4, `pca` since 6.5, `neighbors` since 6.6, `leiden`/`louvain` since 6.8; a
-    // clustering past a `take_cells` above its `neighbors` waits for 5.11.
+    // 6.4, `pca` since 6.5, `neighbors` since 6.6, `leiden`/`louvain` since 6.8, and a
+    // clustering past a `take_cells` above its `neighbors` since 5.11 (the subgraph of
+    // the kept cells, `embeddings_graphs.rs`).
     let leiden = base
         .pca(Some("counts"), "X_pca", 2, 0)
         .unwrap()
@@ -308,13 +309,7 @@ fn nodes_not_run_yet_are_refused_before_reading() {
         .cluster(cluster_params(ClusterMethod::Leiden, "connectivities"))
         .unwrap();
     let physical = PhysicalPlan::new(leiden.optimize(), PhysicalOptions::default());
-    let error = Pipeline::new(&physical, 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601");
-    let message = error.to_string();
-    assert!(
-        message.contains("leiden") && message.contains("take_cells") && message.contains("5.11"),
-        "{message}"
-    );
+    Pipeline::new(&physical, 0).unwrap();
     let physical = PhysicalPlan::new(base.optimize(), PhysicalOptions::default());
     let error = Pipeline::new(&physical, 1).unwrap_err();
     assert_eq!(error.code(), "KY-E215");
@@ -561,16 +556,23 @@ fn umap_lays_out_the_connectivities_of_the_neighbors_below() {
     let error = Pipeline::new(&physical, 0).unwrap_err();
     assert_eq!(error.code(), "KY-E215");
     assert!(error.to_string().contains("distances graph"), "{error}");
-    // The layout of the kept cells needs the graph's rows of those cells (5.11).
+    // The layout of the kept cells lays out the graph between them (5.11).
     let taken = graphs
         .take_cells((0..10).map(|cell| format!("c{cell}")))
         .unwrap()
         .umap(params)
         .unwrap();
-    let physical = PhysicalPlan::new(taken.optimize(), PhysicalOptions::default());
-    let error = Pipeline::new(&physical, 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601");
-    assert!(error.to_string().contains("5.11"), "{error}");
+    let found = node_statistics(
+        &taken,
+        Member::Embedding("X_umap".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Umap(umap) => Some((**umap).clone()),
+            _ => None,
+        },
+    );
+    assert_eq!(found.cells(), (0..10).collect::<Vec<u64>>());
+    assert_eq!(found.layout().embedding().len(), 10 * 2);
 }
 
 /// The statistics of the first node `pick` takes, run on `threads` threads.
@@ -638,19 +640,26 @@ fn neighbors_search_the_embedding_of_the_pca_below() {
         assert_eq!(found.connectivities(), &connectivities(&expected));
     }
 
-    // The graph of the kept cells needs the embedding's rows of those cells (5.11).
+    // The graph of the kept cells searches the embedding's rows of those cells (5.11).
     let taken = pca
         .take_cells((0..10).map(|cell| format!("c{cell}")))
         .unwrap()
-        .neighbors(params)
+        .neighbors(params.clone())
         .unwrap();
-    let physical = PhysicalPlan::new(taken.optimize(), PhysicalOptions::default());
-    let error = Pipeline::new(&physical, 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601");
-    let message = error.to_string();
-    assert!(
-        message.contains("take_cells") && message.contains("5.11"),
-        "{message}"
+    let found = node_statistics(
+        &taken,
+        Member::Graph("distances".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Neighbors(neighbors) => Some((**neighbors).clone()),
+            _ => None,
+        },
+    );
+    assert_eq!(found.cells(), (0..10).collect::<Vec<u64>>());
+    let kept: Vec<f32> = embedding.embedding()[..10 * 3].to_vec();
+    assert_eq!(
+        found.distances(),
+        &nearest_neighbors(&kept, 3, &params).unwrap()
     );
 }
 

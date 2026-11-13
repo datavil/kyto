@@ -9,9 +9,11 @@
 //! physical plan gives such a step); and turn a change of genes into a
 //! [`GeneSelection`], the operator that remaps every later block's genes (dropping
 //! the others, in the selection's order). `select_genes` keeps the order it lists
-//! (4.1 Open (2)); a filter keeps the table order.
-//! Does not: read gene embeddings (`KY-E601`, plan 5.11), or check names (the plan did;
-//! a gene a filter removed is `KY-E210` here, at run time).
+//! (4.1 Open (2)); a filter keeps the table order. A gene embedding component (task
+//! 5.11, `PCs` loadings or a stored one) is each gene's value in that column, found by
+//! the gene's store position.
+//! Does not: check names (the plan did; a gene a filter removed is `KY-E210` here, at
+//! run time).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -25,8 +27,10 @@ use zarrs::storage::ReadableStorageTraits;
 
 use crate::block_stream::{StreamSource, Windows};
 use crate::cell_block_pool::CellBlockPool;
+use crate::cell_steps::embedding_values;
 use crate::expression::{Prepared, cast, mask};
 use crate::pipeline_block::PipelineBlock;
+use crate::run_members::Rows;
 use crate::statistics::HvgValues;
 
 /// The genes present at a step of the stream, and their table.
@@ -160,13 +164,30 @@ pub(crate) enum GeneStepKind {
 }
 
 impl GeneStepKind {
-    /// The cell profiles its expressions read: (layer, cell ID), without repeats.
-    pub(crate) fn profiles(&self) -> Vec<(String, String)> {
-        let prepared: Vec<&Prepared> = match self {
+    /// Its expressions.
+    pub(crate) fn prepared(&self) -> Vec<&Prepared> {
+        match self {
             Self::Filter(predicate) => vec![predicate],
             Self::Select(_) => Vec::new(),
             Self::Columns(columns) => columns.iter().map(|(_, prepared, _)| prepared).collect(),
-        };
+        }
+    }
+
+    /// Its expressions, to change (`.recompute()` leaves replaced by their recipes).
+    pub(crate) fn prepared_mut(&mut self) -> Vec<&mut Prepared> {
+        match self {
+            Self::Filter(predicate) => vec![predicate],
+            Self::Select(_) => Vec::new(),
+            Self::Columns(columns) => columns
+                .iter_mut()
+                .map(|(_, prepared, _)| prepared)
+                .collect(),
+        }
+    }
+
+    /// The cell profiles its expressions read: (layer, cell ID), without repeats.
+    pub(crate) fn profiles(&self) -> Vec<(String, String)> {
+        let prepared = self.prepared();
         let mut profiles = Vec::new();
         for leaf in prepared.iter().flat_map(|prepared| &prepared.leaves) {
             if let Source::Profile {
@@ -184,8 +205,9 @@ impl GeneStepKind {
     }
 
     /// Run the step on `genes`, with the profiles of [`GeneStepKind::profiles`]
-    /// (`profiles[i]` the values of the `i`-th, one per gene present). Returns the
-    /// operator for later blocks if the genes change.
+    /// (`profiles[i]` the values of the `i`-th, one per gene present) and the rows of
+    /// the gene embeddings its leaves read (by name; task 5.11). Returns the operator
+    /// for later blocks if the genes change.
     ///
     /// # Errors
     /// - `KY-E210` if `select_genes` lists a gene an earlier step removed.
@@ -194,6 +216,7 @@ impl GeneStepKind {
         &self,
         genes: &mut Genes,
         profiles: &[((String, String), Series)],
+        embeddings: &[(String, Arc<Rows>)],
         store: &str,
     ) -> Result<Option<GeneSelection>, KytoError> {
         let path = format!("{store}/genes.parquet");
@@ -212,6 +235,14 @@ impl GeneStepKind {
                         })
                         .map(|(_, values)| values.clone())
                         .ok_or_else(|| corrupt(&path, format!("no profile of cell '{cell_id}'"))),
+                    Source::Embedding { name, component } => embeddings
+                        .iter()
+                        .find(|(known, _)| known == name)
+                        .map(|(_, rows)| {
+                            let component = usize::try_from(*component).unwrap_or(usize::MAX);
+                            embedding_values(rows, component, &genes.positions)
+                        })
+                        .ok_or_else(|| corrupt(&path, format!("no rows of embedding '{name}'"))),
                     other => Err(corrupt(
                         &path,
                         format!("unexpected gene expression leaf {other:?}"),

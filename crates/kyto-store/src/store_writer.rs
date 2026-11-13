@@ -8,9 +8,12 @@
 //! `schema.json`, the root `zarr.json` last), fsyncs, and renames the directory to the
 //! target. A failed or dropped writer deletes its temporary directory, so the target is
 //! never a half store (format.md §10.1).
-//! Does not: write embeddings or graphs (their groups are written empty; 6.x adds
-//! writers), fill in the plan, seeds or timings of `provenance.json` (4.3, 8.5), or
-//! stream the cell table (it is given whole to `finish`, the buffered path of §10.2).
+//! Embeddings and graphs given with [`StoreWriter::add_embedding`] and
+//! [`StoreWriter::add_graph`] are held whole and written by `finish` (format.md §6, §7;
+//! task 5.11), and [`StoreWriter::set_plan`] records the plan JSON that wrote the store
+//! in `provenance.json` (§9).
+//! Does not: fill in the seeds or timings of `provenance.json` (8.5), or stream the
+//! cell table, embeddings or graphs (given whole, the buffered path of §10.2).
 //!
 //! Memory: per layer, fewer than `C` buffered rows, fewer than `S` unwritten entries and
 //! 8 bytes per tile between calls; during a push, a copy of the pushed rows and one
@@ -20,7 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use kyto_core::{LayerSchema, Lineage};
+use kyto_core::{Axis, LayerSchema, Lineage};
 use kyto_error::KytoError;
 use polars::prelude::DataFrame;
 use rayon::prelude::*;
@@ -29,10 +32,12 @@ use zarrs::filesystem::FilesystemStore;
 use crate::atomic_dir::AtomicDir;
 use crate::cell_block::{CellBlock, CellValues};
 use crate::commit_check::{CommitCheck, proceed};
+use crate::embedding_io::{Embedding, write_embedding};
+use crate::graph_io::{Graph, write_graph};
 use crate::layer_open::{LAYER_KIND, ValueDtype};
 use crate::layer_stream::LayerStream;
 use crate::names::validate_member_name;
-use crate::store_json::{ImportSource, atlas_schema, provenance_json};
+use crate::store_json::{ImportSource, StoreMembers, atlas_schema, provenance_json};
 use crate::store_version::FORMAT_VERSION;
 use crate::table_axis::TableAxis;
 use crate::table_check::{PlainStrings, check_table};
@@ -79,6 +84,11 @@ pub struct StoreWriter {
     ordered: Vec<(TableAxis, String)>,
     /// Lineage to record for derived columns in `schema.json` (format.md §8).
     lineage: Vec<(TableAxis, String, Lineage)>,
+    /// Embeddings and graphs to write at the end (format.md §6, §7).
+    embeddings: Vec<Embedding>,
+    graphs: Vec<Graph>,
+    /// The plan JSON that wrote the store, for `provenance.json` (§9).
+    plan: Option<serde_json::Value>,
     /// Set when a write failed: the arrays are then incomplete, so later calls fail.
     failed: bool,
 }
@@ -164,6 +174,9 @@ impl StoreWriter {
             started_at,
             ordered: Vec::new(),
             lineage: Vec::new(),
+            embeddings: Vec::new(),
+            graphs: Vec::new(),
+            plan: None,
             failed: false,
         })
     }
@@ -182,6 +195,26 @@ impl StoreWriter {
     /// Checked by [`StoreWriter::finish`].
     pub fn set_lineage(&mut self, axis: TableAxis, column: &str, lineage: Lineage) {
         self.lineage.push((axis, column.to_owned(), lineage));
+    }
+
+    /// Write `embedding` with the store (format.md §6): one row per cell of the store
+    /// (as many as the cell table given to `finish`) or per gene. Held until `finish`,
+    /// which checks it.
+    pub fn add_embedding(&mut self, embedding: Embedding) {
+        self.embeddings.push(embedding);
+    }
+
+    /// Write `graph` with the store (format.md §7), over the store's cells. Held until
+    /// `finish`, which checks it.
+    pub fn add_graph(&mut self, graph: Graph) {
+        self.graphs.push(graph);
+    }
+
+    /// Record `plan` (the plan JSON of task 4.3, as a JSON value) as the `plan` of
+    /// `provenance.json` (format.md §9): the executor's sink records the plan that
+    /// wrote the store, so a recomputed column finds its recipe (task 5.11).
+    pub fn set_plan(&mut self, plan: serde_json::Value) {
+        self.plan = Some(plan);
     }
 
     /// Matrix rows pushed so far.
@@ -248,6 +281,9 @@ impl StoreWriter {
     /// # Errors
     /// - `KY-E111`, `KY-E112` or `KY-E101` if `cells` breaks format.md §5.
     /// - `KY-E119` if `cells` does not have one row per pushed row.
+    /// - `KY-E102` or `KY-E103` for a bad or repeated embedding or graph name, `KY-E104`
+    ///   for an embedding without one row per cell (gene) or width 0, or a graph that
+    ///   breaks format.md §7 over the store's cells.
     /// - `KY-E105` if `n_cells` is above `2^32 - 1`.
     /// - `KY-E118` if the target appeared meanwhile and may not be replaced.
     /// - `KY-E110` if the file system fails, or an earlier write did.
@@ -284,6 +320,7 @@ impl StoreWriter {
         }
         let n_genes = self.genes.height() as u64;
         TileGrid::new(n_cells, n_genes, self.tiling)?;
+        self.check_members(n_cells, n_genes)?;
 
         // Format.md §10.2, at the end: arrays' zarr.json and tile_offsets, ...
         let mut summaries = Vec::with_capacity(self.layers.len());
@@ -308,6 +345,17 @@ impl StoreWriter {
             let kind = serde_json::json!({ "kind": LAYER_KIND });
             store_group(storage, &format!("/layers/{name}"), Some(kind))?;
         }
+        let options = LayerWriteOptions::default();
+        for embedding in &self.embeddings {
+            let block_rows = match embedding.axis {
+                Axis::Cells => self.tiling.cell_block_size,
+                Axis::Genes => self.tiling.gene_block_size,
+            };
+            write_embedding(storage, embedding, block_rows, options.zstd_level)?;
+        }
+        for graph in &self.graphs {
+            write_graph(storage, graph, &options)?;
+        }
         for group in ["/layers", "/embeddings", "/graphs"] {
             store_group(storage, group, None)?;
         }
@@ -330,7 +378,8 @@ impl StoreWriter {
             };
             set_lineage(*axis, columns, name, lineage)?;
         }
-        let provenance = provenance_json(source, self.started_at, SystemTime::now());
+        let provenance =
+            provenance_json(source, self.plan.take(), self.started_at, SystemTime::now());
         write_json(&store.join("provenance.json"), &provenance)?;
         let schema = atlas_schema(
             n_cells,
@@ -338,7 +387,11 @@ impl StoreWriter {
             self.tiling,
             cell_columns,
             gene_columns,
-            summaries,
+            StoreMembers {
+                layers: summaries,
+                embeddings: self.embeddings.iter().map(Embedding::schema).collect(),
+                graphs: self.graphs.iter().map(Graph::schema).collect(),
+            },
         );
         write_json(&store.join("schema.json"), &schema)?;
         // ... and the root zarr.json last (format.md §3).
@@ -355,6 +408,64 @@ impl StoreWriter {
                 &self.dir.path().display().to_string(),
                 "an earlier write to this store failed; start a new writer",
             ));
+        }
+        Ok(())
+    }
+
+    /// Check the embeddings and graphs against the store's `n_cells` and `n_genes`.
+    fn check_members(&self, n_cells: u64, n_genes: u64) -> Result<(), KytoError> {
+        let invalid = |parameter: String, value: String, accepted: String| {
+            Err(KytoError::InvalidParameter {
+                parameter,
+                value,
+                accepted,
+            })
+        };
+        let names = self
+            .embeddings
+            .iter()
+            .map(|embedding| ("embedding", embedding.name.as_str()))
+            .chain(
+                self.graphs
+                    .iter()
+                    .map(|graph| ("graph", graph.name.as_str())),
+            );
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for (kind, name) in names {
+            validate_member_name(kind, name)?;
+            if let Some((_, earlier)) = seen.iter().find(|(seen_kind, earlier)| {
+                *seen_kind == kind && earlier.eq_ignore_ascii_case(name)
+            }) {
+                return Err(KytoError::MemberExists {
+                    kind: kind.to_owned(),
+                    name: name.to_owned(),
+                    existing: (*earlier).to_owned(),
+                });
+            }
+            seen.push((kind, name));
+        }
+        for embedding in &self.embeddings {
+            let (rows, axis) = match embedding.axis {
+                Axis::Cells => (n_cells, "cell"),
+                Axis::Genes => (n_genes, "gene"),
+            };
+            let values = embedding.values.len() as u64;
+            if embedding.width == 0 || values != rows * embedding.width {
+                return invalid(
+                    format!("embedding '{}'", embedding.name),
+                    format!("{values} values of width {}", embedding.width),
+                    format!("width at least 1 and one row per {axis} ({rows} rows)"),
+                );
+            }
+        }
+        for graph in &self.graphs {
+            if let Some(problem) = graph.check(n_cells) {
+                return invalid(
+                    format!("graph '{}'", graph.name),
+                    problem,
+                    format!("CSR over the store's {n_cells} cells (format.md section 7)"),
+                );
+            }
         }
         Ok(())
     }

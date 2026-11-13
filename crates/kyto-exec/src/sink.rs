@@ -18,34 +18,45 @@
 //! after the last block (while the tables are written, or during the `.h5ad` export)
 //! still leaves no target. Once the target is renamed into place the sink has
 //! finished: a later cancel changes nothing.
-//! Does not: write embeddings or graphs (`KY-E601`: the plan has nothing that writes
-//! them yet), remote targets (the path is a local path), or count the tables it holds
-//! in the estimate (5.10). Cluster labels (6.8) arrive as an `Enum` computed column
-//! and are written as one (a plan with a clustering also carries the neighbour graphs,
-//! so it is refused here until 5.11).
+//! Embeddings and graphs (task 5.11): every one the plan carries is written, from the
+//! scanned store or from the statistics of the node that computed it (`pca`'s
+//! embedding and loadings, `umap`'s layout, `neighbors`' graphs), at the rows of the
+//! cells written (in their order) and of the genes present; a graph keeps the edges
+//! between the cells written, re-indexed (anndata's `obsp` subset). The plan is
+//! recorded in `provenance.json`, and a column a `with_cells`/`with_genes` computes from
+//! one layer gets `lineage` naming that layer and the node, so a later plan can
+//! recompute it (`recipe.rs`): only when the sink writes that layer and no node between
+//! the column and the sink rewrites it or changes the other axis, and the table columns
+//! it reads (a QC gene set's gene columns included) reach the sink unchanged (the stored
+//! values then are what the recipe gives on the new store).
+//! Does not: remote targets (the path is a local path), or count the tables,
+//! embeddings and graphs it holds in the estimate (5.10). Cluster labels (6.8) arrive
+//! as an `Enum` computed column and are written as one.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use kyto_core::{Axis, CellExpr, ColumnDtype, GeneExpr, Lineage};
+use kyto_core::{Axis, CellExpr, ColumnDtype, ExprNode, GeneExpr, Lineage, Source};
 use kyto_error::KytoError;
-use kyto_plan::{LogicalNode, Plan, Sink};
+use kyto_plan::{Columns, Plan, Sink, Transform};
 use kyto_store::{
-    CellBlock, LayerSpec, LayerWriteOptions, SinkH5adOptions, StoreWriter, TableAxis, Tiling,
-    ValueDtype, read_table, sink_h5ad_checked,
+    CellBlock, Embedding, Graph, LayerSpec, LayerWriteOptions, SinkH5adOptions, StoreWriter,
+    TableAxis, Tiling, ValueDtype, read_table, sink_h5ad_checked,
 };
 use polars::prelude::{Column, DataFrame, DataType, IdxCa, IdxSize, NamedFrom, Series};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::ReadableStorageTraits;
 
-use crate::expression::cast;
-use crate::pipeline::{ExecuteOptions, Pipeline};
+use crate::expression::{Prepared, cast};
+use crate::pipeline::{ExecuteOptions, Pipeline, ResolvedMembers};
+use crate::run_members::{EmbeddingSource, GraphSource, StoredMembers};
 
 /// One column a sink writes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct WrittenColumn {
     pub(crate) name: String,
-    /// Lineage carried over from the scanned store (a stored derived column).
+    /// Lineage carried over from the scanned store (a stored derived column), or of a
+    /// column the plan computes from one layer (task 5.11).
     pub(crate) lineage: Option<Lineage>,
     /// An `Enum` recorded as ordered in the scanned store.
     pub(crate) ordered: bool,
@@ -64,35 +75,24 @@ pub(crate) struct SinkSpec {
     pub(crate) x_layer: Option<String>,
     pub(crate) cells: Vec<WrittenColumn>,
     pub(crate) genes: Vec<WrittenColumn>,
+    /// The embeddings and graphs, by name, with their sources (set by
+    /// [`SinkSpec::set_members`]).
+    pub(crate) embeddings: Vec<(String, Option<EmbeddingSource>)>,
+    pub(crate) graphs: Vec<(String, Option<GraphSource>)>,
+    /// The plan JSON (task 4.3) recorded in `provenance.json`.
+    pub(crate) plan: Option<serde_json::Value>,
 }
 
 impl SinkSpec {
     /// The spec of the sink node `plan`.
     ///
     /// # Errors
-    /// `KY-E601` if the plan carries embeddings or graphs (nothing writes them yet).
+    /// None today; the `Result` keeps room for checks of the plan.
     pub(crate) fn new(plan: &Plan) -> Result<Self, KytoError> {
         let Plan::Sink(node) = plan else {
             unreachable!("SinkSpec::new is called on sink nodes only")
         };
         let schema = plan.output_schema().atlas();
-        if let Some(name) = schema
-            .embeddings
-            .iter()
-            .map(|embedding| format!("the embedding '{}'", embedding.name))
-            .chain(
-                schema
-                    .graphs
-                    .iter()
-                    .map(|graph| format!("the graph '{}'", graph.name)),
-            )
-            .next()
-        {
-            return Err(KytoError::NotImplementedYet {
-                method: format!("{} writing {name} in the executor", node.params().method()),
-                task: "5.11".to_owned(),
-            });
-        }
         let mut layers: Vec<LayerSpec> = schema
             .layers
             .iter()
@@ -107,38 +107,218 @@ impl SinkSpec {
             .default_layer()
             .filter(|name| layers.iter().any(|layer| layer.name == *name))
             .map(str::to_owned);
+        let cells = written_columns(plan, Axis::Cells, &layers);
+        let genes = written_columns(plan, Axis::Genes, &layers);
         Ok(Self {
             target: node.params().clone(),
-            layers,
             tiling: schema.tiling,
             x_layer,
-            cells: written_columns(plan, Axis::Cells),
-            genes: written_columns(plan, Axis::Genes),
+            cells,
+            genes,
+            embeddings: schema
+                .embeddings
+                .iter()
+                .map(|embedding| (embedding.name.clone(), None))
+                .collect(),
+            graphs: schema
+                .graphs
+                .iter()
+                .map(|graph| (graph.name.clone(), None))
+                .collect(),
+            plan: serde_json::from_str(&plan.to_json()).ok(),
+            layers,
         })
+    }
+
+    /// Where each embedding and graph the sink writes comes from (task 5.11).
+    pub(crate) fn set_members(&mut self, members: &ResolvedMembers) {
+        for (name, source) in &mut self.embeddings {
+            *source = members.embeddings.get(name).cloned();
+        }
+        for (name, source) in &mut self.graphs {
+            *source = members.graphs.get(name).cloned();
+        }
     }
 }
 
 /// The columns of `axis` the sink `plan` writes: its schema's, in order, without the
-/// stored derived columns a read at the sink refuses as stale (`KY-E301`).
-fn written_columns(plan: &Plan, axis: Axis) -> Vec<WrittenColumn> {
+/// stored derived columns a read at the sink refuses as stale (`KY-E301`); a column the
+/// plan computes gets the lineage of [`computed_lineage`].
+fn written_columns(plan: &Plan, axis: Axis, layers: &[LayerSpec]) -> Vec<WrittenColumn> {
     plan.output_schema()
         .table(axis)
         .columns
         .iter()
-        .filter(|column| {
-            column.lineage.is_none()
-                || match axis {
-                    Axis::Cells => plan.resolve(&CellExpr::column(column.name.clone())).is_ok(),
-                    Axis::Genes => plan.resolve(&GeneExpr::column(column.name.clone())).is_ok(),
+        .filter_map(|column| {
+            let lineage = match computed_lineage(plan, axis, &column.name, layers) {
+                Some(lineage) => lineage,
+                None => {
+                    let stale = column.lineage.is_some()
+                        && match axis {
+                            Axis::Cells => plan
+                                .resolve(&CellExpr::column(column.name.clone()))
+                                .is_err(),
+                            Axis::Genes => plan
+                                .resolve(&GeneExpr::column(column.name.clone()))
+                                .is_err(),
+                        };
+                    if stale {
+                        return None;
+                    }
+                    column.lineage.clone()
                 }
-        })
-        .map(|column| WrittenColumn {
-            name: column.name.clone(),
-            lineage: column.lineage.clone(),
-            ordered: matches!(column.dtype, ColumnDtype::Enum { ordered: true, .. }),
-            dtype: column.dtype,
+            };
+            Some(WrittenColumn {
+                name: column.name.clone(),
+                lineage,
+                ordered: matches!(column.dtype, ColumnDtype::Enum { ordered: true, .. }),
+                dtype: column.dtype,
+            })
         })
         .collect()
+}
+
+/// For a column `name` of `axis` the sink `plan` computes (the last `with_cells` or
+/// `with_genes` writing it), `Some` of its lineage: that node and the one layer its
+/// expression reads (gene values, QC metrics or profiles of it, besides table columns
+/// and literals), when the sink writes that layer and no node between the column and
+/// the sink rewrites it or changes the other axis, and every table column it reads (its
+/// own axis's, and the gene columns of a QC gene set) reaches the sink as that node read
+/// it: no node from it on writes one (`with_columns`, a clustering's `into`) and the
+/// sink keeps it. `Some(None)` otherwise. `None` when the plan does not compute the
+/// column.
+fn computed_lineage(
+    plan: &Plan,
+    axis: Axis,
+    name: &str,
+    layers: &[LayerSpec],
+) -> Option<Option<Lineage>> {
+    let other = match axis {
+        Axis::Cells => Axis::Genes,
+        Axis::Genes => Axis::Cells,
+    };
+    let mut unchanged = true;
+    let mut rewritten: Vec<&str> = Vec::new();
+    // The table columns written from the sink back to the current node.
+    let mut written: Vec<(Axis, String)> = Vec::new();
+    for node in plan.nodes() {
+        match node {
+            Plan::WithColumns(with) => match with.params().columns() {
+                Columns::Cells(columns) => written.extend(
+                    columns
+                        .iter()
+                        .map(|(column, _)| (Axis::Cells, column.clone())),
+                ),
+                Columns::Genes(columns) => written.extend(
+                    columns
+                        .iter()
+                        .map(|(column, _)| (Axis::Genes, column.clone())),
+                ),
+            },
+            Plan::Cluster(cluster) => written.push((Axis::Cells, cluster.params().into.clone())),
+            _ => {}
+        }
+        if let Plan::WithColumns(with) = node {
+            let expression = match (with.params().columns(), axis) {
+                (Columns::Cells(columns), Axis::Cells) => columns
+                    .iter()
+                    .find(|(column, _)| column == name)
+                    .map(|(_, expr)| Arc::clone(expr.node())),
+                (Columns::Genes(columns), Axis::Genes) => columns
+                    .iter()
+                    .find(|(column, _)| column == name)
+                    .map(|(_, expr)| Arc::clone(expr.node())),
+                _ => None,
+            };
+            if let Some(expression) = expression {
+                let lineage = single_layer(&expression)
+                    .filter(|layer| {
+                        unchanged
+                            && !rewritten.contains(&layer.as_str())
+                            && layers.iter().any(|written| written.name == *layer)
+                            && table_reads(&expression, axis)
+                                .iter()
+                                .all(|read| !written.contains(read) && kept_at_sink(plan, read))
+                    })
+                    .map(|layer| Lineage {
+                        layer,
+                        node: node.id().to_string(),
+                    });
+                return Some(lineage);
+            }
+        }
+        if node.changes_axis() == Some(other) {
+            unchanged = false;
+        }
+        let writes = match node {
+            Plan::MapElementwise(map) => map.params().writes_layer(),
+            Plan::CrossCell(cross_cell) => cross_cell.params().writes_layer(),
+            _ => None,
+        };
+        if let Some(layer) = writes {
+            rewritten.push(layer);
+        }
+    }
+    None
+}
+
+/// The table columns `expression` (of `axis`) reads: its own axis's columns, and the
+/// gene columns of each QC metric's gene set.
+fn table_reads(expression: &Arc<ExprNode>, axis: Axis) -> Vec<(Axis, String)> {
+    let prepared = Prepared::new(expression);
+    let mut reads: Vec<(Axis, String)> = prepared
+        .columns
+        .into_iter()
+        .map(|column| (axis, column))
+        .collect();
+    for leaf in &prepared.leaves {
+        if let Source::Qc { metric, .. } = leaf
+            && let Some(genes) = metric.genes()
+        {
+            reads.extend(
+                Prepared::new(genes.node())
+                    .columns
+                    .into_iter()
+                    .map(|column| (Axis::Genes, column)),
+            );
+        }
+    }
+    reads
+}
+
+/// Whether the sink `plan` writes table column `read` (not dropped as stale).
+fn kept_at_sink(plan: &Plan, read: &(Axis, String)) -> bool {
+    let (axis, name) = read;
+    plan.output_schema().column(*axis, name).is_some()
+        && match axis {
+            Axis::Cells => plan.resolve(&CellExpr::column(name.clone())).is_ok(),
+            Axis::Genes => plan.resolve(&GeneExpr::column(name.clone())).is_ok(),
+        }
+}
+
+/// The one layer the leaves of `expression` read, if it reads exactly one and nothing
+/// but layers, table columns and literals.
+fn single_layer(expression: &Arc<ExprNode>) -> Option<String> {
+    let mut found: Option<String> = None;
+    for leaf in Prepared::new(expression).leaves {
+        let layer = match leaf {
+            Source::Expression {
+                layer: Some(layer), ..
+            }
+            | Source::Qc {
+                layer: Some(layer), ..
+            }
+            | Source::Profile {
+                layer: Some(layer), ..
+            } => layer,
+            _ => return None,
+        };
+        match &found {
+            Some(known) if *known != layer => return None,
+            _ => found = Some(layer),
+        }
+    }
+    found
 }
 
 impl Pipeline {
@@ -259,9 +439,11 @@ impl Pipeline {
             }
         }
         let mut positions: Vec<IdxSize> = Vec::new();
+        let mut written: Vec<u64> = Vec::new();
         let mut computed: Option<DataFrame> = None;
         while let Some(block) = stream.next() {
             let mut block = block?;
+            written.extend_from_slice(&block.cells);
             for cell in &block.cells {
                 positions.push(IdxSize::try_from(*cell).map_err(|_| {
                     corrupt(&self.store, "a cell position is beyond Polars' index")
@@ -308,6 +490,40 @@ impl Pipeline {
             &self.store,
         )?;
         let n_cells = cells.height() as u64;
+        let gene_positions: Vec<u64> = match stream.genes() {
+            Some(genes) => genes.positions().to_vec(),
+            None => (0..genes.height() as u64).collect(),
+        };
+        let mut members = StoredMembers::new(&self.store);
+        for (name, source) in &spec.embeddings {
+            let source = known(source.as_ref(), "embedding", name)?;
+            let rows = members.rows(source, stream.statistics())?;
+            let keys = match source.axis() {
+                Axis::Cells => &written,
+                Axis::Genes => &gene_positions,
+            };
+            writer.add_embedding(Embedding {
+                name: name.clone(),
+                axis: source.axis(),
+                width: rows.width as u64,
+                values: rows.take(keys, "embedding", name)?,
+            });
+        }
+        for (name, source) in &spec.graphs {
+            let source = known(source.as_ref(), "graph", name)?;
+            let graph = members
+                .keyed_graph(source, stream.statistics())?
+                .induced(&written, name)?;
+            writer.add_graph(Graph {
+                name: name.clone(),
+                indptr: graph.indptr,
+                indices: graph.indices,
+                weights: graph.weights,
+            });
+        }
+        if let Some(plan) = &spec.plan {
+            writer.set_plan(plan.clone());
+        }
         // The last cancel point: after it, the store is renamed into place.
         writer.finish_checked(&cells, None, &|| control.check())?;
         Ok(n_cells)
@@ -395,6 +611,17 @@ fn check_target(
         return Err(exists("it exists; pass overwrite to replace it"));
     }
     Ok(())
+}
+
+/// The source `Pipeline::new` resolved for a member the sink writes.
+fn known<'a, T>(source: Option<&'a T>, kind: &str, name: &str) -> Result<&'a T, KytoError> {
+    source.ok_or_else(|| KytoError::InvalidArgument {
+        function: "Pipeline::sink".to_owned(),
+        parameter: kind.to_owned(),
+        value: format!("'{name}'"),
+        problem: "no step of the plan writes it and the store does not hold it".to_owned(),
+        accepted: "a plan built by kyto".to_owned(),
+    })
 }
 
 fn corrupt(store: &str, problem: &str) -> KytoError {

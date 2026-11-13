@@ -285,6 +285,7 @@ class LineageError(KytoError, ValueError):
     Subclasses `KytoError` and `ValueError`. Raised with these codes:
 
     - ``KY-E302``: A column without lineage is asked to be recomputed.
+    - ``KY-E303``: A column with lineage is asked to be recomputed, but the store does not hold the plan that computed it.
 
     See `KytoError` for the parameters and attributes.
 
@@ -378,6 +379,7 @@ class CorruptStoreError(KytoError, ValueError):
     - ``KY-E113``: A stored cell or gene table breaks format.md section 5.
     - ``KY-E116``: A path is not a kyto store: its root zarr.json is missing or has no format_version (format.md section 3).
     - ``KY-E122``: A store's schema.json is missing, is not JSON, or breaks format.md section 8.
+    - ``KY-E126``: A stored embedding or graph breaks the store format (format.md sections 6 and 7), or disagrees with schema.json.
 
     See `KytoError` for the parameters and attributes.
 
@@ -845,6 +847,17 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("advice", "str"),
         ),
     ),
+    "KY-E126": _Entry(
+        class_name="CorruptStoreError",
+        message="{kind} '{name}' is corrupt: {problem}",
+        hint="the store breaks docs/format.md sections 6 and 7; write the {kind} again with kyto, or report a bug if kyto wrote it",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e126",
+        fields=(
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
     "KY-E201": _Entry(
         class_name="ResolutionError",
         message="ambiguous name '{name}': it matches {candidates}",
@@ -1056,6 +1069,18 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("expression", "str"),
             _Field("kind", "str"),
             _Field("column", "str"),
+        ),
+    ),
+    "KY-E303": _Entry(
+        class_name="LineageError",
+        message="{expression} asks to recompute {kind} '{column}', but {problem}",
+        hint="only stores written by a kyto sink hold the plan that computed a column (provenance.json); read '{column}' as stored, or compute it again from the matrix",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e303",
+        fields=(
+            _Field("expression", "str"),
+            _Field("kind", "str"),
+            _Field("column", "str"),
+            _Field("problem", "str"),
         ),
     ),
     "KY-E401": _Entry(

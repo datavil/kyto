@@ -6,7 +6,7 @@
 //! columns plus the computed ones and the genes present, bit-identical to the stream;
 //! `sink_h5ad` round-trips through 2.6's importer to the same store contents; lineage
 //! is carried for stored derived columns still valid and the stale ones are dropped
-//! (3.8); an error or a cancel (`KY-E503`, 5.7), midway or after the last block while
+//! (3.8), and recorded for a column computed from one layer (5.11); an error or a cancel (`KY-E503`, 5.7), midway or after the last block while
 //! the target is finished, leaves no target and no temporary; a target that exists
 //! (without `overwrite`) or is the scanned store is refused before anything is read.
 //! The scanpy parity of a sunk filter -> QC -> normalize/log1p plan is
@@ -302,7 +302,9 @@ fn sink_zarr_writes_the_stream() {
         out.cell_columns[2].dtype,
         ColumnDtype::Enum { ordered: true, .. }
     ));
-    assert_eq!(out.cell_columns[3].lineage, None);
+    // `total` is computed from counts by node 1 and no later node changes the genes or
+    // rewrites counts: it records that lineage (task 5.11).
+    assert_eq!(out.cell_columns[3].lineage, Some(lineage("1")));
     let gene_names: Vec<&str> = out.gene_columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(gene_names, ["gene_id"]);
     // The same bytes at other thread counts (R11): the store's contents are equal.
@@ -700,10 +702,11 @@ fn targets_are_checked_before_reading() {
     assert_eq!(error.code(), "KY-E215", "{error}");
 }
 
-/// Recomputed columns (3.8) and embedding leaves wait for task 5.11, refused before
-/// reading.
+/// A recomputed column (3.8, 5.11) needs the plan that wrote the store: this store's
+/// lineage is written by hand and its `provenance.json` holds no plan, so it is
+/// refused (`KY-E303`) before reading. Recomputing is `embeddings_graphs.rs`'.
 #[test]
-fn a_recomputed_column_waits_for_5_11() {
+fn a_recomputed_column_without_a_recipe_is_refused_before_reading() {
     let work = tempfile::tempdir().unwrap();
     let store = work.path().join("atlas.kyto");
     write_store(&store);
@@ -717,7 +720,7 @@ fn a_recomputed_column_waits_for_5_11() {
         path: work.path().join("out.kyto").display().to_string(),
     };
     let error = Pipeline::new(&physical(&plan.sink(target).unwrap()), 0).unwrap_err();
-    assert_eq!(error.code(), "KY-E601", "{error}");
-    assert!(error.to_string().contains("5.11"), "{error}");
+    assert_eq!(error.code(), "KY-E303", "{error}");
+    assert!(error.to_string().contains("records no plan"), "{error}");
     assert_eq!(entries(work.path()), ["atlas.kyto"]);
 }

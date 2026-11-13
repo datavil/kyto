@@ -180,6 +180,28 @@ impl H5Out {
         Ok(dataset)
     }
 
+    /// A 2-d dataset `member` of `shape` (rows, columns) holding row-major `values`,
+    /// encoded as anndata's dense `array` 0.2.0.
+    pub(crate) fn matrix<T: H5Type>(
+        &self,
+        member: &str,
+        shape: (usize, usize),
+        values: &[T],
+    ) -> Result<(), KytoError> {
+        let dataset = self
+            .file
+            .new_dataset::<T>()
+            .shape(shape)
+            .create(member)
+            .map_err(|error| self.write_error(member, error))?;
+        if !values.is_empty() {
+            dataset
+                .write_raw(values)
+                .map_err(|error| self.write_error(member, error))?;
+        }
+        self.encode(member, &dataset, ("array", "0.2.0"))
+    }
+
     /// An empty 1-d dataset `member` of `length` values, filled later with
     /// [`H5Out::write_at`].
     pub(crate) fn empty_dataset<T: H5Type>(

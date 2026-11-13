@@ -442,8 +442,12 @@ matrix (8.3). It is the input of `AtlasSchema` (3.1). Keys, in this order:
   `lineage` was computed over every gene of the store, so a plan that changes the gene
   axis (`filter_genes`) refuses to read it as stored (`KY-E301`) and reads it
   recomputed on request (`cell_column(name).recompute()`, which needs `lineage`:
-  `KY-E302`). Readers do not interpret `layer` and `node` yet; the executor (5.x) uses
-  them to recompute. Importers write no `lineage`.
+  `KY-E302`). A kyto sink writes `lineage` for a column a `with_cells`/`with_genes`
+  computed from exactly one layer it also writes unchanged, naming that `with_columns`
+  node; a column carried over from the scanned store keeps that store's `lineage`. To
+  recompute, the executor (5.11) reads the plan back from `provenance.json` (§9) and
+  takes the expression of node `node` for the column (`KY-E303` when the plan is
+  missing or that node does not compute it). Importers write no `lineage`.
 - JSON integers (`nnz`, counts) can exceed `2^53`; readers MUST parse them as `u64`,
   not as floating point.
 - `layers`, `embeddings` and `graphs` list every member of the matching group, sorted by
@@ -472,7 +476,7 @@ How the store was made (task 8.5 fills it in; 4.3 defines the plan JSON). v0 key
 | --- | --- | --- |
 | `kyto_version` | yes | kyto package version that wrote the store |
 | `dependencies` | yes | versions of libraries that affect the bytes or the numbers, name to version string |
-| `plan` | yes | the plan JSON (4.3) that produced the store, or `null` before 4.3 exists or for a plain import |
+| `plan` | yes | the plan JSON (4.3) that produced the store (a kyto sink writes it, 5.11), or `null` for a plain import |
 | `source` | yes | for an import: input kind, path as given, and the SHA-256 of the input file (computed while streaming it); otherwise `null` |
 | `seeds` | yes | plan node ID to seed, for every seeded node (`{}` if none) |
 | `device` | yes | `"cpu"` or a device name (9.x) |

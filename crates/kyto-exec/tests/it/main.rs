@@ -9,6 +9,7 @@ mod plan_support;
 mod cluster_parity;
 mod connectivities_parity;
 mod deterministic_reductions;
+mod embeddings_graphs;
 mod filter_qc_parity;
 mod filters_columns;
 mod hvg_parity;

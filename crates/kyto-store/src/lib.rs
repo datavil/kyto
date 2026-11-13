@@ -27,9 +27,11 @@ mod commit_check;
 mod concat;
 mod concat_tables;
 mod csr;
+mod embedding_io;
 mod export_h5;
 mod export_h5ad;
 mod export_h5ad_table;
+mod graph_io;
 mod import_10x;
 mod import_convert;
 mod import_h5;
@@ -67,9 +69,11 @@ pub use commit_check::CommitCheck;
 pub use concat::{ConcatOptions, concat};
 pub use concat_tables::Join;
 pub use csr::CsrMatrix;
+pub use embedding_io::{Embedding, FloatValues, read_embedding};
 pub use export_h5ad::{
     DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad, sink_h5ad_checked,
 };
+pub use graph_io::{Graph, read_graph};
 pub use import_convert::{ConvertOptions, DEFAULT_IMPORT_BUDGET_BYTES, convert};
 pub use import_ids::OnDuplicateIds;
 pub use layer_io::{read_layer, write_layer};

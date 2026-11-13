@@ -47,7 +47,7 @@ markers = (
 )
 print(markers)
 
-# PCA and neighbours build lazily too (reading their outputs arrives with 5.11 and 7.3).
+# PCA and neighbours build lazily too (sinks write their outputs; reading them from Python arrives with 7.3).
 graph = result.pca(into="pca", n_components=50, seed=0).neighbors("pca")
 print(graph.estimate())
 ```

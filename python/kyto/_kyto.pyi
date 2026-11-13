@@ -897,8 +897,10 @@ class Atlas:
         DeviceError
             ``KY-E502``: the system cannot start ``threads`` threads.
         NotImplementedYetError
-            ``KY-E601``: the plan has a step the executor does not run yet, or it
-            carries an embedding or a graph (written from task 5.11).
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        LineageError
+            ``KY-E303``: the plan recomputes a column (``.recompute()``) whose store
+            does not hold the plan that computed it.
         KeyboardInterrupt
             Ctrl-C while the plan computes; the run has stopped.
 
@@ -957,8 +959,10 @@ class Atlas:
         DeviceError
             ``KY-E502``: the system cannot start ``threads`` threads.
         NotImplementedYetError
-            ``KY-E601``: the plan has a step the executor does not run yet, or it
-            carries an embedding or a graph (written from task 5.11).
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        LineageError
+            ``KY-E303``: the plan recomputes a column (``.recompute()``) whose store
+            does not hold the plan that computed it.
         KeyboardInterrupt
             Ctrl-C while the plan computes; the run has stopped and nothing is left.
 

@@ -52,7 +52,7 @@ fn non_zero(values: &[u64]) -> Result<Vec<NonZeroU64>, KytoError> {
 
 /// `sharding_indexed` with inner `[bytes(little), zstd(level)]` and index
 /// `[bytes(little), crc32c]` at the end (format.md §4.4).
-fn sharding(
+pub(crate) fn sharding(
     inner_chunk_shape: &[u64],
     zstd_level: i32,
 ) -> Result<Arc<dyn ArrayToBytesCodecTraits>, KytoError> {

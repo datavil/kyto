@@ -2080,6 +2080,7 @@ version = "0.0.0"
 dependencies = [
  "criterion",
  "faer",
+ "hdf5-metno",
  "hnsw_rs",
  "kyto-core",
  "kyto-error",

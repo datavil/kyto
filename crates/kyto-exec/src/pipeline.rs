@@ -38,19 +38,18 @@
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
 
-use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 
-use kyto_core::{Axis, ColumnDtype, Expr, ExprAxis, Source};
+use kyto_core::{AtlasSchema, Axis, ColumnDtype, Source};
 use kyto_error::KytoError;
 use kyto_plan::{
     Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, Neighbors, Operation,
-    PhysicalPlan, Plan, Predicate, Umap,
+    PhysicalPlan, Plan, Predicate, Umap, loadings_name,
 };
-use kyto_store::{LayerReader, TableAxis, TileGrid, read_table};
+use kyto_store::{FloatValues, LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
 use zarrs::filesystem::FilesystemStore;
 use zarrs::storage::ReadableStorageTraits;
@@ -59,7 +58,7 @@ use crate::block_stream::{BlockStream, StreamSource};
 use crate::cell_steps::{CellLeaf, CellStep, Evaluation, Take, is_block_leaf};
 use crate::cluster_graph::CellGraph;
 use crate::cluster_labels::ClusterLabels;
-use crate::connectivities;
+use crate::connectivities::{self, ConnectivityGraph};
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
@@ -69,8 +68,10 @@ use crate::leiden::{self, ClusterStatistics};
 use crate::neighbors::{self, NeighborStatistics};
 use crate::operator::Operator;
 use crate::qc::{CellQc, GeneSet};
+use crate::recipe::Recipes;
 use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
+use crate::run_members::{EmbeddingSource, GraphSource, Rows, StoredMembers, collect_cells};
 use crate::sink::SinkSpec;
 use crate::statistics::{NodeStatistics, Statistics};
 use crate::umap::{self, UmapStatistics};
@@ -123,37 +124,55 @@ pub(crate) enum Stage {
     Umap(UmapStage),
 }
 
-/// A clustering node and the `neighbors` node whose statistics hold its graph.
+/// A clustering node and where its graph comes from.
 #[derive(Debug, Clone)]
 pub(crate) struct ClusterStage {
     /// The node's index in the optimized plan.
     node: usize,
     params: Cluster,
-    /// The `neighbors` node writing the graph (resolved by `Pipeline::new`).
-    source: usize,
-    /// Whether the graph is that node's distances (else its connectivities).
-    distances: bool,
+    /// The graph's source (resolved by `Pipeline::new`).
+    graph: GraphSource,
+    /// Whether a cell filter or `take_cells` lies between the graph and the node: the
+    /// graph is then re-indexed to the cells reaching it (task 5.11).
+    filtered: bool,
 }
 
-/// A `umap` node and the nodes whose statistics hold its graph and the embedding the
-/// graph's neighbours were searched in.
+/// A `umap` node and where its graph comes from.
 #[derive(Debug, Clone)]
 pub(crate) struct UmapStage {
     /// The node's index in the optimized plan.
     node: usize,
     params: Umap,
-    /// The `neighbors` node writing the graph (resolved by `Pipeline::new`).
-    source: usize,
+    /// The graph's source (resolved by `Pipeline::new`).
+    graph: GraphSource,
+    /// As [`ClusterStage::filtered`].
+    filtered: bool,
 }
 
-/// A `neighbors` node and the node whose statistics hold its embedding.
+/// A `neighbors` node and where its embedding comes from.
 #[derive(Debug, Clone)]
 pub(crate) struct NeighborStage {
     /// The node's index in the optimized plan.
     node: usize,
     params: Neighbors,
-    /// The `pca` node writing the embedding (resolved by `Pipeline::new`).
-    source: usize,
+    /// The embedding's source (resolved by `Pipeline::new`).
+    embedding: EmbeddingSource,
+    /// Whether a cell filter or `take_cells` lies between the embedding and the node:
+    /// only the rows of the cells reaching it are searched (task 5.11).
+    filtered: bool,
+}
+
+impl Stage {
+    /// Whether the stage streams the cells reaching it once more, to know which they
+    /// are (task 5.11).
+    fn collects_cells(&self) -> bool {
+        match self {
+            Self::Neighbors(stage) => stage.filtered,
+            Self::Cluster(stage) => stage.filtered,
+            Self::Umap(stage) => stage.filtered,
+            _ => false,
+        }
+    }
 }
 
 /// A cell step as the plan gives it, before its leaves are resolved against the genes
@@ -181,6 +200,8 @@ pub struct Pipeline {
     pub(crate) block_cells: NonZeroU64,
     /// What the plan's sink writes, when the output ends in one (task 5.9).
     pub(crate) sink: Option<SinkSpec>,
+    /// The source of each embedding of the plan at each stage, by stage (task 5.11).
+    pub(crate) embeddings_at: Vec<BTreeMap<String, EmbeddingSource>>,
 }
 
 impl Pipeline {
@@ -253,9 +274,14 @@ impl Pipeline {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
         stages.reverse();
-        resolve_embeddings(&mut stages, nodes)?;
         let root = scan.root();
         let schema = root.schema();
+        let members = resolve_members(&mut stages, nodes, schema)?;
+        substitute_recipes(&mut stages, &mut Recipes::new(root.source(), schema))?;
+        check_leaves(&stages)?;
+        if let Some(sink) = &mut sink {
+            sink.set_members(&members);
+        }
         let grid = TileGrid::new(schema.n_cells, schema.n_genes, schema.tiling)?;
         // A scan streams in blocks of at most C cells (physical_plan.rs).
         let store_cells = NonZeroU64::new(grid.cell_block_size()).unwrap_or(NonZeroU64::MIN);
@@ -282,6 +308,7 @@ impl Pipeline {
             blocks_in_flight,
             block_cells,
             sink,
+            embeddings_at: members.at_stage,
         })
     }
 
@@ -353,6 +380,8 @@ impl Pipeline {
         // Every statistics pass and the output's stream compute every cell once.
         let control = options.control.clone();
         let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
+            // One pass to find the cells reaching it (task 5.11).
+            _ if stage.collects_cells() => passes.saturating_add(1),
             Stage::Maps(_)
             | Stage::Cells(_)
             | Stage::Neighbors(_)
@@ -398,14 +427,38 @@ impl Pipeline {
         let mut operators = Vec::new();
         let mut statistics = Statistics::default();
         let mut tables = RunTables::new(&self.store, self.grid.n_genes());
-        for stage in &self.stages {
+        let mut members = StoredMembers::new(&self.store);
+        // The rows each `neighbors` node searched (row-major, width), for umap's
+        // placement of graph components.
+        let mut searched: BTreeMap<usize, Rows> = BTreeMap::new();
+        // One pass over the steps so far, keeping only the cells (task 5.11): the
+        // layers are read only if a cell step reads them.
+        let cells_pass = |operators: &[Operator]| {
+            let reads_layers = operators.iter().any(|operator| match operator {
+                Operator::Cells(step) => step.reads_layers(),
+                _ => false,
+            });
+            let (readers, operators): (_, Vec<Operator>) = if reads_layers {
+                (Arc::clone(&readers), operators.to_vec())
+            } else {
+                let kept = operators
+                    .iter()
+                    .filter(|operator| !operator.reads_layers())
+                    .cloned()
+                    .collect();
+                (Arc::new(Vec::new()), kept)
+            };
+            collect_cells(&source(readers, &operators, BTreeSet::new()), &thread_pool)
+        };
+        for (position, stage) in self.stages.iter().enumerate() {
             let cross_cell = match stage {
                 Stage::Maps(maps) => {
                     operators.push(Operator::Maps(maps.clone()));
                     continue;
                 }
                 Stage::Cells(cell_stage) => {
-                    operators.push(Operator::Cells(tables.cell_step(cell_stage)?));
+                    let embeddings = self.embedding_rows(position, &mut members, &statistics)?;
+                    operators.push(Operator::Cells(tables.cell_step(cell_stage, &embeddings)?));
                     continue;
                 }
                 Stage::Genes { kind, passes } => {
@@ -413,7 +466,7 @@ impl Pipeline {
                     let mut values = Vec::new();
                     if profiles.is_empty() {
                         // A pass the plan counts that this step does not need (a gene
-                        // embedding leaf is refused when built): counted as done.
+                        // embedding leaf is read in memory): counted as done.
                         control.add_done(self.grid.n_cells().saturating_mul(u64::from(*passes)));
                     } else {
                         let wanted = profiles
@@ -448,30 +501,36 @@ impl Pipeline {
                             values.push((profile, found));
                         }
                     }
+                    let embeddings = self.embedding_rows(position, &mut members, &statistics)?;
                     let genes = tables.genes()?;
-                    if let Some(selection) = kind.apply(genes, &values, &self.store)? {
+                    if let Some(selection) = kind.apply(genes, &values, &embeddings, &self.store)? {
                         operators.push(Operator::Genes(selection));
                     }
                     continue;
                 }
                 Stage::Neighbors(stage) => {
-                    let Some(NodeStatistics::Pca(pca)) = statistics.nodes.get(&stage.source) else {
-                        unreachable!("Pipeline::new resolved the pca below neighbors")
+                    let rows = members.rows(&stage.embedding, &statistics)?;
+                    let (cells, values) = if stage.filtered {
+                        let kept = cells_pass(&operators)?;
+                        let values = rows.take(&kept, "embedding", &stage.params.embedding)?;
+                        (Arc::new(kept), values.to_f32())
+                    } else {
+                        (Arc::clone(&rows.keys), rows.values.to_f32())
                     };
                     let (graph, weights) = thread_pool.install(|| {
-                        neighbors::search(
-                            pca.embedding(),
-                            pca.n_components(),
-                            &stage.params,
-                            &control,
+                        neighbors::search(&values, rows.width, &stage.params, &control).map(
+                            |graph| {
+                                let weights = connectivities::connectivities(&graph);
+                                (graph, weights)
+                            },
                         )
-                        .map(|graph| {
-                            let weights = connectivities::connectivities(&graph);
-                            (graph, weights)
-                        })
                     })?;
+                    searched.insert(
+                        stage.node,
+                        Rows::new(Arc::clone(&cells), rows.width, FloatValues::F32(values)),
+                    );
                     let found = NeighborStatistics {
-                        cells: Arc::clone(&pca.cells),
+                        cells,
                         distances: graph,
                         connectivities: weights,
                     };
@@ -481,25 +540,23 @@ impl Pipeline {
                     continue;
                 }
                 Stage::Cluster(stage) => {
-                    let Some(NodeStatistics::Neighbors(graphs)) =
-                        statistics.nodes.get(&stage.source)
-                    else {
-                        unreachable!("Pipeline::new resolved the neighbors below the clustering")
-                    };
-                    let graph = if stage.distances {
-                        CellGraph::from(graphs.distances())
+                    let graph = members.keyed_graph(&stage.graph, &statistics)?;
+                    let graph = if stage.filtered {
+                        Arc::new(graph.induced(&cells_pass(&operators)?, &stage.params.graph)?)
                     } else {
-                        CellGraph::from(graphs.connectivities())
+                        graph
                     };
-                    let clustering = leiden::run(graph, &stage.params, &control)?;
+                    let weights = graph.weights.to_f32();
+                    let cell_graph = CellGraph::new(&graph.indptr, &graph.indices, &weights)?;
+                    let clustering = leiden::run(cell_graph, &stage.params, &control)?;
                     operators.push(Operator::Labels(ClusterLabels::new(
                         &stage.params.into,
-                        graphs.cells(),
+                        &graph.cells,
                         clustering.labels(),
                         clustering.n_clusters(),
                     )?));
                     let found = ClusterStatistics {
-                        cells: Arc::clone(&graphs.cells),
+                        cells: Arc::clone(&graph.cells),
                         clustering,
                     };
                     statistics
@@ -508,23 +565,32 @@ impl Pipeline {
                     continue;
                 }
                 Stage::Umap(stage) => {
-                    let Some(NodeStatistics::Neighbors(neighbors)) =
-                        statistics.nodes.get(&stage.source)
-                    else {
-                        unreachable!("Pipeline::new resolved the neighbors below umap")
+                    let graph = members.keyed_graph(&stage.graph, &statistics)?;
+                    let graph = if stage.filtered {
+                        Arc::new(graph.induced(&cells_pass(&operators)?, &stage.params.graph)?)
+                    } else {
+                        graph
                     };
-                    let data = neighbor_data(&statistics, &self.stages, stage.source);
+                    let weights = graph.weights.to_f32();
+                    // Checked as clustering checks a graph (a stored one may be anything).
+                    CellGraph::new(&graph.indptr, &graph.indices, &weights)?;
+                    let connectivity = ConnectivityGraph::from_parts(
+                        graph.indptr.clone(),
+                        graph.indices.clone(),
+                        weights,
+                    );
+                    let data = self.neighbor_data(&stage.graph, &searched, &graph.cells)?;
                     let layout = thread_pool.install(|| {
                         umap::layout(
-                            neighbors.connectivities(),
+                            &connectivity,
                             data.as_ref()
-                                .map(|(values, width, metric)| (&**values, *width, *metric)),
+                                .map(|(values, width, metric)| (&values[..], *width, *metric)),
                             &stage.params,
                             &control,
                         )
                     })?;
                     let found = UmapStatistics {
-                        cells: Arc::clone(&neighbors.cells),
+                        cells: Arc::clone(&graph.cells),
                         layout,
                     };
                     statistics
@@ -558,6 +624,10 @@ impl Pipeline {
                 accumulator.end_pass(pass, reduced)?;
             }
             let (mut node_statistics, apply) = cross_cell.finish(accumulator);
+            if let NodeStatistics::Pca(pca) = &mut node_statistics {
+                // The genes its loadings' rows are (task 5.11).
+                pca.genes = Arc::new(tables.gene_positions());
+            }
             if let (
                 NodeStatistics::HighlyVariableGenes(hvg),
                 CrossCellKind::HighlyVariableGenes { n_top_genes, .. },
@@ -661,29 +731,35 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                 ))))
             }
         },
+        // Their sources are resolved by `resolve_members`.
         Plan::Neighbors(node) => Ok(Some(Stage::Neighbors(NeighborStage {
             node: index,
             params: node.params().clone(),
-            source: usize::MAX,
+            embedding: EmbeddingSource::Pca { node: usize::MAX },
+            filtered: false,
         }))),
         Plan::Cluster(node) => Ok(Some(Stage::Cluster(ClusterStage {
             node: index,
             params: node.params().clone(),
-            source: usize::MAX,
-            distances: false,
+            graph: GraphSource::Stored {
+                name: node.params().graph.clone(),
+            },
+            filtered: false,
         }))),
         Plan::Umap(node) => Ok(Some(Stage::Umap(UmapStage {
             node: index,
             params: node.params().clone(),
-            source: usize::MAX,
+            graph: GraphSource::Stored {
+                name: node.params().graph.clone(),
+            },
+            filtered: false,
         }))),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
-            Predicate::Cells(predicate) => Stage::Cells(CellStage::Filter(cell_expression(
-                predicate,
-                "filter_cells",
-            )?)),
+            Predicate::Cells(predicate) => {
+                Stage::Cells(CellStage::Filter(Prepared::new(predicate.node())))
+            }
             Predicate::Genes(predicate) => Stage::Genes {
-                kind: GeneStepKind::Filter(gene_expression(predicate, "filter_genes")?),
+                kind: GeneStepKind::Filter(Prepared::new(predicate.node())),
                 passes,
             },
         })),
@@ -715,7 +791,7 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                         .map(|(name, expr)| {
                             Ok((
                                 name.clone(),
-                                cell_expression(expr, "with_cells")?,
+                                Prepared::new(expr.node()),
                                 dtype(Axis::Cells, name)?,
                             ))
                         })
@@ -728,7 +804,7 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                             .map(|(name, expr)| {
                                 Ok((
                                     name.clone(),
-                                    gene_expression(expr, "with_genes")?,
+                                    Prepared::new(expr.node()),
                                     dtype(Axis::Genes, name)?,
                                 ))
                             })
@@ -744,42 +820,76 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
     }
 }
 
-/// A resolved cell expression of `method`, whose leaves the stream computes: table
-/// columns, gene values and QC metrics. `KY-E601` for embeddings and recomputed
-/// columns (plan 5.11).
-fn cell_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
-    let prepared = Prepared::new(expr.node());
-    for leaf in &prepared.leaves {
-        let layered = match leaf {
-            Source::Expression { layer, .. } | Source::Qc { layer, .. } => layer.is_some(),
-            _ => false,
+/// Every leaf of a cell step is one the stream computes (table columns, a gene's
+/// values, a QC metric of a named layer, an embedding component), and every leaf of a
+/// gene step one the run computes (table columns, a cell's profile in a named layer,
+/// a gene embedding component). A resolved plan holds nothing else (R6), so another
+/// leaf means a plan not built by kyto: `KY-E215`.
+fn check_leaves(stages: &[Stage]) -> Result<(), KytoError> {
+    for stage in stages {
+        let (prepared, cells, method): (Vec<&Prepared>, bool, &str) = match stage {
+            Stage::Cells(CellStage::Filter(prepared)) => (vec![prepared], true, "filter_cells"),
+            Stage::Cells(CellStage::Columns(columns)) => (
+                columns.iter().map(|(_, prepared, _)| prepared).collect(),
+                true,
+                "with_cells",
+            ),
+            Stage::Genes { kind, .. } => (kind.prepared(), false, "a gene step"),
+            _ => continue,
         };
-        if !(is_block_leaf(leaf) && layered) {
-            return Err(unsupported_leaf(leaf, method));
+        for leaf in prepared.iter().flat_map(|prepared| &prepared.leaves) {
+            let supported = match leaf {
+                Source::Embedding { .. } => true,
+                Source::Expression { layer, .. } | Source::Qc { layer, .. } => {
+                    cells && layer.is_some() && is_block_leaf(leaf)
+                }
+                Source::Profile { layer, .. } => !cells && layer.is_some(),
+                _ => false,
+            };
+            if !supported {
+                return Err(KytoError::InvalidArgument {
+                    function: "Pipeline::new".to_owned(),
+                    parameter: "plan".to_owned(),
+                    value: format!("{leaf:?}"),
+                    problem: format!("an unresolved leaf in {method}"),
+                    accepted: "a plan built by kyto (names resolved, R6)".to_owned(),
+                });
+            }
         }
     }
-    Ok(prepared)
+    Ok(())
 }
 
-/// A resolved gene expression of `method`, whose leaves the run computes: table
-/// columns and cell profiles. `KY-E601` for embeddings (plan 5.11).
-fn gene_expression<A: ExprAxis>(expr: &Expr<A>, method: &str) -> Result<Prepared, KytoError> {
-    let prepared = Prepared::new(expr.node());
-    for leaf in &prepared.leaves {
-        if !matches!(leaf, Source::Profile { layer: Some(_), .. }) {
-            return Err(unsupported_leaf(leaf, method));
+/// Replace every `.recompute()` leaf of the cell and gene steps by the expression that
+/// computed the column ([`Recipes`]).
+fn substitute_recipes(stages: &mut [Stage], recipes: &mut Recipes<'_>) -> Result<(), KytoError> {
+    let mut substitute = |prepared: &mut Prepared, axis: Axis| -> Result<(), KytoError> {
+        if prepared
+            .leaves
+            .iter()
+            .any(|leaf| matches!(leaf, Source::Recompute { .. }))
+        {
+            *prepared = Prepared::new(&recipes.substitute(&prepared.node, axis)?);
         }
-    }
-    Ok(prepared)
-}
-
-fn unsupported_leaf(leaf: &Source, method: &str) -> KytoError {
-    let what = match leaf {
-        Source::Embedding { .. } => "an embedding component",
-        Source::Recompute { .. } => "a recomputed column (`.recompute()`)",
-        _ => "an unresolved name",
+        Ok(())
     };
-    not_yet(&format!("{what} in {method}"), "5.11")
+    for stage in stages {
+        match stage {
+            Stage::Cells(CellStage::Filter(prepared)) => substitute(prepared, Axis::Cells)?,
+            Stage::Cells(CellStage::Columns(columns)) => {
+                for (_, prepared, _) in columns {
+                    substitute(prepared, Axis::Cells)?;
+                }
+            }
+            Stage::Genes { kind, .. } => {
+                for prepared in kind.prepared_mut() {
+                    substitute(prepared, Axis::Genes)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// The cell and gene tables of a run, read when a step first needs them, and the
@@ -831,6 +941,14 @@ impl RunTables {
         self.genes
     }
 
+    /// The store positions of the genes present, in their order.
+    fn gene_positions(&self) -> Vec<u64> {
+        match &self.genes {
+            Some(genes) => genes.positions().to_vec(),
+            None => (0..self.n_genes).collect(),
+        }
+    }
+
     /// The store positions of the cells `ids`, in their order; `KY-E210` for an ID
     /// the store does not have (`expression` names the step).
     fn cell_positions(&mut self, ids: &[String], expression: &str) -> Result<Vec<u64>, KytoError> {
@@ -872,12 +990,17 @@ impl RunTables {
         Ok(self.cell_positions(&[id.to_owned()], expression)?[0])
     }
 
-    /// `stage` with its leaves resolved against the genes present.
-    fn cell_step(&mut self, stage: &CellStage) -> Result<CellStep, KytoError> {
+    /// `stage` with its leaves resolved against the genes present, its embedding
+    /// leaves reading `embeddings` (by name).
+    fn cell_step(
+        &mut self,
+        stage: &CellStage,
+        embeddings: &[(String, Arc<Rows>)],
+    ) -> Result<CellStep, KytoError> {
         let table = self.cells()?;
         Ok(match stage {
             CellStage::Filter(predicate) => {
-                CellStep::filter(self.evaluation(predicate)?, table, &self.store)
+                CellStep::filter(self.evaluation(predicate, embeddings)?, table, &self.store)
             }
             CellStage::Take(ids) => {
                 let expression = format!("take_cells([{} IDs])", ids.len());
@@ -888,7 +1011,7 @@ impl RunTables {
                 let columns = columns
                     .iter()
                     .map(|(name, prepared, dtype)| {
-                        Ok((name.clone(), self.evaluation(prepared)?, *dtype))
+                        Ok((name.clone(), self.evaluation(prepared, embeddings)?, *dtype))
                     })
                     .collect::<Result<_, KytoError>>()?;
                 CellStep::columns(columns, table, &self.store)
@@ -897,7 +1020,11 @@ impl RunTables {
     }
 
     /// How a block computes each leaf of `prepared`.
-    fn evaluation(&mut self, prepared: &Prepared) -> Result<Evaluation, KytoError> {
+    fn evaluation(
+        &mut self,
+        prepared: &Prepared,
+        embeddings: &[(String, Arc<Rows>)],
+    ) -> Result<Evaluation, KytoError> {
         let store = self.store.clone();
         let leaves = prepared
             .leaves
@@ -941,10 +1068,33 @@ impl RunTables {
                         qc: Box::new(CellQc::new(metric, gene_set)),
                     })
                 }
-                other => Err(unsupported_leaf(other, "a cell expression")),
+                Source::Embedding { name, component } => {
+                    let rows = embeddings
+                        .iter()
+                        .find(|(known, _)| known == name)
+                        .map(|(_, rows)| Arc::clone(rows))
+                        .ok_or_else(|| unexpected_leaf(leaf))?;
+                    Ok(CellLeaf::Embedding {
+                        rows,
+                        component: usize::try_from(*component).unwrap_or(usize::MAX),
+                    })
+                }
+                other => Err(unexpected_leaf(other)),
             })
             .collect::<Result<Vec<_>, KytoError>>()?;
         Ok(Evaluation::new(prepared.clone(), leaves))
+    }
+}
+
+/// `KY-E215` for a leaf no step computes (`check_leaves` refused it when the pipeline
+/// was built).
+fn unexpected_leaf(leaf: &Source) -> KytoError {
+    KytoError::InvalidArgument {
+        function: "Pipeline::run".to_owned(),
+        parameter: "plan".to_owned(),
+        value: format!("{leaf:?}"),
+        problem: "a leaf the cell steps do not compute".to_owned(),
+        accepted: "a plan built by kyto (names resolved, R6)".to_owned(),
     }
 }
 
@@ -956,159 +1106,221 @@ fn layer_names(members: &Members) -> impl Iterator<Item = String> + '_ {
     })
 }
 
-/// Point every `neighbors` stage at the `pca` stage below it that writes its embedding
-/// (the nearest one: a later `pca` into the same name replaces it), and every
-/// clustering and `umap` at the `neighbors` stage below it that writes its graph, the
-/// same way. `KY-E601` (5.11) for an embedding or graph no stage writes (one read from
-/// the store), or a cell filter or `take_cells` between the two (the graph would need
-/// the embedding's rows, the clustering or layout the graph's, of the kept cells).
-/// `KY-E215` for a `umap` of a `distances` graph (umap lays out connectivities, as
-/// scanpy's `tl.umap`).
-fn resolve_embeddings(
+/// The sources of the plan's embeddings and graphs (task 5.11), as `resolve_members`
+/// finds them walking the stages.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResolvedMembers {
+    /// The embeddings each stage sees (before it runs), by stage.
+    pub(crate) at_stage: Vec<BTreeMap<String, EmbeddingSource>>,
+    /// The embeddings and graphs after the last stage.
+    pub(crate) embeddings: BTreeMap<String, EmbeddingSource>,
+    pub(crate) graphs: BTreeMap<String, GraphSource>,
+}
+
+/// Point every `neighbors` stage at the source of its embedding, and every clustering
+/// and `umap` at the source of its graph: the nearest stage below that writes it (a
+/// `pca`, `umap` or `neighbors`; a later one of the same name replaces it) or the
+/// scanned store. Each records whether a cell filter or `take_cells` lies between
+/// (the run then streams the cells reaching it and uses the rows of those cells, task
+/// 5.11). `KY-E215` for a `umap` of a `distances` graph (umap lays out
+/// connectivities, as scanpy's `tl.umap`), or a member the plan does not have (a plan
+/// not built by kyto).
+fn resolve_members(
     stages: &mut [Stage],
     nodes: &[kyto_plan::OptimizedNode],
-) -> Result<(), KytoError> {
-    // (embedding, pca node, whether cells were removed since)
-    let mut written: Vec<(String, usize, bool)> = Vec::new();
-    // (graph, neighbors node, whether it is the distances, whether cells were removed)
-    let mut graphs: Vec<(String, usize, bool, bool)> = Vec::new();
+    schema: &AtlasSchema,
+) -> Result<ResolvedMembers, KytoError> {
+    // name -> (source, whether cells were removed since it was written)
+    let mut embeddings: BTreeMap<String, (EmbeddingSource, bool)> = schema
+        .embeddings
+        .iter()
+        .map(|embedding| {
+            let source = EmbeddingSource::Stored {
+                name: embedding.name.clone(),
+                axis: embedding.axis,
+            };
+            (embedding.name.clone(), (source, false))
+        })
+        .collect();
+    let mut graphs: BTreeMap<String, (GraphSource, bool)> = schema
+        .graphs
+        .iter()
+        .map(|graph| {
+            let source = GraphSource::Stored {
+                name: graph.name.clone(),
+            };
+            (graph.name.clone(), (source, false))
+        })
+        .collect();
+    let missing = |kind: &str, name: &str, method: &str| KytoError::InvalidArgument {
+        function: method.to_owned(),
+        parameter: kind.to_owned(),
+        value: format!("'{name}'"),
+        problem: format!("the plan has no {kind} of that name at this step"),
+        accepted: "a plan built by kyto".to_owned(),
+    };
+    let mut at_stage = Vec::with_capacity(stages.len());
     for stage in stages {
+        at_stage.push(
+            embeddings
+                .iter()
+                .map(|(name, (source, _))| (name.clone(), source.clone()))
+                .collect(),
+        );
         match stage {
             Stage::CrossCell(cross_cell) => {
                 if let Operation::Node(logical) = nodes[cross_cell.node].operation()
                     && let Plan::CrossCell(node) = &**logical
                     && let CrossCellOp::Pca { into, .. } = node.params().op()
                 {
-                    written.retain(|(name, _, _)| name != into);
-                    written.push((into.clone(), cross_cell.node, false));
+                    let node = cross_cell.node;
+                    embeddings.insert(into.clone(), (EmbeddingSource::Pca { node }, false));
+                    let loadings = EmbeddingSource::Loadings { node };
+                    embeddings.insert(loadings_name(into), (loadings, false));
                 }
             }
             Stage::Cells(CellStage::Filter(_) | CellStage::Take(_)) => {
-                for entry in &mut written {
-                    entry.2 = true;
+                for entry in embeddings.values_mut() {
+                    entry.1 = true;
                 }
-                for entry in &mut graphs {
-                    entry.3 = true;
+                for entry in graphs.values_mut() {
+                    entry.1 = true;
                 }
-            }
-            Stage::Umap(umap) => {
-                let graph = &umap.params.graph;
-                match graphs.iter().find(|(name, ..)| name == graph) {
-                    Some((_, source, false, false)) => umap.source = *source,
-                    Some((_, _, true, _)) => {
-                        return Err(KytoError::InvalidArgument {
-                            function: "umap".to_owned(),
-                            parameter: "graph".to_owned(),
-                            value: format!("'{graph}'"),
-                            problem: "it is the distances graph of a neighbors step".to_owned(),
-                            accepted: "the connectivities graph of a neighbors step".to_owned(),
-                        });
-                    }
-                    Some((_, _, false, true)) => {
-                        return Err(not_yet(
-                            "umap after a cell filter or take_cells above its neighbors",
-                            "5.11",
-                        ));
-                    }
-                    None => {
-                        return Err(not_yet(
-                            &format!("umap on graph '{graph}' read from the store"),
-                            "5.11",
-                        ));
-                    }
-                }
-                // Its embedding replaces any of that name a pca wrote.
-                written.retain(|(name, _, _)| *name != umap.params.into);
             }
             Stage::Neighbors(neighbors) => {
-                let embedding = &neighbors.params.embedding;
-                match written.iter().find(|(name, _, _)| name == embedding) {
-                    Some((_, source, false)) => {
-                        neighbors.source = *source;
-                        let (distances, connectivities) = neighbors.params.graph_names();
-                        graphs.retain(|(name, ..)| *name != distances && *name != connectivities);
-                        graphs.push((distances, neighbors.node, true, false));
-                        graphs.push((connectivities, neighbors.node, false, false));
-                    }
-                    Some((_, _, true)) => {
-                        return Err(not_yet(
-                            "neighbors after a cell filter or take_cells above its pca",
-                            "5.11",
-                        ));
-                    }
-                    None => {
-                        return Err(not_yet(
-                            &format!("neighbors on embedding '{embedding}' read from the store"),
-                            "5.11",
-                        ));
-                    }
-                }
+                let name = &neighbors.params.embedding;
+                let (source, filtered) = embeddings
+                    .get(name)
+                    .ok_or_else(|| missing("embedding", name, "neighbors"))?;
+                neighbors.embedding = source.clone();
+                neighbors.filtered = *filtered;
+                let node = neighbors.node;
+                let (distances, connectivities) = neighbors.params.graph_names();
+                let source = |distances| GraphSource::Neighbors { node, distances };
+                graphs.insert(distances, (source(true), false));
+                graphs.insert(connectivities, (source(false), false));
             }
             Stage::Cluster(cluster) => {
-                let graph = &cluster.params.graph;
+                let name = &cluster.params.graph;
                 let method = cluster.params.method.name();
-                match graphs.iter().find(|(name, ..)| name == graph) {
-                    Some((_, source, distances, false)) => {
-                        cluster.source = *source;
-                        cluster.distances = *distances;
-                    }
-                    Some((.., true)) => {
-                        return Err(not_yet(
-                            &format!(
-                                "{method} after a cell filter or take_cells above its neighbors"
-                            ),
-                            "5.11",
-                        ));
-                    }
-                    None => {
-                        return Err(not_yet(
-                            &format!("{method} on graph '{graph}' read from the store"),
-                            "5.11",
-                        ));
-                    }
+                let (source, filtered) = graphs
+                    .get(name)
+                    .ok_or_else(|| missing("graph", name, method))?;
+                cluster.graph = source.clone();
+                cluster.filtered = *filtered;
+            }
+            Stage::Umap(umap) => {
+                let name = &umap.params.graph;
+                let (source, filtered) = graphs
+                    .get(name)
+                    .ok_or_else(|| missing("graph", name, "umap"))?;
+                if let GraphSource::Neighbors {
+                    distances: true, ..
+                } = source
+                {
+                    return Err(KytoError::InvalidArgument {
+                        function: "umap".to_owned(),
+                        parameter: "graph".to_owned(),
+                        value: format!("'{name}'"),
+                        problem: "it is the distances graph of a neighbors step".to_owned(),
+                        accepted: "the connectivities graph of a neighbors step".to_owned(),
+                    });
                 }
+                umap.graph = source.clone();
+                umap.filtered = *filtered;
+                let layout = EmbeddingSource::Umap { node: umap.node };
+                embeddings.insert(umap.params.into.clone(), (layout, false));
             }
             Stage::Maps(_) | Stage::Cells(_) | Stage::Genes { .. } => {}
         }
     }
-    Ok(())
+    Ok(ResolvedMembers {
+        at_stage,
+        embeddings: embeddings
+            .into_iter()
+            .map(|(name, (source, _))| (name, source))
+            .collect(),
+        graphs: graphs
+            .into_iter()
+            .map(|(name, (source, _))| (name, source))
+            .collect(),
+    })
 }
 
-/// The embedding the `neighbors` node `node` searched (the leading columns of its
-/// `pca`'s embedding it used) and its metric: umap places many graph components by
-/// their centroids in it.
-fn neighbor_data<'a>(
-    statistics: &'a Statistics,
-    stages: &[Stage],
-    node: usize,
-) -> Option<(Cow<'a, [f32]>, usize, Metric)> {
-    let stage = stages.iter().find_map(|stage| match stage {
-        Stage::Neighbors(neighbors) if neighbors.node == node => Some(neighbors),
-        _ => None,
-    })?;
-    let Some(NodeStatistics::Pca(pca)) = statistics.nodes.get(&stage.source) else {
-        return None;
-    };
-    let width = pca.n_components();
-    let used = stage.params.n_components.map_or(width, |used| {
-        usize::try_from(used).unwrap_or(width).min(width)
-    });
-    let values = if used == width {
-        Cow::Borrowed(pca.embedding())
-    } else {
-        Cow::Owned(
-            pca.embedding()
-                .chunks(width)
+impl Pipeline {
+    /// The rows of each embedding the leaves of stage `position` read, by name (task
+    /// 5.11): from the store, or from the statistics of the node that wrote it.
+    fn embedding_rows(
+        &self,
+        position: usize,
+        members: &mut StoredMembers,
+        statistics: &Statistics,
+    ) -> Result<Vec<(String, Arc<Rows>)>, KytoError> {
+        let prepared: Vec<&Prepared> = match &self.stages[position] {
+            Stage::Cells(CellStage::Filter(prepared)) => vec![prepared],
+            Stage::Cells(CellStage::Columns(columns)) => {
+                columns.iter().map(|(_, prepared, _)| prepared).collect()
+            }
+            Stage::Genes { kind, .. } => kind.prepared(),
+            _ => Vec::new(),
+        };
+        let mut found: Vec<(String, Arc<Rows>)> = Vec::new();
+        for leaf in prepared.iter().flat_map(|prepared| &prepared.leaves) {
+            if let Source::Embedding { name, .. } = leaf
+                && !found.iter().any(|(known, _)| known == name)
+            {
+                let Some(source) = self.embeddings_at[position].get(name) else {
+                    return Err(KytoError::InvalidArgument {
+                        function: "Pipeline::run".to_owned(),
+                        parameter: "embedding".to_owned(),
+                        value: format!("'{name}'"),
+                        problem: "the plan has no embedding of that name at this step".to_owned(),
+                        accepted: "a plan built by kyto".to_owned(),
+                    });
+                };
+                found.push((name.clone(), members.rows(source, statistics)?));
+            }
+        }
+        Ok(found)
+    }
+
+    /// What the neighbours of a graph from `graph` were searched in, at the rows of
+    /// `cells` (the graph's), the leading columns the search used, and its metric: umap
+    /// places many graph components by their centroids in it. `None` for a graph read
+    /// from the store (components are then placed at random).
+    fn neighbor_data(
+        &self,
+        graph: &GraphSource,
+        searched: &BTreeMap<usize, Rows>,
+        cells: &[u64],
+    ) -> Result<Option<(Vec<f32>, usize, Metric)>, KytoError> {
+        let GraphSource::Neighbors { node, .. } = graph else {
+            return Ok(None);
+        };
+        let Some(stage) = self.stages.iter().find_map(|stage| match stage {
+            Stage::Neighbors(neighbors) if neighbors.node == *node => Some(neighbors),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+        let Some(rows) = searched.get(node) else {
+            return Ok(None);
+        };
+        let width = rows.width;
+        let used = stage.params.n_components.map_or(width, |used| {
+            usize::try_from(used).unwrap_or(width).min(width)
+        });
+        let values = rows
+            .take(cells, "embedding", &stage.params.embedding)?
+            .to_f32();
+        let values = if used == width {
+            values
+        } else {
+            values
+                .chunks(width.max(1))
                 .flat_map(|row| row[..used].iter().copied())
-                .collect(),
-        )
-    };
-    Some((values, used, stage.params.metric))
-}
-
-fn not_yet(method: &str, task: &str) -> KytoError {
-    KytoError::NotImplementedYet {
-        method: format!("{method} in the executor"),
-        task: task.to_owned(),
+                .collect()
+        };
+        Ok(Some((values, used, stage.params.metric)))
     }
 }

@@ -278,13 +278,12 @@ def test_terminal_arguments_are_coded(store: Path, tmp_path: Path) -> None:
         atlas.sink_zarr(target, memory_limit=16)
     assert raised.value.code == "KY-E401"
     assert not target.exists()
-    with pytest.raises(kyto.NotImplementedYetError) as raised:
-        atlas.with_default_layer("counts").pca(
-            into="pca", n_components=1, seed=0
-        ).sink_zarr(target)
-    assert raised.value.code == "KY-E601"
-    assert "5.11" in str(raised.value)
     assert not target.exists()
+    # Embeddings reach the store since 5.11 (``tests/test_embeddings_graphs.py``).
+    atlas.with_default_layer("counts").pca(
+        into="pca", n_components=1, seed=0
+    ).sink_zarr(target)
+    assert _kyto.scan(target).embedding("pca").schema()["width"] == 1
 
 
 def test_collect_materializes_into_a_temporary_store(store: Path) -> None:

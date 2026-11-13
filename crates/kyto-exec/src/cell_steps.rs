@@ -9,18 +9,19 @@
 //! where the predicate is true (null is false, R9); `take_cells` keeps the cells whose
 //! IDs it lists, in the stream's (store) order, and reports at the stream's end an ID
 //! an earlier step removed; `with_cells` adds or replaces the block's computed columns,
-//! cast to the dtypes the plan declares. Every block is computed alone, so the result
-//! does not depend on threads or block sizes (R11).
-//! Does not: reorder cells (`take_cells` keeps store order, plan 5.8), read embeddings
-//! or recompute stored columns (`KY-E601` when the pipeline is built, plan 5.11), or
-//! resolve names (the plan did).
+//! cast to the dtypes the plan declares. An embedding component (task 5.11) is each
+//! cell's value in that column of the embedding's rows (stored, or computed by a
+//! `pca`/`umap` before the step), found by the cell's store position. Every block is
+//! computed alone, so the result does not depend on threads or block sizes (R11).
+//! Does not: reorder cells (`take_cells` keeps store order, plan 5.8), or resolve names
+//! (the plan did; a `.recompute()` leaf arrives as its recipe, `recipe.rs`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use kyto_core::{ColumnDtype, Source};
 use kyto_error::KytoError;
-use kyto_store::{CellBlock, CellData, CellValues, DenseValues};
+use kyto_store::{CellBlock, CellData, CellValues, DenseValues, FloatValues};
 use polars::prelude::{
     BooleanChunked, DataFrame, IdxCa, IdxSize, NamedFrom, NewChunkedArray, Series,
 };
@@ -29,6 +30,7 @@ use crate::cell_block_pool::CellBlockPool;
 use crate::expression::{Prepared, cast, mask};
 use crate::pipeline_block::PipelineBlock;
 use crate::qc::{CellQc, QcValues};
+use crate::run_members::Rows;
 
 /// One cell step, ready to run: its expressions' leaves resolved against the genes
 /// present at its place in the stream.
@@ -72,6 +74,8 @@ pub(crate) enum CellLeaf {
     Gene { layer: String, position: u32 },
     /// A QC metric of a layer.
     Qc { layer: String, qc: Box<CellQc> },
+    /// Component `component` of an embedding's rows (task 5.11).
+    Embedding { rows: Arc<Rows>, component: usize },
 }
 
 impl Evaluation {
@@ -80,9 +84,11 @@ impl Evaluation {
         Self { prepared, leaves }
     }
 
-    /// The layers its leaves read.
+    /// Whether its leaves read the blocks' layers.
     fn reads_layers(&self) -> bool {
-        !self.leaves.is_empty()
+        self.leaves
+            .iter()
+            .any(|leaf| !matches!(leaf, CellLeaf::Embedding { .. }))
     }
 }
 
@@ -297,6 +303,9 @@ impl CellStep {
                 // every `u32` is an `f64`. A plain read is cast back to `UInt32`.
                 DenseValues::U32(values) => Series::new("".into(), widen(&values)),
             },
+            CellLeaf::Embedding { rows, component } => {
+                embedding_values(rows, *component, &block.cells)
+            }
             CellLeaf::Qc { layer: name, qc } => match qc.evaluate(layer(name)?)? {
                 QcValues::Float64(values) => Series::new("".into(), values),
                 QcValues::UInt32(values) => Series::new("".into(), widen(&values)),
@@ -378,4 +387,28 @@ fn rows_of(layer: &CellBlock, keep: &[bool], pool: &CellBlockPool) -> Result<Cel
 /// `uint32` leaf values as `f64` (exact), the dtype arithmetic on them uses.
 pub(crate) fn widen(values: &[u32]) -> Vec<f64> {
     values.iter().map(|&value| f64::from(value)).collect()
+}
+
+/// Component `component` of `rows` at the store positions `keys`, in the embedding's
+/// dtype; null for a position without a row (none reaches a step after its producer).
+pub(crate) fn embedding_values(rows: &Rows, component: usize, keys: &[u64]) -> Series {
+    let at = |key: u64| {
+        rows.row(key)
+            .filter(|_| component < rows.width)
+            .map(|row| row * rows.width + component)
+    };
+    match &rows.values {
+        FloatValues::F32(values) => Series::new(
+            "".into(),
+            keys.iter()
+                .map(|key| at(*key).map(|at| values[at]))
+                .collect::<Vec<Option<f32>>>(),
+        ),
+        FloatValues::F64(values) => Series::new(
+            "".into(),
+            keys.iter()
+                .map(|key| at(*key).map(|at| values[at]))
+                .collect::<Vec<Option<f64>>>(),
+        ),
+    }
 }
