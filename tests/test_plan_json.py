@@ -66,10 +66,10 @@ def _plans(store: Path) -> list[_kyto.Atlas]:
         (gene_column("feature_type") == "Gene Expression") == True,
     )
     plans = [atlas, layered]
-    plans += [layered.filter_genes(expression) for expression in gene_expressions]
+    plans += [layered.filter(expression) for expression in gene_expressions]
     chained = layered
     for expression in gene_expressions[:4]:
-        chained = chained.filter_genes(expression)
+        chained = chained.filter(expression)
     plans.append(chained)
     plans.append(layered.with_default_layer("counts"))
     return plans
@@ -91,7 +91,7 @@ def test_the_text_is_versioned_with_stable_ids(store: Path) -> None:
     atlas = (
         _kyto.scan(store)
         .with_default_layer("counts")
-        .filter_genes(cell_profile("AAAC-1") > 0)
+        .filter(cell_profile("AAAC-1") > 0)
     )
     document: dict[str, Any] = json.loads(atlas.to_json())
     assert document["format"] == "kyto-plan"
@@ -116,9 +116,7 @@ def test_the_text_is_versioned_with_stable_ids(store: Path) -> None:
 
 
 def test_reading_needs_no_store(store: Path) -> None:
-    atlas = _kyto.scan(store).filter_genes(
-        gene_column("feature_type") == "Gene Expression"
-    )
+    atlas = _kyto.scan(store).filter(gene_column("feature_type") == "Gene Expression")
     text = atlas.to_json()
     shutil.rmtree(store)
     back = from_json(text)
@@ -163,7 +161,7 @@ def test_text_edited_into_an_invalid_plan_raises_the_builders_error(
 
 
 def test_expressions_of_the_other_axis_are_refused(store: Path) -> None:
-    atlas = _kyto.scan(store).filter_genes(cell_profile("AAAC-1", layer="counts") > 0)
+    atlas = _kyto.scan(store).filter(cell_profile("AAAC-1", layer="counts") > 0)
     document: dict[str, Any] = json.loads(atlas.to_json())
     document["nodes"][1]["step"]["predicate"][0] = {
         "op": "gene_expression",

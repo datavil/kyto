@@ -53,8 +53,8 @@ def test_estimates_read_nothing(store: Path) -> None:
     plans = [
         atlas,
         atlas.with_default_layer("counts"),
-        atlas.filter_genes(gene_column("feature_type") == "Gene Expression"),
-        atlas.with_default_layer("counts").filter_genes(cell_profile("AAAC-1") > 0),
+        atlas.filter(gene_column("feature_type") == "Gene Expression"),
+        atlas.with_default_layer("counts").filter(cell_profile("AAAC-1") > 0),
     ]
     shutil.rmtree(store)  # estimate() reads nothing
     # The `cell_profile` filter makes a statistics pass and keeps 8 bytes per gene.

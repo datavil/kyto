@@ -319,7 +319,7 @@ macro_rules! expr_class {
             ///
             /// A derived column the store computed (one whose ``schema.json`` entry
             /// records ``lineage``, such as ``n_genes``) goes stale once a step such as
-            /// ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``.
+            /// a gene ``filter`` changes its inputs: reading it then raises ``KY-E301``.
             /// A recomputed read is valid there. Nothing is computed now: the executor
             /// (task 5.x) computes it when the plan runs.
             ///

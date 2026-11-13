@@ -65,7 +65,7 @@ def test_n_genes_read_after_filter_genes_is_ky_e301(store: Path) -> None:
         repr(atlas.resolve(cell_column("n_genes") > 1)) == "cell_column('n_genes') > 1"
     )
 
-    filtered = atlas.filter_genes(gene_column("highly_variable"))
+    filtered = atlas.filter(gene_column("highly_variable"))
     with pytest.raises(kyto.StaleColumnError) as raised:
         filtered.resolve(cell_column("n_genes") > 1)
     error = raised.value
@@ -83,7 +83,7 @@ def test_n_genes_read_after_filter_genes_is_ky_e301(store: Path) -> None:
 
 
 def test_recompute_is_accepted_after_the_filter(store: Path) -> None:
-    filtered = _kyto.scan(store).filter_genes(gene_column("highly_variable"))
+    filtered = _kyto.scan(store).filter(gene_column("highly_variable"))
     resolved = filtered.resolve(cell_column("n_genes").recompute() > 1)
     assert repr(resolved) == "cell_column('n_genes').recompute() > 1"
     assert resolved.dtype is dtypes.Boolean
@@ -109,23 +109,23 @@ def test_recompute_needs_a_plain_column() -> None:
     )
 
 
-def test_filter_genes_checks_its_predicate(store: Path) -> None:
+def test_gene_filter_checks_its_predicate(store: Path) -> None:
     atlas = _kyto.scan(store)
-    filtered = atlas.filter_genes(gene_column("highly_variable"))
+    filtered = atlas.filter(gene_column("highly_variable"))
     assert (
         str(filtered).splitlines()[0] == "FILTER_GENES gene_column('highly_variable')"
     )
     with pytest.raises(kyto.ExpressionError) as raised:
-        atlas.filter_genes(cell_column("n_genes") > 1)  # pyright: ignore[reportArgumentType]
+        atlas.filter(1)  # pyright: ignore[reportArgumentType, reportCallIssue]
     assert raised.value.code == "KY-E205"
-    assert "'filter_genes' needs a boolean GeneExpr, got a CellExpr" in str(
+    assert "'filter' needs a boolean CellExpr or GeneExpr, got an int" in str(
         raised.value
     )
     with pytest.raises(kyto.ExpressionError) as raised:
-        atlas.filter_genes(gene_column("gene_id"))
+        atlas.filter(gene_column("gene_id"))
     assert raised.value.code == "KY-E205"
     with pytest.raises(kyto.ResolutionError) as raised:
-        atlas.filter_genes(gene_column("hvg"))
+        atlas.filter(gene_column("hvg"))
     assert raised.value.code == "KY-E210"
 
 
@@ -136,7 +136,7 @@ def test_docstring_examples_run() -> None:
         "cell_column": cell_column,
         "gene_column": gene_column,
     }
-    # Atlas.filter_genes runs with the other Atlas examples (tests/test_atlas.py).
+    # Atlas.filter runs with the other Atlas examples (tests/test_atlas.py).
     docstring = _kyto.CellExpr.recompute.__doc__
     assert docstring is not None
     runner.run(parser.get_doctest(docstring, globs, "CellExpr.recompute", None, 0))
@@ -149,7 +149,7 @@ def test_handles_after_filter_genes_report_unknown_sizes(store: Path) -> None:
     plan runs; the cell count stays exact and the names list the genes that may remain.
     """
     atlas = _kyto.scan(store)
-    filtered = atlas.filter_genes(gene_column("highly_variable"))
+    filtered = atlas.filter(gene_column("highly_variable"))
     layer = "counts"
     estimate = filtered.layer(layer).estimate()
     assert estimate["n_rows"] == 3

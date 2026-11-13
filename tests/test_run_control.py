@@ -206,7 +206,7 @@ def test_arguments_and_unsupported_plans_are_coded(store: Path, tmp_path: Path) 
     assert raised.value.code == "KY-E215"
     assert "not callable" in str(raised.value)
     # A gene filter runs since task 5.8 (every cell streams, over one gene).
-    filtered = atlas.filter_genes(gene_column("gene_id") == "g1")
+    filtered = atlas.filter(gene_column("gene_id") == "g1")
     assert filtered._execute(threads=1) == N_CELLS
     # A sink writes its target since task 5.9 (built from plan JSON: Python has no sink
     # method yet), never over an existing one.

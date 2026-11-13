@@ -89,7 +89,7 @@ def test_every_ky_e2xx_code_fires_without_reading_the_store(tmp_path: Path) -> N
         "KY-E201": lambda: atlas.resolve(feature("CD3E")),
         "KY-E202": lambda: loose & gene_column("highly_variable"),
         "KY-E204": lambda: atlas.resolve(gene_expression("TBCE", by="symbol")),
-        "KY-E205": lambda: atlas.filter_genes(cast(Any, gene_column("symbol"))),
+        "KY-E205": lambda: atlas.filter(cast(Any, gene_column("symbol"))),
         "KY-E206": lambda: bool(cell_column("n_genes") > 1),
         "KY-E207": _deep,
         "KY-E208": lambda: feature("log1p:"),

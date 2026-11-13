@@ -22,8 +22,14 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
+kyto-algo = { path = "../kyto-algo" }
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
 kyto-exec = { path = "../kyto-exec" }
 kyto-plan = { path = "../kyto-plan" }
 kyto-store = { path = "../kyto-store" }
+# Reads the columns of the frame `rank_genes_groups` returns (task 7.2; 7.5 hands frames
+# over through pyo3-polars). Same version as kyto-algo.
+polars = { version = "0.55.2", default-features = false }
+# The temporary store `Atlas.collect()` writes (task 7.2).
+tempfile = "3.27.0"

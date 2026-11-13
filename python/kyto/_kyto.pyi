@@ -2,7 +2,7 @@
 
 import builtins
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import (
     ClassVar,
     Generic,
@@ -107,7 +107,7 @@ class Atlas:
             ``KY-E203``: a gene read names a gene removed earlier in the plan.
         StaleColumnError
             ``KY-E301``: a stored derived cell column (its ``schema.json`` entry records
-            ``lineage``) is read after ``filter_genes``; read
+            ``lineage``) is read after a gene ``filter``; read
             ``cell_column(name).recompute()`` instead.
         LineageError
             ``KY-E302``: a ``.recompute()`` names a column that records no lineage.
@@ -122,21 +122,22 @@ class Atlas:
         """
     @overload
     def resolve(self, expression: GeneExpr[_D], /) -> GeneExpr[_D]: ...
-    def filter_genes(self, predicate: _GeneExprBoolean, /) -> Atlas:
-        """Keep the genes where a boolean gene expression is true.
+    def filter(self, predicate: _CellExprBoolean | _GeneExprBoolean, /) -> Atlas:
+        """Keep the cells or the genes where a boolean expression is true.
 
-        The predicate is resolved against this plan now (R6): its names are checked and
-        stored in full. Which genes it keeps is known only when the plan runs. From
-        here on, a derived cell column that the store computed over all genes (one whose
+        A ``CellExpr`` filters cells, a ``GeneExpr`` filters genes (R5). The predicate is
+        resolved against this plan now (R6): its names are checked and stored in full.
+        Which cells or genes it keeps is known only when the plan runs. After a gene
+        filter, a derived cell column that the store computed over all genes (one whose
         ``schema.json`` entry records ``lineage``, such as a stored ``n_genes``) is stale:
         reading it raises ``KY-E301``; read ``cell_column(name).recompute()`` instead.
 
         Parameters
         ----------
-        predicate : GeneExpr[Boolean] or GeneExpr[Unknown]
-            One value per gene; genes where it is ``True`` are kept, genes where it is
-            ``False`` or null are dropped. A column read (``Unknown`` until resolved)
-            must be stored as ``Boolean``.
+        predicate : CellExpr[Boolean] or GeneExpr[Boolean]
+            One value per cell or gene; where it is ``True`` the cell or gene is kept,
+            where it is ``False`` or null it is dropped. A column read (``Unknown`` until
+            resolved) must be stored as ``Boolean``.
 
         Returns
         -------
@@ -146,8 +147,8 @@ class Atlas:
         Raises
         ------
         ExpressionError
-            ``KY-E205``: ``predicate`` is not a ``GeneExpr``, or not boolean once
-            resolved.
+            ``KY-E205``: ``predicate`` is not a ``CellExpr`` or a ``GeneExpr``, or not
+            boolean once resolved.
         ResolutionError
             ``KY-E210``: a name in ``predicate`` matches nothing, and the other
             errors of ``resolve``.
@@ -155,9 +156,818 @@ class Atlas:
         Examples
         --------
         >>> atlas = scan(store)
-        >>> print(atlas.filter_genes(gene_column("feature_type") == "Gene Expression"))
+        >>> print(atlas.filter(gene_column("feature_type") == "Gene Expression"))
         FILTER_GENES gene_column('feature_type') == 'Gene Expression'
         SCAN "..." (2 cells x 3 genes)
+        >>> print(atlas.filter(total_counts(layer="counts") >= 6))
+        FILTER_CELLS total_counts(layer='counts') >= 6
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def select_genes(self, gene_ids: Sequence[str], /) -> Atlas:
+        """Keep the given genes, in the given order.
+
+        Parameters
+        ----------
+        gene_ids : list of str
+            Gene IDs (the store's ``gene_id`` column, not symbols), each once.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ResolutionError
+            ``KY-E210``: a gene ID is not in the store, with the closest IDs.
+        RemovedFeatureError
+            ``KY-E203``: a gene was removed earlier in the plan.
+        PlanError
+            ``KY-E215``: a gene ID is listed twice.
+
+        Examples
+        --------
+        >>> print(scan(store).select_genes(["ENSG03", "ENSG01"]))
+        SELECT_GENES ['ENSG03', 'ENSG01']
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def take_cells(self, cell_ids: Sequence[str], /) -> Atlas:
+        """Keep the given cells.
+
+        The cells stream in the store's order, not in the order given (deviations.md).
+        Whether every ID names a cell is checked when the plan runs (the cell IDs are
+        not read when the plan is built).
+
+        Parameters
+        ----------
+        cell_ids : list of str
+            Cell IDs (the store's ``cell_id`` column), each once.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ResolutionError
+            ``KY-E210``: a cell ID is empty (here), or names no cell of the plan (when
+            it runs).
+        PlanError
+            ``KY-E215``: a cell ID is listed twice.
+
+        Examples
+        --------
+        >>> print(scan(store).take_cells(["AAAG-1"]))
+        TAKE_CELLS ['AAAG-1']
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def with_cells(self, **columns: CellExpr[ExprDtype]) -> Atlas:
+        """Add or replace cell columns, each computed from a cell expression.
+
+        The expressions are resolved against this plan now (R6) and computed when the
+        plan runs. A name equal to a stored column replaces it.
+
+        Parameters
+        ----------
+        **columns : CellExpr
+            The new columns, by name.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E205``: a value is not a ``CellExpr``.
+        ResolutionError
+            ``KY-E210``: a name in an expression matches nothing, and the other errors
+            of ``resolve``.
+        PlanError
+            ``KY-E215``: no column is given.
+
+        Examples
+        --------
+        >>> print(scan(store).with_cells(n_counts=total_counts(layer="counts")))
+        WITH_CELLS "n_counts" = total_counts(layer='counts')
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def with_genes(self, **columns: GeneExpr[ExprDtype]) -> Atlas:
+        """Add or replace gene columns, each computed from a gene expression.
+
+        The expressions are resolved against this plan now (R6) and computed when the
+        plan runs. A name equal to a stored column replaces it.
+
+        Parameters
+        ----------
+        **columns : GeneExpr
+            The new columns, by name.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E205``: a value is not a ``GeneExpr``.
+        ResolutionError
+            ``KY-E210``: a name in an expression matches nothing, and the other errors
+            of ``resolve``.
+        PlanError
+            ``KY-E215``: no column is given.
+
+        Examples
+        --------
+        >>> print(scan(store).with_genes(is_cd3e=gene_column("symbol") == "CD3E"))
+        WITH_GENES "is_cd3e" = gene_column('symbol') == 'CD3E'
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def with_embedding(
+        self, name: str, values: npt.NDArray[np.float32 | np.float64], /
+    ) -> Atlas:
+        """Add a cell embedding computed outside kyto (not implemented yet).
+
+        Arrives with task 6.11 (interop hooks: scvi-tools and Harmony outputs).
+
+        Parameters
+        ----------
+        name : str
+            Name of the new embedding.
+        values : numpy.ndarray
+            One row per cell of the plan, in ``cell_ids()`` order.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged.
+
+        Raises
+        ------
+        NotImplementedYetError
+            ``KY-E601``: always, until task 6.11.
+
+        Examples
+        --------
+        >>> scan(store).with_embedding("X_scvi", None)
+        Traceback (most recent call last):
+        ...
+        kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not implemented yet...
+        """
+    def normalize_total(
+        self,
+        target_sum: float | None = None,
+        *,
+        layer: str | None = None,
+        into: str,
+    ) -> Atlas:
+        """Scale every cell to the same total count (scanpy's ``normalize_total``).
+
+        Each cell's values are multiplied by ``target_sum / total``, its total over the
+        genes of the plan; a cell with total 0 stays 0. Writes ``float32``.
+
+        Parameters
+        ----------
+        target_sum : float or None, default=None
+            The total of every cell afterwards; ``None`` for the median of the cells'
+            totals (one more pass over the cells).
+        layer : str or None, default=None
+            The layer read; ``None`` for the default layer.
+        into : str
+            The layer written (a new name, or an existing layer to replace).
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``target_sum`` is not a positive finite ``float32``.
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer is not in the plan.
+        StoreInputError
+            ``KY-E102``: ``into`` is not a valid layer name.
+
+        Examples
+        --------
+        >>> atlas = scan(store).normalize_total(1e4, layer="counts", into="normalized")
+        >>> print(atlas)
+        NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def log1p(self, *, layer: str | None = None, into: str) -> Atlas:
+        """Take ``log(1 + x)`` of every value (natural log, scanpy's ``log1p``).
+
+        Writes ``float32``. Absent values stay absent (``log1p(0) == 0``).
+
+        Parameters
+        ----------
+        layer : str or None, default=None
+            The layer read; ``None`` for the default layer.
+        into : str
+            The layer written (a new name, or an existing layer to replace).
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer is not in the plan.
+
+        Examples
+        --------
+        >>> print(scan(store).with_default_layer("counts").log1p(into="log1p"))
+        LOG1P "counts" -> "log1p"
+        WITH_DEFAULT_LAYER "counts"
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def scale(
+        self,
+        *,
+        layer: str | None = None,
+        into: str,
+        zero_center: bool = True,
+        max_value: float | None = None,
+    ) -> Atlas:
+        """Scale every gene to mean 0 and variance 1 (scanpy's ``scale``).
+
+        Centring stores every gene of every cell (``explain()`` notes it; PCA centres
+        sparse data implicitly). Writes ``float32``.
+
+        Parameters
+        ----------
+        layer : str or None, default=None
+            The layer read; ``None`` for the default layer.
+        into : str
+            The layer written (a new name, or an existing layer to replace).
+        zero_center : bool, default=True
+            Subtract each gene's mean; ``False`` only divides by the standard deviation
+            (and keeps the data sparse).
+        max_value : float or None, default=None
+            Clip the scaled values to ``[-max_value, max_value]`` (``[.., max_value]``
+            without centring); ``None`` does not clip.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``max_value`` is not positive.
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer is not in the plan.
+
+        Examples
+        --------
+        >>> print(scan(store).scale(layer="counts", into="scaled", max_value=10))
+        SCALE "counts" -> "scaled" zero_center=true max_value=10
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def highly_variable_genes(
+        self,
+        *,
+        layer: str | None = None,
+        flavor: Literal["seurat", "cell_ranger", "seurat_v3"] = "seurat",
+        n_top_genes: int | None = None,
+        batch_key: str | None = None,
+    ) -> Atlas:
+        """Mark the highly variable genes (scanpy's ``highly_variable_genes``).
+
+        Adds scanpy's gene columns: ``highly_variable`` (``Boolean``), ``means``,
+        ``dispersions`` and ``dispersions_norm`` (``seurat``, ``cell_ranger``) or
+        ``means``, ``variances``, ``variances_norm`` and ``highly_variable_rank``
+        (``seurat_v3``), all ``Float64``, and with ``batch_key``
+        ``highly_variable_nbatches`` (``Int64``) and ``highly_variable_intersection``.
+        Keep the genes with ``filter(gene_column("highly_variable"))``.
+
+        Parameters
+        ----------
+        layer : str or None, default=None
+            The layer read (log data for ``seurat`` and ``cell_ranger``, counts for
+            ``seurat_v3``); ``None`` for the default layer.
+        flavor : {"seurat", "cell_ranger", "seurat_v3"}, default="seurat"
+            The method, as scanpy's.
+        n_top_genes : int or None, default=None
+            Mark this many genes; ``None`` uses scanpy's dispersion cutoffs (not with
+            ``seurat_v3``, which needs it).
+        batch_key : str or None, default=None
+            A cell column: genes are ranked in each batch and combined as scanpy does.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: an unknown ``flavor``, ``n_top_genes`` below 1, or
+            ``seurat_v3`` without ``n_top_genes``.
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer or ``batch_key`` is not in the plan.
+
+        Examples
+        --------
+        >>> atlas = scan(store).highly_variable_genes(layer="counts", n_top_genes=2)
+        >>> print(atlas)
+        HIGHLY_VARIABLE_GENES "counts" flavor=seurat n_top_genes=2
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def pca(
+        self,
+        *,
+        layer: str | None = None,
+        into: str,
+        n_components: int = 50,
+        seed: int,
+    ) -> Atlas:
+        """Principal components of a layer (scanpy's ``pca``, implicit centring).
+
+        Streams the layer in ``2 + PCA_POWER_ITERATIONS`` passes (a randomized block
+        Krylov method) and never densifies it. Adds the cell embedding ``into`` (one row
+        per cell, ``n_components`` wide) and the gene embedding ``into + "_loadings"``.
+
+        Parameters
+        ----------
+        layer : str or None, default=None
+            The layer read; ``None`` for the default layer.
+        into : str
+            Name of the cell embedding written.
+        n_components : int, default=50
+            Components computed.
+        seed : int
+            Seed of the random start (R7, R11: the same seed gives the same result).
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``n_components`` is below 1 or above the cells or genes, or
+            ``seed`` is negative.
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer is not in the plan.
+
+        Examples
+        --------
+        >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0))
+        PCA "counts" -> "pca" n_components=1 seed=0
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def neighbors(
+        self,
+        embedding: str,
+        /,
+        *,
+        n_neighbors: int = 15,
+        n_components: int | None = None,
+        metric: Literal["euclidean", "cosine"] = "euclidean",
+        search: Literal["exact", "approximate"] = "exact",
+        seed: int = 0,
+        into: str | None = None,
+    ) -> Atlas:
+        """The k nearest neighbours of every cell in a cell embedding (scanpy's
+        ``neighbors``).
+
+        Adds the cell graph of distances, ``"distances"`` (or ``into + "_distances"``),
+        and declares the connectivities graph, ``"connectivities"`` (or
+        ``into + "_connectivities"``).
+
+        Parameters
+        ----------
+        embedding : str
+            The cell embedding searched, such as the ``into`` of ``pca``.
+        n_neighbors : int, default=15
+            Neighbours per cell, the cell itself included (scanpy's meaning).
+        n_components : int or None, default=None
+            Use the first this many columns of the embedding; ``None`` uses all.
+        metric : {"euclidean", "cosine"}, default="euclidean"
+            The distance.
+        search : {"exact", "approximate"}, default="exact"
+            Exact blocked search, or HNSW (approximate, faster on large atlases).
+        seed : int, default=0
+            Seed of the approximate search (R7, R11).
+        into : str or None, default=None
+            Prefix of the graph names; ``None`` for scanpy's names.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``n_neighbors`` below 2 or above the cells, ``n_components``
+            out of range, a negative ``seed``, or an unknown ``metric`` or ``search``.
+        MissingMemberError
+            ``KY-E109``: ``embedding`` is not a cell embedding of the plan.
+
+        Examples
+        --------
+        >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+        >>> print(atlas.neighbors("pca", n_neighbors=2))
+        NEIGHBORS "pca" -> "distances", "connectivities" n_neighbors=2 metric=Euclidean search=Exact seed=0
+        PCA "counts" -> "pca" n_components=1 seed=0
+        SCAN "..." (2 cells x 3 genes)
+        """
+    def leiden(
+        self,
+        *,
+        graph: str = "connectivities",
+        resolution: float = 1.0,
+        seed: int,
+        into: str,
+    ) -> Atlas:
+        """Cluster the cells of a cell graph with Leiden (scanpy's ``leiden``).
+
+        Adds the cell column ``into``: one cluster label per cell.
+
+        Parameters
+        ----------
+        graph : str, default="connectivities"
+            The cell graph clustered, such as the connectivities ``neighbors`` declares.
+        resolution : float, default=1.0
+            Higher values give more, smaller clusters.
+        seed : int
+            Seed of the random steps (R7, R11: the same seed gives the same clusters).
+        into : str
+            The cell column written.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
+            more, or ``into`` is not a valid column name.
+        MissingMemberError
+            ``KY-E109``: ``graph`` is not a cell graph of the plan.
+
+        Examples
+        --------
+        >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+        >>> atlas = atlas.neighbors("pca", n_neighbors=2).leiden(into="leiden", seed=0)
+        >>> print(str(atlas).splitlines()[0])
+        LEIDEN "connectivities" -> "leiden" resolution=1 seed=0
+        """
+    def louvain(
+        self,
+        *,
+        graph: str = "connectivities",
+        resolution: float = 1.0,
+        seed: int,
+        into: str,
+    ) -> Atlas:
+        """Cluster the cells of a cell graph with Louvain (scanpy's ``louvain``).
+
+        Adds the cell column ``into``: one cluster label per cell.
+
+        Parameters
+        ----------
+        graph : str, default="connectivities"
+            The cell graph clustered, such as the connectivities ``neighbors`` declares.
+        resolution : float, default=1.0
+            Higher values give more, smaller clusters.
+        seed : int
+            Seed of the random steps (R7, R11: the same seed gives the same clusters).
+        into : str
+            The cell column written.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
+            more, or ``into`` is not a valid column name.
+        MissingMemberError
+            ``KY-E109``: ``graph`` is not a cell graph of the plan.
+
+        Examples
+        --------
+        >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+        >>> atlas = atlas.neighbors("pca", n_neighbors=2).louvain(into="louvain", seed=0)
+        >>> print(str(atlas).splitlines()[0])
+        LOUVAIN "connectivities" -> "louvain" resolution=1 seed=0
+        """
+    def umap(
+        self,
+        *,
+        graph: str = "connectivities",
+        into: str,
+        n_components: int = 2,
+        min_dist: float = 0.5,
+        spread: float = 1.0,
+        n_epochs: int | None = None,
+        alpha: float = 1.0,
+        gamma: float = 1.0,
+        negative_sample_rate: int = 5,
+        init: Literal["spectral", "random"] = "spectral",
+        seed: int,
+    ) -> Atlas:
+        """Lay the cells of a cell graph out in a few dimensions (scanpy's ``umap``).
+
+        Adds the cell embedding ``into`` (``float32``, ``n_components`` wide).
+
+        Parameters
+        ----------
+        graph : str, default="connectivities"
+            The cell graph laid out, such as the connectivities ``neighbors`` declares.
+        into : str
+            The cell embedding written.
+        n_components : int, default=2
+            Dimensions of the layout (1 to 100).
+        min_dist : float, default=0.5
+            The smallest distance between points of the layout (at most ``spread``).
+        spread : float, default=1.0
+            The scale of the layout's distances.
+        n_epochs : int or None, default=None
+            Epochs of the optimisation; ``None`` for scanpy's default.
+        alpha : float, default=1.0
+            The initial learning rate.
+        gamma : float, default=1.0
+            The weight of the negative samples (repulsion).
+        negative_sample_rate : int, default=5
+            Negative samples per positive sample.
+        init : {"spectral", "random"}, default="spectral"
+            Where the layout starts.
+        seed : int
+            Seed of the random steps (R7, R11).
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: an argument out of range (``n_components`` from 1 to 100,
+            positive ``spread`` and ``alpha``, ``min_dist`` from 0 to ``spread``), an
+            unknown ``init``, or an ``into`` that is not a valid embedding name.
+        MissingMemberError
+            ``KY-E109``: ``graph`` is not a cell graph of the plan.
+
+        Examples
+        --------
+        >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+        >>> atlas = atlas.neighbors("pca", n_neighbors=2).umap(into="X_umap", seed=0)
+        >>> print(str(atlas).splitlines()[0])
+        UMAP "connectivities" -> "X_umap" n_components=2 min_dist=0.5 spread=1 n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0
+        """
+    def rank_genes_groups(
+        self,
+        groupby: str,
+        /,
+        *,
+        method: Literal["t-test", "wilcoxon"] = "t-test",
+        layer: str | None = None,
+        groups: Sequence[str] | None = None,
+        reference: str | None = None,
+        n_genes: int | None = None,
+        rankby_abs: bool = False,
+        tie_correct: bool = False,
+        correction: Literal["benjamini-hochberg", "bonferroni"] = "benjamini-hochberg",
+        threads: int | None = None,
+    ) -> pl.LazyFrame:
+        """Rank the genes of each group by a differential expression test (scanpy's
+        ``rank_genes_groups`` then ``rank_genes_groups_df``).
+
+        The arguments and the plan's layer and ``groupby`` column are checked now; the
+        plan runs only when the returned frame is collected (R1), with the GIL released.
+        One row per (group, gene): groups in order (an ``Enum`` column's categories,
+        numbers by value, else text sorted; or as ``groups`` lists them), each group's
+        genes by statistic, descending (ties in gene order). Cells with a null label are
+        in no group and in every rest.
+
+        Parameters
+        ----------
+        groupby : str
+            The cell column whose values are the groups (stored, or added by
+            ``with_cells``).
+        method : {"t-test", "wilcoxon"}, default="t-test"
+            Welch's t-test, or Wilcoxon's rank-sum test (normal approximation).
+        layer : str or None, default=None
+            The layer tested (log data, as scanpy expects); ``None`` for the default
+            layer.
+        groups : list of str or None, default=None
+            The groups tested, in this order; ``None`` tests every group. The rest is
+            still every other cell.
+        reference : str or None, default=None
+            The group every other is compared with; ``None`` compares with the rest.
+        n_genes : int or None, default=None
+            Keep the first this many genes of each group; ``None`` keeps every gene.
+        rankby_abs : bool, default=False
+            Order genes by the absolute statistic.
+        tie_correct : bool, default=False
+            Wilcoxon only: correct the variance for ties.
+        correction : {"benjamini-hochberg", "bonferroni"}, default="benjamini-hochberg"
+            How the p-values are adjusted.
+        threads : int or None, default=None
+            Threads that read and compute blocks; ``None`` for one per CPU core. The
+            result does not depend on it (R11).
+
+        Returns
+        -------
+        polars.LazyFrame
+            Columns ``group``, ``gene_id`` (``String``), ``statistic``,
+            ``log_fold_change``, ``p_value``, ``adjusted_p_value`` (``Float64``).
+            Collecting it runs the plan and returns a new frame the caller owns.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: an unknown ``method`` or ``correction``, ``n_genes`` below 1,
+            ``threads`` below 1; when collected, an empty or repeated ``groups``, no
+            labelled cell, or a tested group of one cell.
+        ResolutionError
+            ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+        MissingMemberError
+            ``KY-E109``: the layer or ``groupby`` is not in the plan.
+        ResolutionError
+            ``KY-E214`` (when collected): a ``groups`` or ``reference`` label no cell
+            has.
+
+        Examples
+        --------
+        >>> frame = scan(store).rank_genes_groups("cell_id", layer="counts")
+        >>> frame.collect_schema().names()
+        ['group', 'gene_id', 'statistic', 'log_fold_change', 'p_value', 'adjusted_p_value']
+        """
+    def on(self, *, device: Literal["cpu", "auto", "cuda", "wgpu", "metal"]) -> Atlas:
+        """Run the plan on a device (R7: the device is an argument, not a setting).
+
+        Today every plan runs on the CPU; the GPU devices arrive with task 9.1.
+
+        Parameters
+        ----------
+        device : {"cpu"}
+            The device the plan's nodes run on.
+
+        Returns
+        -------
+        Atlas
+            A new plan; this one is unchanged. Nothing is read or copied.
+
+        Raises
+        ------
+        NotImplementedYetError
+            ``KY-E601``: ``"auto"``, ``"cuda"``, ``"wgpu"`` or ``"metal"`` (task 9.1).
+        PlanError
+            ``KY-E215``: any other device name.
+
+        Examples
+        --------
+        >>> scan(store).on(device="cpu").estimate()["device"]
+        'cpu'
+        """
+    def collect(
+        self,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> Atlas:
+        """Run the plan and keep its result as a new, materialized ``Atlas``.
+
+        The plan's output (its layers, and its cell and gene tables with the computed
+        columns) is written to a temporary kyto store in the system's temporary
+        directory, and the returned ``Atlas`` scans that store (with this plan's default
+        layer, if the output has it). The store is deleted when the last ``Atlas`` built
+        on it is garbage-collected, so ``to_json()`` of such a plan names a store that
+        lives only as long as the plan. To keep the result, use ``sink_zarr``. The GIL is
+        released while the plan computes; Ctrl-C cancels the run cleanly.
+
+        Parameters
+        ----------
+        memory_limit : str or int or None, default=None
+            The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+            of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+            anything is read. ``None`` runs with the default blocks.
+        threads : int or None, default=None
+            Threads that read and compute blocks; ``None`` for one per CPU core. The
+            result does not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread whenever the run
+            moved (cell rows, summed over the passes).
+
+        Returns
+        -------
+        Atlas
+            A new plan with one ``SCAN`` step (and ``WITH_DEFAULT_LAYER``) over the
+            result; this one is unchanged. The data are copied into the temporary store.
+
+        Raises
+        ------
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
+        DeviceError
+            ``KY-E502``: the system cannot start ``threads`` threads.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet, or it
+            carries an embedding or a graph (written from task 5.11).
+        KeyboardInterrupt
+            Ctrl-C while the plan computes; the run has stopped.
+
+        Examples
+        --------
+        >>> atlas = scan(store).filter(total_counts(layer="counts") >= 7)
+        >>> print(atlas.collect(threads=1))
+        SCAN "...atlas.kyto" (1 cells x 3 genes)
+        """
+    def sink_zarr(
+        self,
+        path: str | os.PathLike[str],
+        /,
+        *,
+        memory_limit: str | int | None = None,
+        threads: int | None = None,
+        progress: Callable[[int, int], object] | None = None,
+    ) -> None:
+        """Run the plan and write its output as a new kyto store at ``path``.
+
+        Writes the plan's layers, and its cell and gene tables with the computed columns
+        (derived columns keep their lineage; stale ones are dropped), streaming one cell
+        block at a time. The store is written next to ``path`` and renamed into place
+        when complete, so a failed or cancelled run leaves nothing. The GIL is released
+        while the plan computes; Ctrl-C cancels the run cleanly.
+
+        Parameters
+        ----------
+        path : str or os.PathLike[str]
+            The new store. It must not exist.
+        memory_limit : str or int or None, default=None
+            The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+            of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+            anything is read. ``None`` runs with the default blocks.
+        threads : int or None, default=None
+            Threads that read and compute blocks; ``None`` for one per CPU core. The
+            store does not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread whenever the run
+            moved (cell rows, summed over the passes).
+
+        Returns
+        -------
+        None
+            The data are written to ``path``; this plan is unchanged.
+
+        Raises
+        ------
+        StoreInputError
+            ``KY-E118``: ``path`` exists (overwriting arrives with task 7.3).
+        PlanError
+            ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+            accepted. ``KY-E216``: the plan already ends in a sink.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within ``memory_limit``.
+        DeviceError
+            ``KY-E502``: the system cannot start ``threads`` threads.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet, or it
+            carries an embedding or a graph (written from task 5.11).
+        KeyboardInterrupt
+            Ctrl-C while the plan computes; the run has stopped and nothing is left.
+
+        Examples
+        --------
+        >>> target = store.parent / "normalized.kyto"
+        >>> scan(store).normalize_total(1e4, layer="counts", into="normalized").sink_zarr(target)
+        >>> scan(target).layer("normalized").schema()["dtype"]
+        'float32'
         """
     @overload
     def explain(self, *, format: Literal["text"] = "text") -> str:
@@ -203,7 +1013,7 @@ class Atlas:
         Examples
         --------
         >>> genes = gene_column("feature_type") == "Gene Expression"
-        >>> print(scan(store).filter_genes(genes).explain())
+        >>> print(scan(store).filter(genes).explain())
         logical plan
           node 1 FILTER_GENES gene_column('feature_type') == 'Gene Expression' <- node 0
           node 0 SCAN "..." (2 cells x 3 genes)
@@ -211,7 +1021,7 @@ class Atlas:
           output #1 reads [...]
           #1 FILTER_GENES ... <- #0 (node 1) [device=cpu passes=1 blocks=4096 cells]
           #0 SCAN ... (node 0) [device=cpu passes=1 blocks=4096 cells]
-        >>> explained = scan(store).filter_genes(genes).explain(format="json")
+        >>> explained = scan(store).filter(genes).explain(format="json")
         >>> [step["name"] for step in explained["logical"]]
         ['FILTER_GENES', 'SCAN']
         >>> explained["optimized"]["nodes"][0]["passes"]
@@ -315,7 +1125,7 @@ class Atlas:
         Examples
         --------
         >>> genes = gene_column("feature_type") == "Gene Expression"
-        >>> atlas = scan(store).filter_genes(genes)
+        >>> atlas = scan(store).filter(genes)
         >>> text = atlas.to_json()
         >>> text[:39]
         '{"format":"kyto-plan","version":1,"node'
@@ -713,7 +1523,7 @@ class Matrix:
         -------
         list of str
             A new list, read from the gene table when the plan was built. After
-            ``filter_genes``, the genes that may remain: which ones is known only
+            a gene ``filter``, the genes that may remain: which ones is known only
             when the plan runs, and ``estimate()`` gives ``n_columns`` as ``None``.
 
         Examples
@@ -1178,7 +1988,7 @@ class CellExpr(Generic[_D_co]):
 
         A derived column the store computed (one whose ``schema.json`` entry records
         ``lineage``, such as ``n_genes``) goes stale once a step such as
-        ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``. A
+        a gene ``filter`` changes its inputs: reading it then raises ``KY-E301``. A
         recomputed read is valid there. Nothing is computed now: the executor (task
         5.x) computes it when the plan runs.
 
@@ -1436,7 +2246,7 @@ class GeneExpr(Generic[_D_co]):
 
         A derived column the store computed (one whose ``schema.json`` entry records
         ``lineage``, such as ``n_genes``) goes stale once a step such as
-        ``filter_genes`` changes its inputs: reading it then raises ``KY-E301``. A
+        a gene ``filter`` changes its inputs: reading it then raises ``KY-E301``. A
         recomputed read is valid there. Nothing is computed now: the executor (task
         5.x) computes it when the plan runs.
 

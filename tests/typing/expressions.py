@@ -76,14 +76,15 @@ def null_tests(numeric: CellExpr[Numeric], text: GeneExpr[String]) -> None:
 
 
 def lineage(atlas: Atlas, numeric: CellExpr[Numeric], flag: GeneExpr[Boolean]) -> None:
-    """``recompute`` keeps axis and kind; ``filter_genes`` takes a boolean gene
-    expression only (task 3.8)."""
+    """``recompute`` keeps axis and kind; ``filter`` takes a boolean cell or gene
+    expression only (tasks 3.8, 7.2)."""
     again: CellExpr[Numeric] = numeric.recompute()
-    filtered: Atlas = atlas.filter_genes(flag)
+    filtered: Atlas = atlas.filter(flag)
     _ = (again, filtered)
-    _ = atlas.filter_genes(numeric > 1)  # pyright: ignore[reportArgumentType]
-    _ = atlas.filter_genes(gene_column("highly_variable"))  # Unknown until resolved
-    _ = atlas.filter_genes(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
+    _ = atlas.filter(numeric > 1)  # a cell filter (7.2)
+    _ = atlas.filter(numeric)  # pyright: ignore[reportArgumentType]
+    _ = atlas.filter(gene_column("highly_variable"))  # Unknown until resolved
+    _ = atlas.filter(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
 
 
 def gene_symbols(atlas: Atlas) -> None:

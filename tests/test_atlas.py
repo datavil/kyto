@@ -75,11 +75,30 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
     for name in ("__getitem__", "__setitem__", "X", "obs", "var", "__dict__"):
         assert not hasattr(atlas, name), name
     public = {name for name in dir(_kyto.Atlas) if not name.startswith("_")}
-    # The handle accessors (task 3.6, taken early from 7.3) are read-only too.
+    # The handle accessors (task 3.6, taken early from 7.3) are read-only too; the
+    # chain methods and terminals are task 7.2's.
     assert public == {
         "resolve",
         "with_default_layer",
-        "filter_genes",
+        "filter",
+        "select_genes",
+        "take_cells",
+        "with_cells",
+        "with_genes",
+        "with_embedding",
+        "normalize_total",
+        "log1p",
+        "scale",
+        "highly_variable_genes",
+        "pca",
+        "neighbors",
+        "leiden",
+        "louvain",
+        "umap",
+        "rank_genes_groups",
+        "on",
+        "collect",
+        "sink_zarr",
         "cells",
         "genes",
         "layer",
@@ -117,7 +136,7 @@ def test_docstring_examples_run(store: Path) -> None:
         ("Atlas", _kyto.Atlas.__doc__),
         ("Atlas.with_default_layer", _kyto.Atlas.with_default_layer.__doc__),
         ("Atlas.resolve", _kyto.Atlas.resolve.__doc__),
-        ("Atlas.filter_genes", _kyto.Atlas.filter_genes.__doc__),
+        ("Atlas.filter", _kyto.Atlas.filter.__doc__),
         ("Atlas.to_json", _kyto.Atlas.to_json.__doc__),
         ("Atlas.explain", _kyto.Atlas.explain.__doc__),
         ("Atlas.estimate", _kyto.Atlas.estimate.__doc__),
@@ -129,7 +148,8 @@ def test_docstring_examples_run(store: Path) -> None:
             "feature": kyto.feature,
             "gene_column": kyto.gene_column,
             "from_json": kyto.from_json,
+            "total_counts": kyto.qc.total_counts,
         }
         runner.run(parser.get_doctest(docstring, globs, name, None, 0))
     assert runner.failures == 0
-    assert runner.tries == 21
+    assert runner.tries == 22

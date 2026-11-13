@@ -5,20 +5,22 @@
 //! new `Atlas` (R2); resolve an expression's names against the plan (task 3.5); build
 //! the root plan from a store's `schema.json` and the `gene_id` column of its gene table;
 //! hand out the read-only handles (task 3.6; the accessors are 7.3's, taken early);
-//! filter genes (`filter_genes`, 4.1/7.2's gene filter taken early for task 3.8); write the
+//! the chain methods (task 7.2: filters, selections, columns, the algorithms of 6.x, and
+//! the terminals `collect` and `sink_zarr`); write the
 //! plan JSON (`to_json`) and read it back (`from_json`, task 4.3); run the plan to
 //! nowhere (`_execute`, task 5.7's private hook: GIL, progress, cancel).
-//! Does not: read other columns or the matrix; hold any state besides the plan (R7); expose
-//! `__getitem__`, `.X`, `obs` or `var` (R4). `scan` is exported as `kyto.scan` (7.1);
-//! the chain methods arrive with 7.2.
+//! Does not: read the matrix outside the terminals (R1); hold any state besides the plan
+//! and the temporary store a `collect()` wrote (R7); expose `__getitem__`, `.X`, `obs` or
+//! `var` (R4). `scan` is exported as `kyto.scan` (7.1).
 
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use kyto_algo::RankGenesGroups;
 use kyto_core::GeneIds;
 use kyto_error::KytoError;
-use kyto_plan::{PhysicalOptions, Plan};
+use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Sink, Umap};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use pyo3::{IntoPyObjectExt, PyAny};
@@ -27,6 +29,7 @@ use crate::errors::to_py_err;
 use crate::expr::{PyCellExpr, PyGeneExpr};
 use crate::handles::{PyEmbedding, PyGraph, PyMatrix, PyModality, PyTable};
 use crate::run::run_plan;
+use crate::{chain, rank_genes, terminal};
 
 /// A lazy, immutable plan over a kyto store.
 ///
@@ -44,6 +47,63 @@ use crate::run::run_plan;
 #[pyclass(frozen, module = "kyto", name = "Atlas")]
 pub struct Atlas {
     plan: Arc<Plan>,
+    /// The temporary store a `collect()` wrote and this plan scans: deleted when the
+    /// last `Atlas` holding it is dropped. `None` for any other plan.
+    collected: Option<Arc<tempfile::TempDir>>,
+}
+
+impl Atlas {
+    /// A new `Atlas` with `plan`, built on this one (it keeps the collected store
+    /// alive), or the plan's error as a Python exception.
+    fn derive(&self, py: Python<'_>, plan: Result<Arc<Plan>, KytoError>) -> PyResult<Self> {
+        plan.map(|plan| Self {
+            plan,
+            collected: self.collected.clone(),
+        })
+        .map_err(|error| to_py_err(py, &error))
+    }
+
+    /// `leiden` and `louvain`: one clustering node.
+    fn cluster(
+        &self,
+        py: Python<'_>,
+        method: ClusterMethod,
+        graph: &str,
+        resolution: Option<&Bound<'_, PyAny>>,
+        seed: &Bound<'_, PyAny>,
+        into: &str,
+    ) -> PyResult<Self> {
+        let name = method.name();
+        let parameters = Cluster {
+            method,
+            graph: graph.to_owned(),
+            resolution: chain::optional_float(py, name, "resolution", resolution)?.unwrap_or(1.0),
+            seed: chain::integer(py, name, "seed", seed, 0)?,
+            into: into.to_owned(),
+        };
+        self.derive(py, self.plan.cluster(parameters))
+    }
+
+    /// Run this plan into a kyto store at `target` (`collect`, `sink_zarr`), through
+    /// `run_plan`: GIL released, progress, Ctrl-C.
+    fn run_sink(
+        &self,
+        py: Python<'_>,
+        function: &str,
+        target: &std::path::Path,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let plan = self
+            .plan
+            .sink(Sink::Zarr {
+                path: target.display().to_string(),
+            })
+            .map_err(|error| to_py_err(py, &error))?;
+        let run = terminal::run_arguments(py, function, &plan, memory_limit, threads, progress)?;
+        run_plan(py, &run.physical, run.threads, progress).map(|_| ())
+    }
 }
 
 #[pymethods]
@@ -72,10 +132,7 @@ impl Atlas {
     /// WITH_DEFAULT_LAYER "counts"
     /// SCAN "..." (2 cells x 3 genes)
     fn with_default_layer(&self, py: Python<'_>, layer: &str) -> PyResult<Self> {
-        self.plan
-            .with_default_layer(layer)
-            .map(|plan| Self { plan })
-            .map_err(|error| to_py_err(py, &error))
+        self.derive(py, self.plan.with_default_layer(layer))
     }
 
     /// Resolve the names in an expression against this plan (R6).
@@ -116,7 +173,7 @@ impl Atlas {
     ///     ``KY-E203``: a gene read names a gene removed earlier in the plan.
     /// StaleColumnError
     ///     ``KY-E301``: a stored derived cell column (its ``schema.json`` entry records
-    ///     ``lineage``) is read after ``filter_genes``; read
+    ///     ``lineage``) is read after a gene ``filter``; read
     ///     ``cell_column(name).recompute()`` instead.
     /// LineageError
     ///     ``KY-E302``: a ``.recompute()`` names a column that records no lineage.
@@ -150,20 +207,21 @@ impl Atlas {
         ))
     }
 
-    /// Keep the genes where a boolean gene expression is true.
+    /// Keep the cells or the genes where a boolean expression is true.
     ///
-    /// The predicate is resolved against this plan now (R6): its names are checked and
-    /// stored in full. Which genes it keeps is known only when the plan runs. From
-    /// here on, a derived cell column that the store computed over all genes (one whose
+    /// A ``CellExpr`` filters cells, a ``GeneExpr`` filters genes (R5). The predicate is
+    /// resolved against this plan now (R6): its names are checked and stored in full.
+    /// Which cells or genes it keeps is known only when the plan runs. After a gene
+    /// filter, a derived cell column that the store computed over all genes (one whose
     /// ``schema.json`` entry records ``lineage``, such as a stored ``n_genes``) is stale:
     /// reading it raises ``KY-E301``; read ``cell_column(name).recompute()`` instead.
     ///
     /// Parameters
     /// ----------
-    /// predicate : GeneExpr[Boolean] or GeneExpr[Unknown]
-    ///     One value per gene; genes where it is ``True`` are kept, genes where it is
-    ///     ``False`` or null are dropped. A column read (``Unknown`` until resolved)
-    ///     must be stored as ``Boolean``.
+    /// predicate : CellExpr[Boolean] or GeneExpr[Boolean]
+    ///     One value per cell or gene; where it is ``True`` the cell or gene is kept,
+    ///     where it is ``False`` or null it is dropped. A column read (``Unknown`` until
+    ///     resolved) must be stored as ``Boolean``.
     ///
     /// Returns
     /// -------
@@ -173,8 +231,8 @@ impl Atlas {
     /// Raises
     /// ------
     /// ExpressionError
-    ///     ``KY-E205``: ``predicate`` is not a ``GeneExpr``, or not boolean once
-    ///     resolved.
+    ///     ``KY-E205``: ``predicate`` is not a ``CellExpr`` or a ``GeneExpr``, or not
+    ///     boolean once resolved.
     /// ResolutionError
     ///     ``KY-E210``: a name in ``predicate`` matches nothing, and the other
     ///     errors of ``resolve``.
@@ -182,21 +240,1065 @@ impl Atlas {
     /// Examples
     /// --------
     /// >>> atlas = scan(store)
-    /// >>> print(atlas.filter_genes(gene_column("feature_type") == "Gene Expression"))
+    /// >>> print(atlas.filter(gene_column("feature_type") == "Gene Expression"))
     /// FILTER_GENES gene_column('feature_type') == 'Gene Expression'
     /// SCAN "..." (2 cells x 3 genes)
+    /// >>> print(atlas.filter(total_counts(layer="counts") >= 6))
+    /// FILTER_CELLS total_counts(layer='counts') >= 6
+    /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (predicate, /))]
-    fn filter_genes(&self, py: Python<'_>, predicate: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let Ok(predicate) = predicate.cast::<PyGeneExpr>() else {
-            return Err(to_py_err(
-                py,
-                &wrong_type("filter_genes", "a boolean GeneExpr", predicate),
-            ));
+    fn filter(&self, py: Python<'_>, predicate: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let plan = if let Ok(predicate) = predicate.cast::<PyCellExpr>() {
+            self.plan.filter_cells(predicate.get().core())
+        } else if let Ok(predicate) = predicate.cast::<PyGeneExpr>() {
+            self.plan.filter_genes(predicate.get().core())
+        } else {
+            Err(wrong_type(
+                "filter",
+                "a boolean CellExpr or GeneExpr",
+                predicate,
+            ))
         };
-        self.plan
-            .filter_genes(predicate.get().core())
-            .map(|plan| Self { plan })
-            .map_err(|error| to_py_err(py, &error))
+        self.derive(py, plan)
+    }
+
+    /// Keep the given genes, in the given order.
+    ///
+    /// Parameters
+    /// ----------
+    /// gene_ids : list of str
+    ///     Gene IDs (the store's ``gene_id`` column, not symbols), each once.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E210``: a gene ID is not in the store, with the closest IDs.
+    /// RemovedFeatureError
+    ///     ``KY-E203``: a gene was removed earlier in the plan.
+    /// PlanError
+    ///     ``KY-E215``: a gene ID is listed twice.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).select_genes(["ENSG03", "ENSG01"]))
+    /// SELECT_GENES ['ENSG03', 'ENSG01']
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (gene_ids, /))]
+    fn select_genes(&self, py: Python<'_>, gene_ids: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let gene_ids = chain::strings(py, "select_genes", "gene_ids", gene_ids)?;
+        self.derive(py, self.plan.select_genes(gene_ids))
+    }
+
+    /// Keep the given cells.
+    ///
+    /// The cells stream in the store's order, not in the order given (deviations.md).
+    /// Whether every ID names a cell is checked when the plan runs (the cell IDs are
+    /// not read when the plan is built).
+    ///
+    /// Parameters
+    /// ----------
+    /// cell_ids : list of str
+    ///     Cell IDs (the store's ``cell_id`` column), each once.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E210``: a cell ID is empty (here), or names no cell of the plan (when
+    ///     it runs).
+    /// PlanError
+    ///     ``KY-E215``: a cell ID is listed twice.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).take_cells(["AAAG-1"]))
+    /// TAKE_CELLS ['AAAG-1']
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (cell_ids, /))]
+    fn take_cells(&self, py: Python<'_>, cell_ids: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let cell_ids = chain::strings(py, "take_cells", "cell_ids", cell_ids)?;
+        self.derive(py, self.plan.take_cells(cell_ids))
+    }
+
+    /// Add or replace cell columns, each computed from a cell expression.
+    ///
+    /// The expressions are resolved against this plan now (R6) and computed when the
+    /// plan runs. A name equal to a stored column replaces it.
+    ///
+    /// Parameters
+    /// ----------
+    /// **columns : CellExpr
+    ///     The new columns, by name.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ExpressionError
+    ///     ``KY-E205``: a value is not a ``CellExpr``.
+    /// ResolutionError
+    ///     ``KY-E210``: a name in an expression matches nothing, and the other errors
+    ///     of ``resolve``.
+    /// PlanError
+    ///     ``KY-E215``: no column is given.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).with_cells(n_counts=total_counts(layer="counts")))
+    /// WITH_CELLS "n_counts" = total_counts(layer='counts')
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (**columns))]
+    fn with_cells(&self, py: Python<'_>, columns: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut named = Vec::new();
+        for (name, value) in columns.into_iter().flatten() {
+            let Ok(expression) = value.cast::<PyCellExpr>() else {
+                let error = wrong_type("with_cells", "a CellExpr", &value);
+                return Err(to_py_err(py, &error));
+            };
+            named.push((name.extract::<String>()?, expression.get().core().clone()));
+        }
+        if named.is_empty() {
+            return Err(to_py_err(py, &no_columns("with_cells")));
+        }
+        self.derive(py, self.plan.with_cells(named))
+    }
+
+    /// Add or replace gene columns, each computed from a gene expression.
+    ///
+    /// The expressions are resolved against this plan now (R6) and computed when the
+    /// plan runs. A name equal to a stored column replaces it.
+    ///
+    /// Parameters
+    /// ----------
+    /// **columns : GeneExpr
+    ///     The new columns, by name.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ExpressionError
+    ///     ``KY-E205``: a value is not a ``GeneExpr``.
+    /// ResolutionError
+    ///     ``KY-E210``: a name in an expression matches nothing, and the other errors
+    ///     of ``resolve``.
+    /// PlanError
+    ///     ``KY-E215``: no column is given.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).with_genes(is_cd3e=gene_column("symbol") == "CD3E"))
+    /// WITH_GENES "is_cd3e" = gene_column('symbol') == 'CD3E'
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (**columns))]
+    fn with_genes(&self, py: Python<'_>, columns: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+        let mut named = Vec::new();
+        for (name, value) in columns.into_iter().flatten() {
+            let Ok(expression) = value.cast::<PyGeneExpr>() else {
+                let error = wrong_type("with_genes", "a GeneExpr", &value);
+                return Err(to_py_err(py, &error));
+            };
+            named.push((name.extract::<String>()?, expression.get().core().clone()));
+        }
+        if named.is_empty() {
+            return Err(to_py_err(py, &no_columns("with_genes")));
+        }
+        self.derive(py, self.plan.with_genes(named))
+    }
+
+    /// Add a cell embedding computed outside kyto (not implemented yet).
+    ///
+    /// Arrives with task 6.11 (interop hooks: scvi-tools and Harmony outputs).
+    ///
+    /// Parameters
+    /// ----------
+    /// name : str
+    ///     Name of the new embedding.
+    /// values : numpy.ndarray
+    ///     One row per cell of the plan, in ``cell_ids()`` order.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged.
+    ///
+    /// Raises
+    /// ------
+    /// NotImplementedYetError
+    ///     ``KY-E601``: always, until task 6.11.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).with_embedding("X_scvi", None)
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not implemented yet...
+    #[pyo3(signature = (name, values, /))]
+    fn with_embedding(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        values: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let _ = (name, values);
+        let error = KytoError::NotImplementedYet {
+            method: "Atlas.with_embedding".to_owned(),
+            task: "6.11".to_owned(),
+        };
+        Err(to_py_err(py, &error))
+    }
+
+    /// Scale every cell to the same total count (scanpy's ``normalize_total``).
+    ///
+    /// Each cell's values are multiplied by ``target_sum / total``, its total over the
+    /// genes of the plan; a cell with total 0 stays 0. Writes ``float32``.
+    ///
+    /// Parameters
+    /// ----------
+    /// target_sum : float or None, default=None
+    ///     The total of every cell afterwards; ``None`` for the median of the cells'
+    ///     totals (one more pass over the cells).
+    /// layer : str or None, default=None
+    ///     The layer read; ``None`` for the default layer.
+    /// into : str
+    ///     The layer written (a new name, or an existing layer to replace).
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``target_sum`` is not a positive finite ``float32``.
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer is not in the plan.
+    /// StoreInputError
+    ///     ``KY-E102``: ``into`` is not a valid layer name.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).normalize_total(1e4, layer="counts", into="normalized")
+    /// >>> print(atlas)
+    /// NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (target_sum = None, *, layer = None, into))]
+    fn normalize_total(
+        &self,
+        py: Python<'_>,
+        target_sum: Option<&Bound<'_, PyAny>>,
+        layer: Option<&str>,
+        into: &str,
+    ) -> PyResult<Self> {
+        let target_sum = chain::optional_float(py, "normalize_total", "target_sum", target_sum)?;
+        self.derive(py, self.plan.normalize_total(target_sum, layer, into))
+    }
+
+    /// Take ``log(1 + x)`` of every value (natural log, scanpy's ``log1p``).
+    ///
+    /// Writes ``float32``. Absent values stay absent (``log1p(0) == 0``).
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str or None, default=None
+    ///     The layer read; ``None`` for the default layer.
+    /// into : str
+    ///     The layer written (a new name, or an existing layer to replace).
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer is not in the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).with_default_layer("counts").log1p(into="log1p"))
+    /// LOG1P "counts" -> "log1p"
+    /// WITH_DEFAULT_LAYER "counts"
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, into))]
+    fn log1p(&self, py: Python<'_>, layer: Option<&str>, into: &str) -> PyResult<Self> {
+        self.derive(py, self.plan.log1p(layer, into))
+    }
+
+    /// Scale every gene to mean 0 and variance 1 (scanpy's ``scale``).
+    ///
+    /// Centring stores every gene of every cell (``explain()`` notes it; PCA centres
+    /// sparse data implicitly). Writes ``float32``.
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str or None, default=None
+    ///     The layer read; ``None`` for the default layer.
+    /// into : str
+    ///     The layer written (a new name, or an existing layer to replace).
+    /// zero_center : bool, default=True
+    ///     Subtract each gene's mean; ``False`` only divides by the standard deviation
+    ///     (and keeps the data sparse).
+    /// max_value : float or None, default=None
+    ///     Clip the scaled values to ``[-max_value, max_value]`` (``[.., max_value]``
+    ///     without centring); ``None`` does not clip.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``max_value`` is not positive.
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer is not in the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).scale(layer="counts", into="scaled", max_value=10))
+    /// SCALE "counts" -> "scaled" zero_center=true max_value=10
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, into, zero_center = true, max_value = None))]
+    fn scale(
+        &self,
+        py: Python<'_>,
+        layer: Option<&str>,
+        into: &str,
+        zero_center: bool,
+        max_value: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let max_value = chain::optional_float(py, "scale", "max_value", max_value)?;
+        self.derive(py, self.plan.scale(layer, into, zero_center, max_value))
+    }
+
+    /// Mark the highly variable genes (scanpy's ``highly_variable_genes``).
+    ///
+    /// Adds scanpy's gene columns: ``highly_variable`` (``Boolean``), ``means``,
+    /// ``dispersions`` and ``dispersions_norm`` (``seurat``, ``cell_ranger``) or
+    /// ``means``, ``variances``, ``variances_norm`` and ``highly_variable_rank``
+    /// (``seurat_v3``), all ``Float64``, and with ``batch_key``
+    /// ``highly_variable_nbatches`` (``Int64``) and ``highly_variable_intersection``.
+    /// Keep the genes with ``filter(gene_column("highly_variable"))``.
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str or None, default=None
+    ///     The layer read (log data for ``seurat`` and ``cell_ranger``, counts for
+    ///     ``seurat_v3``); ``None`` for the default layer.
+    /// flavor : {"seurat", "cell_ranger", "seurat_v3"}, default="seurat"
+    ///     The method, as scanpy's.
+    /// n_top_genes : int or None, default=None
+    ///     Mark this many genes; ``None`` uses scanpy's dispersion cutoffs (not with
+    ///     ``seurat_v3``, which needs it).
+    /// batch_key : str or None, default=None
+    ///     A cell column: genes are ranked in each batch and combined as scanpy does.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: an unknown ``flavor``, ``n_top_genes`` below 1, or
+    ///     ``seurat_v3`` without ``n_top_genes``.
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer or ``batch_key`` is not in the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).highly_variable_genes(layer="counts", n_top_genes=2)
+    /// >>> print(atlas)
+    /// HIGHLY_VARIABLE_GENES "counts" flavor=seurat n_top_genes=2
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, flavor = "seurat", n_top_genes = None, batch_key = None))]
+    fn highly_variable_genes(
+        &self,
+        py: Python<'_>,
+        layer: Option<&str>,
+        flavor: &str,
+        n_top_genes: Option<&Bound<'_, PyAny>>,
+        batch_key: Option<&str>,
+    ) -> PyResult<Self> {
+        let n_top_genes =
+            chain::optional_integer(py, "highly_variable_genes", "n_top_genes", n_top_genes, 1)?;
+        let plan = chain::hvg_flavor(flavor).and_then(|flavor| {
+            self.plan
+                .highly_variable_genes(layer, flavor, n_top_genes, batch_key)
+        });
+        self.derive(py, plan)
+    }
+
+    /// Principal components of a layer (scanpy's ``pca``, implicit centring).
+    ///
+    /// Streams the layer in ``2 + PCA_POWER_ITERATIONS`` passes (a randomized block
+    /// Krylov method) and never densifies it. Adds the cell embedding ``into`` (one row
+    /// per cell, ``n_components`` wide) and the gene embedding ``into + "_loadings"``.
+    ///
+    /// Parameters
+    /// ----------
+    /// layer : str or None, default=None
+    ///     The layer read; ``None`` for the default layer.
+    /// into : str
+    ///     Name of the cell embedding written.
+    /// n_components : int, default=50
+    ///     Components computed.
+    /// seed : int
+    ///     Seed of the random start (R7, R11: the same seed gives the same result).
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``n_components`` is below 1 or above the cells or genes, or
+    ///     ``seed`` is negative.
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer is not in the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0))
+    /// PCA "counts" -> "pca" n_components=1 seed=0
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, into, n_components = None, seed))]
+    fn pca(
+        &self,
+        py: Python<'_>,
+        layer: Option<&str>,
+        into: &str,
+        n_components: Option<&Bound<'_, PyAny>>,
+        seed: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let n_components =
+            chain::optional_integer(py, "pca", "n_components", n_components, 1)?.unwrap_or(50);
+        let seed = chain::integer(py, "pca", "seed", seed, 0)?;
+        self.derive(py, self.plan.pca(layer, into, n_components, seed))
+    }
+
+    /// The k nearest neighbours of every cell in a cell embedding (scanpy's
+    /// ``neighbors``).
+    ///
+    /// Adds the cell graph of distances, ``"distances"`` (or ``into + "_distances"``),
+    /// and declares the connectivities graph, ``"connectivities"`` (or
+    /// ``into + "_connectivities"``).
+    ///
+    /// Parameters
+    /// ----------
+    /// embedding : str
+    ///     The cell embedding searched, such as the ``into`` of ``pca``.
+    /// n_neighbors : int, default=15
+    ///     Neighbours per cell, the cell itself included (scanpy's meaning).
+    /// n_components : int or None, default=None
+    ///     Use the first this many columns of the embedding; ``None`` uses all.
+    /// metric : {"euclidean", "cosine"}, default="euclidean"
+    ///     The distance.
+    /// search : {"exact", "approximate"}, default="exact"
+    ///     Exact blocked search, or HNSW (approximate, faster on large atlases).
+    /// seed : int, default=0
+    ///     Seed of the approximate search (R7, R11).
+    /// into : str or None, default=None
+    ///     Prefix of the graph names; ``None`` for scanpy's names.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``n_neighbors`` below 2 or above the cells, ``n_components``
+    ///     out of range, a negative ``seed``, or an unknown ``metric`` or ``search``.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``embedding`` is not a cell embedding of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+    /// >>> print(atlas.neighbors("pca", n_neighbors=2))
+    /// NEIGHBORS "pca" -> "distances", "connectivities" n_neighbors=2 metric=Euclidean search=Exact seed=0
+    /// PCA "counts" -> "pca" n_components=1 seed=0
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (
+        embedding,
+        /,
+        *,
+        n_neighbors = None,
+        n_components = None,
+        metric = "euclidean",
+        search = "exact",
+        seed = None,
+        into = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn neighbors(
+        &self,
+        py: Python<'_>,
+        embedding: &str,
+        n_neighbors: Option<&Bound<'_, PyAny>>,
+        n_components: Option<&Bound<'_, PyAny>>,
+        metric: &str,
+        search: &str,
+        seed: Option<&Bound<'_, PyAny>>,
+        into: Option<&str>,
+    ) -> PyResult<Self> {
+        let n_neighbors =
+            chain::optional_integer(py, "neighbors", "n_neighbors", n_neighbors, 0)?.unwrap_or(15);
+        let n_components =
+            chain::optional_integer(py, "neighbors", "n_components", n_components, 1)?;
+        let seed = chain::optional_integer(py, "neighbors", "seed", seed, 0)?.unwrap_or(0);
+        let parameters = (|| {
+            Ok::<_, KytoError>(Neighbors {
+                embedding: embedding.to_owned(),
+                n_components,
+                n_neighbors,
+                metric: chain::metric(metric)?,
+                search: chain::search(search)?,
+                seed,
+                key: into.map(str::to_owned),
+            })
+        })();
+        self.derive(
+            py,
+            parameters.and_then(|parameters| self.plan.neighbors(parameters)),
+        )
+    }
+
+    /// Cluster the cells of a cell graph with Leiden (scanpy's ``leiden``).
+    ///
+    /// Adds the cell column ``into``: one cluster label per cell.
+    ///
+    /// Parameters
+    /// ----------
+    /// graph : str, default="connectivities"
+    ///     The cell graph clustered, such as the connectivities ``neighbors`` declares.
+    /// resolution : float, default=1.0
+    ///     Higher values give more, smaller clusters.
+    /// seed : int
+    ///     Seed of the random steps (R7, R11: the same seed gives the same clusters).
+    /// into : str
+    ///     The cell column written.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
+    ///     more, or ``into`` is not a valid column name.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).leiden(into="leiden", seed=0)
+    /// >>> print(str(atlas).splitlines()[0])
+    /// LEIDEN "connectivities" -> "leiden" resolution=1 seed=0
+    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into))]
+    fn leiden(
+        &self,
+        py: Python<'_>,
+        graph: &str,
+        resolution: Option<&Bound<'_, PyAny>>,
+        seed: &Bound<'_, PyAny>,
+        into: &str,
+    ) -> PyResult<Self> {
+        self.cluster(py, ClusterMethod::Leiden, graph, resolution, seed, into)
+    }
+
+    /// Cluster the cells of a cell graph with Louvain (scanpy's ``louvain``).
+    ///
+    /// Adds the cell column ``into``: one cluster label per cell.
+    ///
+    /// Parameters
+    /// ----------
+    /// graph : str, default="connectivities"
+    ///     The cell graph clustered, such as the connectivities ``neighbors`` declares.
+    /// resolution : float, default=1.0
+    ///     Higher values give more, smaller clusters.
+    /// seed : int
+    ///     Seed of the random steps (R7, R11: the same seed gives the same clusters).
+    /// into : str
+    ///     The cell column written.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
+    ///     more, or ``into`` is not a valid column name.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).louvain(into="louvain", seed=0)
+    /// >>> print(str(atlas).splitlines()[0])
+    /// LOUVAIN "connectivities" -> "louvain" resolution=1 seed=0
+    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into))]
+    fn louvain(
+        &self,
+        py: Python<'_>,
+        graph: &str,
+        resolution: Option<&Bound<'_, PyAny>>,
+        seed: &Bound<'_, PyAny>,
+        into: &str,
+    ) -> PyResult<Self> {
+        self.cluster(py, ClusterMethod::Louvain, graph, resolution, seed, into)
+    }
+
+    /// Lay the cells of a cell graph out in a few dimensions (scanpy's ``umap``).
+    ///
+    /// Adds the cell embedding ``into`` (``float32``, ``n_components`` wide).
+    ///
+    /// Parameters
+    /// ----------
+    /// graph : str, default="connectivities"
+    ///     The cell graph laid out, such as the connectivities ``neighbors`` declares.
+    /// into : str
+    ///     The cell embedding written.
+    /// n_components : int, default=2
+    ///     Dimensions of the layout (1 to 100).
+    /// min_dist : float, default=0.5
+    ///     The smallest distance between points of the layout (at most ``spread``).
+    /// spread : float, default=1.0
+    ///     The scale of the layout's distances.
+    /// n_epochs : int or None, default=None
+    ///     Epochs of the optimisation; ``None`` for scanpy's default.
+    /// alpha : float, default=1.0
+    ///     The initial learning rate.
+    /// gamma : float, default=1.0
+    ///     The weight of the negative samples (repulsion).
+    /// negative_sample_rate : int, default=5
+    ///     Negative samples per positive sample.
+    /// init : {"spectral", "random"}, default="spectral"
+    ///     Where the layout starts.
+    /// seed : int
+    ///     Seed of the random steps (R7, R11).
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: an argument out of range (``n_components`` from 1 to 100,
+    ///     positive ``spread`` and ``alpha``, ``min_dist`` from 0 to ``spread``), an
+    ///     unknown ``init``, or an ``into`` that is not a valid embedding name.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).umap(into="X_umap", seed=0)
+    /// >>> print(str(atlas).splitlines()[0])
+    /// UMAP "connectivities" -> "X_umap" n_components=2 min_dist=0.5 spread=1 n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0
+    #[pyo3(signature = (
+        *,
+        graph = "connectivities",
+        into,
+        n_components = None,
+        min_dist = None,
+        spread = None,
+        n_epochs = None,
+        alpha = None,
+        gamma = None,
+        negative_sample_rate = None,
+        init = "spectral",
+        seed
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn umap(
+        &self,
+        py: Python<'_>,
+        graph: &str,
+        into: &str,
+        n_components: Option<&Bound<'_, PyAny>>,
+        min_dist: Option<&Bound<'_, PyAny>>,
+        spread: Option<&Bound<'_, PyAny>>,
+        n_epochs: Option<&Bound<'_, PyAny>>,
+        alpha: Option<&Bound<'_, PyAny>>,
+        gamma: Option<&Bound<'_, PyAny>>,
+        negative_sample_rate: Option<&Bound<'_, PyAny>>,
+        init: &str,
+        seed: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let defaults = Umap::default();
+        let float = |parameter: &str, value, default: f64| {
+            chain::optional_float(py, "umap", parameter, value)
+                .map(|value| value.unwrap_or(default))
+        };
+        let parameters = Umap {
+            graph: graph.to_owned(),
+            n_components: chain::optional_integer(py, "umap", "n_components", n_components, 1)?
+                .unwrap_or(defaults.n_components),
+            min_dist: float("min_dist", min_dist, defaults.min_dist)?,
+            spread: float("spread", spread, defaults.spread)?,
+            n_epochs: chain::optional_integer(py, "umap", "n_epochs", n_epochs, 0)?,
+            alpha: float("alpha", alpha, defaults.alpha)?,
+            gamma: float("gamma", gamma, defaults.gamma)?,
+            negative_sample_rate: chain::optional_integer(
+                py,
+                "umap",
+                "negative_sample_rate",
+                negative_sample_rate,
+                0,
+            )?
+            .unwrap_or(defaults.negative_sample_rate),
+            init: chain::umap_init(init).map_err(|error| to_py_err(py, &error))?,
+            seed: chain::integer(py, "umap", "seed", seed, 0)?,
+            into: into.to_owned(),
+        };
+        self.derive(py, self.plan.umap(parameters))
+    }
+
+    /// Rank the genes of each group by a differential expression test (scanpy's
+    /// ``rank_genes_groups`` then ``rank_genes_groups_df``).
+    ///
+    /// The arguments and the plan's layer and ``groupby`` column are checked now; the
+    /// plan runs only when the returned frame is collected (R1), with the GIL released.
+    /// One row per (group, gene): groups in order (an ``Enum`` column's categories,
+    /// numbers by value, else text sorted; or as ``groups`` lists them), each group's
+    /// genes by statistic, descending (ties in gene order). Cells with a null label are
+    /// in no group and in every rest.
+    ///
+    /// Parameters
+    /// ----------
+    /// groupby : str
+    ///     The cell column whose values are the groups (stored, or added by
+    ///     ``with_cells``).
+    /// method : {"t-test", "wilcoxon"}, default="t-test"
+    ///     Welch's t-test, or Wilcoxon's rank-sum test (normal approximation).
+    /// layer : str or None, default=None
+    ///     The layer tested (log data, as scanpy expects); ``None`` for the default
+    ///     layer.
+    /// groups : list of str or None, default=None
+    ///     The groups tested, in this order; ``None`` tests every group. The rest is
+    ///     still every other cell.
+    /// reference : str or None, default=None
+    ///     The group every other is compared with; ``None`` compares with the rest.
+    /// n_genes : int or None, default=None
+    ///     Keep the first this many genes of each group; ``None`` keeps every gene.
+    /// rankby_abs : bool, default=False
+    ///     Order genes by the absolute statistic.
+    /// tie_correct : bool, default=False
+    ///     Wilcoxon only: correct the variance for ties.
+    /// correction : {"benjamini-hochberg", "bonferroni"}, default="benjamini-hochberg"
+    ///     How the p-values are adjusted.
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     result does not depend on it (R11).
+    ///
+    /// Returns
+    /// -------
+    /// polars.LazyFrame
+    ///     Columns ``group``, ``gene_id`` (``String``), ``statistic``,
+    ///     ``log_fold_change``, ``p_value``, ``adjusted_p_value`` (``Float64``).
+    ///     Collecting it runs the plan and returns a new frame the caller owns.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: an unknown ``method`` or ``correction``, ``n_genes`` below 1,
+    ///     ``threads`` below 1; when collected, an empty or repeated ``groups``, no
+    ///     labelled cell, or a tested group of one cell.
+    /// ResolutionError
+    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    /// MissingMemberError
+    ///     ``KY-E109``: the layer or ``groupby`` is not in the plan.
+    /// ResolutionError
+    ///     ``KY-E214`` (when collected): a ``groups`` or ``reference`` label no cell
+    ///     has.
+    ///
+    /// Examples
+    /// --------
+    /// >>> frame = scan(store).rank_genes_groups("cell_id", layer="counts")
+    /// >>> frame.collect_schema().names()
+    /// ['group', 'gene_id', 'statistic', 'log_fold_change', 'p_value', 'adjusted_p_value']
+    #[pyo3(signature = (
+        groupby,
+        /,
+        *,
+        method = "t-test",
+        layer = None,
+        groups = None,
+        reference = None,
+        n_genes = None,
+        rankby_abs = false,
+        tie_correct = false,
+        correction = "benjamini-hochberg",
+        threads = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn rank_genes_groups<'py>(
+        &self,
+        py: Python<'py>,
+        groupby: &str,
+        method: &str,
+        layer: Option<String>,
+        groups: Option<&Bound<'_, PyAny>>,
+        reference: Option<String>,
+        n_genes: Option<&Bound<'_, PyAny>>,
+        rankby_abs: bool,
+        tie_correct: bool,
+        correction: &str,
+        threads: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let groups = groups
+            .filter(|groups| !groups.is_none())
+            .map(|groups| chain::strings(py, "rank_genes_groups", "groups", groups))
+            .transpose()?;
+        let n_genes = chain::optional_integer(py, "rank_genes_groups", "n_genes", n_genes, 1)?
+            .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+            .and_then(NonZeroUsize::new);
+        let parameters = (|| {
+            let mut parameters = RankGenesGroups::new(groupby, chain::differential_test(method)?);
+            parameters.layer = layer;
+            parameters.groups = groups;
+            parameters.reference = reference;
+            parameters.n_genes = n_genes;
+            parameters.rankby_abs = rankby_abs;
+            parameters.tie_correct = tie_correct;
+            parameters.correction = chain::correction(correction)?;
+            rank_genes::check(&self.plan, &parameters)?;
+            Ok::<_, KytoError>(parameters)
+        })()
+        .map_err(|error| to_py_err(py, &error))?;
+        let threads = terminal::threads(py, "rank_genes_groups", threads)?;
+        rank_genes::lazy_frame(
+            py,
+            Arc::clone(&self.plan),
+            self.collected.clone(),
+            parameters,
+            threads,
+        )
+    }
+
+    /// Run the plan on a device (R7: the device is an argument, not a setting).
+    ///
+    /// Today every plan runs on the CPU; the GPU devices arrive with task 9.1.
+    ///
+    /// Parameters
+    /// ----------
+    /// device : {"cpu"}
+    ///     The device the plan's nodes run on.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// NotImplementedYetError
+    ///     ``KY-E601``: ``"auto"``, ``"cuda"``, ``"wgpu"`` or ``"metal"`` (task 9.1).
+    /// PlanError
+    ///     ``KY-E215``: any other device name.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).on(device="cpu").estimate()["device"]
+    /// 'cpu'
+    #[pyo3(signature = (*, device))]
+    fn on(&self, py: Python<'_>, device: &str) -> PyResult<Self> {
+        self.derive(py, chain::device(device).map(|()| Arc::clone(&self.plan)))
+    }
+
+    /// Run the plan and keep its result as a new, materialized ``Atlas``.
+    ///
+    /// The plan's output (its layers, and its cell and gene tables with the computed
+    /// columns) is written to a temporary kyto store in the system's temporary
+    /// directory, and the returned ``Atlas`` scans that store (with this plan's default
+    /// layer, if the output has it). The store is deleted when the last ``Atlas`` built
+    /// on it is garbage-collected, so ``to_json()`` of such a plan names a store that
+    /// lives only as long as the plan. To keep the result, use ``sink_zarr``. The GIL is
+    /// released while the plan computes; Ctrl-C cancels the run cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+    ///     of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+    ///     anything is read. ``None`` runs with the default blocks.
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     result does not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread whenever the run
+    ///     moved (cell rows, summed over the passes).
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan with one ``SCAN`` step (and ``WITH_DEFAULT_LAYER``) over the
+    ///     result; this one is unchanged. The data are copied into the temporary store.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// DeviceError
+    ///     ``KY-E502``: the system cannot start ``threads`` threads.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet, or it
+    ///     carries an embedding or a graph (written from task 5.11).
+    /// KeyboardInterrupt
+    ///     Ctrl-C while the plan computes; the run has stopped.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).filter(total_counts(layer="counts") >= 7)
+    /// >>> print(atlas.collect(threads=1))
+    /// SCAN "...atlas.kyto" (1 cells x 3 genes)
+    #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    fn collect(
+        &self,
+        py: Python<'_>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let folder = tempfile::Builder::new()
+            .prefix("kyto-collect-")
+            .tempdir()
+            .map_err(|error| {
+                let error = KytoError::StoreIo {
+                    operation: "create a temporary folder for collect()".to_owned(),
+                    path: std::env::temp_dir().display().to_string(),
+                    detail: error.to_string(),
+                };
+                to_py_err(py, &error)
+            })?;
+        let target = folder.path().join("atlas.kyto");
+        self.run_sink(py, "collect", &target, memory_limit, threads, progress)?;
+        let mut plan = open_plan(py, target)?;
+        if let Some(layer) = self.plan.default_layer()
+            && plan
+                .schema()
+                .layers
+                .iter()
+                .any(|stored| stored.name == layer)
+        {
+            plan = plan
+                .with_default_layer(layer)
+                .map_err(|error| to_py_err(py, &error))?;
+        }
+        Ok(Self {
+            plan,
+            collected: Some(Arc::new(folder)),
+        })
+    }
+
+    /// Run the plan and write its output as a new kyto store at ``path``.
+    ///
+    /// Writes the plan's layers, and its cell and gene tables with the computed columns
+    /// (derived columns keep their lineage; stale ones are dropped), streaming one cell
+    /// block at a time. The store is written next to ``path`` and renamed into place
+    /// when complete, so a failed or cancelled run leaves nothing. The GIL is released
+    /// while the plan computes; Ctrl-C cancels the run cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// path : str or os.PathLike[str]
+    ///     The new store. It must not exist.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+    ///     of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+    ///     anything is read. ``None`` runs with the default blocks.
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     store does not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread whenever the run
+    ///     moved (cell rows, summed over the passes).
+    ///
+    /// Returns
+    /// -------
+    /// None
+    ///     The data are written to ``path``; this plan is unchanged.
+    ///
+    /// Raises
+    /// ------
+    /// StoreInputError
+    ///     ``KY-E118``: ``path`` exists (overwriting arrives with task 7.3).
+    /// PlanError
+    ///     ``KY-E215``: a ``memory_limit``, ``threads`` or ``progress`` that is not
+    ///     accepted. ``KY-E216``: the plan already ends in a sink.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// DeviceError
+    ///     ``KY-E502``: the system cannot start ``threads`` threads.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet, or it
+    ///     carries an embedding or a graph (written from task 5.11).
+    /// KeyboardInterrupt
+    ///     Ctrl-C while the plan computes; the run has stopped and nothing is left.
+    ///
+    /// Examples
+    /// --------
+    /// >>> target = store.parent / "normalized.kyto"
+    /// >>> scan(store).normalize_total(1e4, layer="counts", into="normalized").sink_zarr(target)
+    /// >>> scan(target).layer("normalized").schema()["dtype"]
+    /// 'float32'
+    #[pyo3(signature = (path, /, *, memory_limit = None, threads = None, progress = None))]
+    fn sink_zarr(
+        &self,
+        py: Python<'_>,
+        path: PathBuf,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.run_sink(py, "sink_zarr", &path, memory_limit, threads, progress)
     }
 
     /// The cell table: a read-only, lazy handle (nothing is read).
@@ -370,7 +1472,7 @@ impl Atlas {
     /// Examples
     /// --------
     /// >>> genes = gene_column("feature_type") == "Gene Expression"
-    /// >>> atlas = scan(store).filter_genes(genes)
+    /// >>> atlas = scan(store).filter(genes)
     /// >>> text = atlas.to_json()
     /// >>> text[:39]
     /// '{"format":"kyto-plan","version":1,"node'
@@ -423,7 +1525,7 @@ impl Atlas {
     /// Examples
     /// --------
     /// >>> genes = gene_column("feature_type") == "Gene Expression"
-    /// >>> print(scan(store).filter_genes(genes).explain())
+    /// >>> print(scan(store).filter(genes).explain())
     /// logical plan
     ///   node 1 FILTER_GENES gene_column('feature_type') == 'Gene Expression' <- node 0
     ///   node 0 SCAN "..." (2 cells x 3 genes)
@@ -431,7 +1533,7 @@ impl Atlas {
     ///   output #1 reads [...]
     ///   #1 FILTER_GENES ... <- #0 (node 1) [device=cpu passes=1 blocks=4096 cells]
     ///   #0 SCAN ... (node 0) [device=cpu passes=1 blocks=4096 cells]
-    /// >>> explained = scan(store).filter_genes(genes).explain(format="json")
+    /// >>> explained = scan(store).filter(genes).explain(format="json")
     /// >>> [step["name"] for step in explained["logical"]]
     /// ['FILTER_GENES', 'SCAN']
     /// >>> explained["optimized"]["nodes"][0]["passes"]
@@ -536,46 +1638,18 @@ impl Atlas {
     fn _execute(
         &self,
         py: Python<'_>,
-        threads: Option<i64>,
+        threads: Option<&Bound<'_, PyAny>>,
         progress: Option<Bound<'_, PyAny>>,
     ) -> PyResult<u64> {
-        let invalid = |parameter: &str, value: String, problem: &str, accepted: &str| {
-            let error = KytoError::InvalidArgument {
-                function: "Atlas._execute".to_owned(),
-                parameter: parameter.to_owned(),
-                value,
-                problem: problem.to_owned(),
-                accepted: accepted.to_owned(),
-            };
-            to_py_err(py, &error)
-        };
-        let threads = match threads {
-            None => std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN),
-            Some(threads) => usize::try_from(threads)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| {
-                    invalid(
-                        "threads",
-                        threads.to_string(),
-                        "a run needs at least one thread",
-                        "an int of 1 or more, or None for one per CPU core",
-                    )
-                })?,
-        };
-        if let Some(progress) = &progress
-            && !progress.is_callable()
-        {
-            let value = progress.repr()?.to_string();
-            return Err(invalid(
-                "progress",
-                value,
-                "it is not callable",
-                "a callable taking (done, total), or None",
-            ));
-        }
-        let physical = self.plan.physical(PhysicalOptions::default());
-        run_plan(py, &physical, threads, progress.as_ref())
+        let run = terminal::run_arguments(
+            py,
+            "Atlas._execute",
+            &self.plan,
+            None,
+            threads,
+            progress.as_ref(),
+        )?;
+        run_plan(py, &run.physical, run.threads, progress.as_ref())
     }
 
     /// The plan, one node per line, from the last step down to the scan.
@@ -586,6 +1660,17 @@ impl Atlas {
     /// The plan, one node per line, inside ``<Atlas ...>``.
     fn __repr__(&self) -> String {
         format!("<Atlas\n{}\n>", self.plan)
+    }
+}
+
+/// `KY-E215`: `with_cells()`/`with_genes()` without a column.
+fn no_columns(method: &str) -> KytoError {
+    KytoError::InvalidArgument {
+        function: method.to_owned(),
+        parameter: "columns".to_owned(),
+        value: "{}".to_owned(),
+        problem: "no column is given".to_owned(),
+        accepted: format!("one or more name=expression pairs, such as {method}(n=...)"),
     }
 }
 
@@ -658,7 +1743,10 @@ pub(crate) fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAn
 #[pyo3(signature = (text, /))]
 pub fn from_json(py: Python<'_>, text: &str) -> PyResult<Atlas> {
     py.detach(|| Plan::from_json(text))
-        .map(|plan| Atlas { plan })
+        .map(|plan| Atlas {
+            plan,
+            collected: None,
+        })
         .map_err(|error| to_py_err(py, &error))
 }
 
@@ -714,6 +1802,14 @@ pub fn from_json(py: Python<'_>, text: &str) -> PyResult<Atlas> {
 #[pyfunction]
 #[pyo3(signature = (store, /))]
 pub fn scan(py: Python<'_>, store: PathBuf) -> PyResult<Atlas> {
+    Ok(Atlas {
+        plan: open_plan(py, store)?,
+        collected: None,
+    })
+}
+
+/// The root plan of the store at `store`: its schema, gene IDs and symbols (`scan`).
+fn open_plan(py: Python<'_>, store: PathBuf) -> PyResult<Arc<Plan>> {
     let (schema, gene_ids) = py
         .detach(|| {
             let schema = kyto_store::open_atlas_schema(&store)?;
@@ -732,7 +1828,5 @@ pub fn scan(py: Python<'_>, store: PathBuf) -> PyResult<Atlas> {
             Ok::<_, kyto_error::KytoError>((schema, gene_ids))
         })
         .map_err(|error| to_py_err(py, &error))?;
-    Ok(Atlas {
-        plan: Plan::scan(store.display().to_string(), schema, gene_ids),
-    })
+    Ok(Plan::scan(store.display().to_string(), schema, gene_ids))
 }

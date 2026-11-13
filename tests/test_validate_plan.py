@@ -49,7 +49,7 @@ def _document() -> dict[str, Any]:
     scan = from_json(
         json.dumps({"format": "kyto-plan", "version": 1, "nodes": [_SCAN]})
     )
-    plan = scan.with_default_layer("counts").filter_genes(
+    plan = scan.with_default_layer("counts").filter(
         gene_column("highly_variable") & gene_column("gene_id").str.starts_with("ENSG")
     )
     document: dict[str, Any] = json.loads(plan.to_json())

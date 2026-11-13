@@ -52,8 +52,8 @@ def test_every_node_shows_device_and_passes(store: Path) -> None:
     plans = [
         atlas,
         atlas.with_default_layer("counts"),
-        atlas.filter_genes(gene_column("feature_type") == "Gene Expression"),
-        atlas.with_default_layer("counts").filter_genes(cell_profile("AAAC-1") > 0),
+        atlas.filter(gene_column("feature_type") == "Gene Expression"),
+        atlas.with_default_layer("counts").filter(cell_profile("AAAC-1") > 0),
     ]
     shutil.rmtree(store)  # explain() reads nothing
     for plan in plans:
@@ -65,8 +65,8 @@ def test_every_node_shows_device_and_passes(store: Path) -> None:
 
 def test_passes_per_node(store: Path) -> None:
     atlas = _kyto.scan(store).with_default_layer("counts")
-    metadata = atlas.filter_genes(gene_column("feature_type") == "Gene Expression")
-    profile = atlas.filter_genes(cell_profile("AAAC-1") > 0)
+    metadata = atlas.filter(gene_column("feature_type") == "Gene Expression")
+    profile = atlas.filter(cell_profile("AAAC-1") > 0)
     assert _node_lines(metadata) == [
         (
             "#2 FILTER_GENES gene_column('feature_type') == 'Gene Expression' <- #1 (node 2)"
@@ -83,9 +83,7 @@ def test_passes_per_node(store: Path) -> None:
 
 
 def test_explain_leaves_the_plan_unchanged(store: Path) -> None:
-    atlas = _kyto.scan(store).filter_genes(
-        gene_column("feature_type") == "Gene Expression"
-    )
+    atlas = _kyto.scan(store).filter(gene_column("feature_type") == "Gene Expression")
     before = atlas.to_json()
     assert atlas.explain() == atlas.explain()
     assert atlas.to_json() == before
@@ -95,7 +93,7 @@ def test_text_snapshot(store: Path) -> None:
     atlas = (
         _kyto.scan(store)
         .with_default_layer("counts")
-        .filter_genes(cell_profile("AAAC-1") > 0)
+        .filter(cell_profile("AAAC-1") > 0)
     )
     text = atlas.explain().replace(str(store), "<store>")
     assert text == (
@@ -114,9 +112,7 @@ def test_text_snapshot(store: Path) -> None:
 
 
 def test_json_is_the_same_as_a_dict(store: Path) -> None:
-    atlas = _kyto.scan(store).filter_genes(
-        gene_column("feature_type") == "Gene Expression"
-    )
+    atlas = _kyto.scan(store).filter(gene_column("feature_type") == "Gene Expression")
     explained = atlas.explain(format="json")
     path = str(store)
     assert explained == {

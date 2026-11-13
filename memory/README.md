@@ -46,3 +46,4 @@ Lessons carried over from ggrust (same stack: Rust + PyO3 + maturin + uv) are ma
 - [umap connectivities and numba's types](umap_connectivities_numba.md): `smooth_knn_dist`'s `float32` locals are `f64` inside `prange`; replay scanpy's `distances` (self at column 0) for a bit-exact check.
 - [Leiden and Louvain references](leiden_reference.md): no `louvain` wheel on 3.13, leidenalg's `refine_partition=False` crashes; use its move/aggregate loop; compare by ARI and quality; uv 0.11.7 relocks to revision 3.
 - [UMAP layout under scanpy](umap_layout.md): scanpy's SGD is sequential (`parallel=False`); `tau_rand_int` truncates to `int32`; `float32` thresholds; judge layouts by trustworthiness inside umap-learn's seed range.
+- [Python chain methods and terminals](python_chain_methods.md): one pymethods block, thin methods via `Atlas::derive`; DE stays lazy through `pl.defer`; a new project dependency relocks `uv.lock` at an older revision with uv 0.11.7.
