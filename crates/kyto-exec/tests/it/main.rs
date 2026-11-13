@@ -6,6 +6,7 @@
 #[path = "../../../kyto-plan/tests/it/support.rs"]
 mod plan_support;
 
+mod connectivities_parity;
 mod deterministic_reductions;
 mod filter_qc_parity;
 mod filters_columns;

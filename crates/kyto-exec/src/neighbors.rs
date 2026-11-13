@@ -16,7 +16,7 @@
 //! zero (scikit-learn's `cosine_distances`). Both are rounded once to `float32`.
 //! The result is a CSR graph ([`NeighborGraph`]) with column indices increasing within
 //! each row (format.md §7).
-//! Does not: weight the graph (connectivities, 6.7), read embeddings from the store
+//! Does not: weight the graph (`connectivities.rs`, 6.7), read embeddings from the store
 //! (5.11), or adjust `n_neighbors` to small data as scanpy does (`KY-E215` instead).
 
 use std::borrow::Cow;
@@ -26,6 +26,7 @@ use kyto_error::KytoError;
 use kyto_plan::{Metric, NeighborSearch, Neighbors};
 use rayon::prelude::*;
 
+use crate::connectivities::ConnectivityGraph;
 use crate::kernels::Kernels;
 use crate::neighbors_hnsw;
 use crate::run_control::RunControl;
@@ -47,6 +48,96 @@ pub struct NeighborGraph {
 }
 
 impl NeighborGraph {
+    /// A graph from CSR arrays found elsewhere (such as scanpy's `distances`), so
+    /// [`connectivities`](crate::connectivities) can weight the same neighbours.
+    ///
+    /// # Errors
+    /// `KY-E215` unless `n_neighbors` is at least 2, `indptr` starts at 0 and gives each
+    /// of at least one row exactly `n_neighbors - 1` entries, `indices` and `distances`
+    /// have that many values, the indices of a row increase and lie below the number
+    /// of rows, and every distance is finite and not negative.
+    pub fn from_csr(
+        n_neighbors: usize,
+        indptr: Vec<u64>,
+        indices: Vec<u32>,
+        distances: Vec<f32>,
+    ) -> Result<Self, KytoError> {
+        let refuse = |parameter: &str, value: String, problem: String, accepted: &str| {
+            KytoError::InvalidArgument {
+                function: "NeighborGraph::from_csr".to_owned(),
+                parameter: parameter.to_owned(),
+                value,
+                problem,
+                accepted: accepted.to_owned(),
+            }
+        };
+        if n_neighbors < 2 {
+            return Err(refuse(
+                "n_neighbors",
+                n_neighbors.to_string(),
+                "it counts the cell itself".to_owned(),
+                "an int of at least 2",
+            ));
+        }
+        let k = n_neighbors - 1;
+        let n_cells = indptr.len().saturating_sub(1);
+        if u32::try_from(n_cells.saturating_sub(1)).is_err() {
+            return Err(refuse(
+                "indptr",
+                format!("{n_cells} rows"),
+                "graph indices are uint32 (format.md §7)".to_owned(),
+                "at most 2^32 rows",
+            ));
+        }
+        let regular = n_cells > 0
+            && n_cells.checked_mul(k).is_some()
+            && indptr
+                .iter()
+                .enumerate()
+                .all(|(row, &offset)| offset == (row * k) as u64);
+        if !regular {
+            return Err(refuse(
+                "indptr",
+                format!("{} offsets", indptr.len()),
+                format!("its rows do not each hold n_neighbors - 1 = {k} entries from 0"),
+                "the offsets 0, k, 2k, ... of at least one row",
+            ));
+        }
+        if indices.len() != n_cells * k || distances.len() != n_cells * k {
+            return Err(refuse(
+                "indices",
+                format!("{} indices, {} distances", indices.len(), distances.len()),
+                format!("indptr gives {} entries", n_cells * k),
+                "one index and one distance an entry",
+            ));
+        }
+        for (row, columns) in indices.chunks_exact(k).enumerate() {
+            let increasing = columns.windows(2).all(|pair| pair[0] < pair[1]);
+            if !increasing || columns.iter().any(|&column| column as usize >= n_cells) {
+                return Err(refuse(
+                    "indices",
+                    format!("{columns:?}"),
+                    format!("row {row} does not increase below {n_cells}"),
+                    "increasing row positions in each row",
+                ));
+            }
+        }
+        if let Some(entry) = distances.iter().position(|d| !d.is_finite() || *d < 0.0) {
+            return Err(refuse(
+                "distances",
+                distances[entry].to_string(),
+                format!("entry {entry} is not a finite distance"),
+                "finite values of at least 0",
+            ));
+        }
+        Ok(Self {
+            n_neighbors,
+            indptr,
+            indices,
+            distances,
+        })
+    }
+
     /// The number of rows (and columns): the cells searched.
     pub fn n_cells(&self) -> usize {
         self.indptr.len() - 1
@@ -74,12 +165,13 @@ impl NeighborGraph {
     }
 }
 
-/// What a `neighbors` node computed (task 6.6): the distance graph over the rows of
-/// the embedding it searched.
+/// What a `neighbors` node computed (tasks 6.6, 6.7): the distance graph over the rows
+/// of the embedding it searched, and its connectivities.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NeighborStatistics {
     pub(crate) cells: Arc<Vec<u64>>,
     pub(crate) distances: NeighborGraph,
+    pub(crate) connectivities: ConnectivityGraph,
 }
 
 impl NeighborStatistics {
@@ -92,6 +184,12 @@ impl NeighborStatistics {
     /// scanpy's `distances` graph.
     pub fn distances(&self) -> &NeighborGraph {
         &self.distances
+    }
+
+    /// scanpy's `connectivities` graph: UMAP's fuzzy weights on
+    /// [`NeighborStatistics::distances`] (task 6.7, [`crate::connectivities`]).
+    pub fn connectivities(&self) -> &ConnectivityGraph {
+        &self.connectivities
     }
 }
 
@@ -433,6 +531,29 @@ mod tests {
         assert_eq!(graph.indptr(), [0, 2, 4, 6, 8]);
         assert_eq!(graph.indices(), [1, 2, 0, 2, 0, 1, 1, 2]);
         assert_eq!(graph.distances(), [1.0, 3.0, 1.0, 2.0, 3.0, 2.0, 6.0, 4.0]);
+    }
+
+    #[test]
+    fn from_csr_refuses_malformed_graphs() {
+        let code = |result: Result<NeighborGraph, KytoError>| result.unwrap_err().code();
+        let graph = |n: usize, indptr: &[u64], indices: &[u32], distances: &[f32]| {
+            NeighborGraph::from_csr(n, indptr.to_vec(), indices.to_vec(), distances.to_vec())
+        };
+        assert!(graph(2, &[0, 1, 2], &[1, 0], &[1.0, 1.0]).is_ok());
+        assert_eq!(code(graph(1, &[0, 0], &[], &[])), "KY-E215");
+        assert_eq!(code(graph(2, &[0], &[], &[])), "KY-E215");
+        assert_eq!(code(graph(2, &[0, 2, 2], &[1, 0], &[1.0, 1.0])), "KY-E215");
+        assert_eq!(code(graph(2, &[0, 1, 2], &[1, 2], &[1.0, 1.0])), "KY-E215");
+        assert_eq!(
+            code(graph(2, &[0, 1, 2], &[1, 0], &[1.0, f32::NAN])),
+            "KY-E215"
+        );
+        assert_eq!(code(graph(2, &[0, 1, 2], &[1, 0], &[1.0, -1.0])), "KY-E215");
+        assert_eq!(
+            code(graph(3, &[0, 2, 4], &[1, 1, 0, 0], &[1.0; 4])),
+            "KY-E215"
+        );
+        assert_eq!(code(graph(usize::MAX, &[0, 0, 0], &[], &[])), "KY-E215");
     }
 
     #[test]

@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{
-    CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, nearest_neighbors,
+    CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, connectivities,
+    nearest_neighbors,
 };
 use kyto_plan::{
     Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions,
@@ -531,6 +532,8 @@ fn neighbors_search_the_embedding_of_the_pca_below() {
         assert_eq!(found.cells(), embedding.cells());
         assert_eq!(found.distances(), &expected);
         assert_eq!(found.distances().indices().len(), N_CELLS * 3);
+        // 6.7: the connectivities weight that same graph.
+        assert_eq!(found.connectivities(), &connectivities(&expected));
     }
 
     // The graph of the kept cells needs the embedding's rows of those cells (5.11).

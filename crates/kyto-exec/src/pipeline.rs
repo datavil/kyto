@@ -53,6 +53,7 @@ use zarrs::storage::ReadableStorageTraits;
 
 use crate::block_stream::{BlockStream, StreamSource};
 use crate::cell_steps::{CellLeaf, CellStep, Evaluation, Take, is_block_leaf};
+use crate::connectivities;
 use crate::cross_cell::{CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
@@ -105,7 +106,8 @@ pub(crate) enum Stage {
     /// A gene filter, `select_genes` or `with_genes`, run once with the statistics
     /// passes the physical plan gives it (task 5.8).
     Genes { kind: GeneStepKind, passes: u32 },
-    /// `neighbors` (task 6.6), searched in memory once its embedding is computed.
+    /// `neighbors` (tasks 6.6, 6.7), searched and weighted in memory once its embedding
+    /// is computed.
     Neighbors(NeighborStage),
 }
 
@@ -417,17 +419,22 @@ impl Pipeline {
                     let Some(NodeStatistics::Pca(pca)) = statistics.nodes.get(&stage.source) else {
                         unreachable!("Pipeline::new resolved the pca below neighbors")
                     };
-                    let graph = thread_pool.install(|| {
+                    let (graph, weights) = thread_pool.install(|| {
                         neighbors::search(
                             pca.embedding(),
                             pca.n_components(),
                             &stage.params,
                             &control,
                         )
+                        .map(|graph| {
+                            let weights = connectivities::connectivities(&graph);
+                            (graph, weights)
+                        })
                     })?;
                     let found = NeighborStatistics {
                         cells: Arc::clone(&pca.cells),
                         distances: graph,
+                        connectivities: weights,
                     };
                     statistics
                         .nodes

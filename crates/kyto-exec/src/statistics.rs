@@ -288,8 +288,8 @@ pub enum NodeStatistics {
     Scale(Box<ScaleStatistics>),
     /// `pca`: the embedding, loadings and variances (task 6.5).
     Pca(Box<PcaStatistics>),
-    /// `neighbors`: the distance graph (task 6.6; no statistics passes, it searches
-    /// the embedding after the passes of the node that wrote it).
+    /// `neighbors`: the distance and connectivity graphs (tasks 6.6, 6.7; no statistics
+    /// passes, it searches the embedding after the passes of the node that wrote it).
     Neighbors(Box<NeighborStatistics>),
 }
 
