@@ -42,6 +42,7 @@ use crate::neighbors::{Metric, NeighborSearch, Neighbors};
 use crate::node::NodeId;
 use crate::plan::Plan;
 use crate::sink::Sink;
+use crate::umap::{Umap, UmapInit};
 use crate::with_columns::Columns;
 
 /// The `format` value of every plan JSON.
@@ -153,6 +154,19 @@ enum Step {
     Louvain {
         graph: String,
         resolution: f64,
+        seed: u64,
+        into: String,
+    },
+    Umap {
+        graph: String,
+        n_components: u64,
+        min_dist: f64,
+        spread: f64,
+        n_epochs: Option<u64>,
+        alpha: f64,
+        gamma: f64,
+        negative_sample_rate: u64,
+        init: UmapInit,
         seed: u64,
         into: String,
     },
@@ -307,6 +321,34 @@ impl Step {
                     },
                 }
             }
+            Plan::Umap(node) => {
+                let Umap {
+                    graph,
+                    n_components,
+                    min_dist,
+                    spread,
+                    n_epochs,
+                    alpha,
+                    gamma,
+                    negative_sample_rate,
+                    init,
+                    seed,
+                    into,
+                } = node.params().clone();
+                Self::Umap {
+                    graph,
+                    n_components,
+                    min_dist,
+                    spread,
+                    n_epochs,
+                    alpha,
+                    gamma,
+                    negative_sample_rate,
+                    init,
+                    seed,
+                    into,
+                }
+            }
             Plan::Sink(node) => match node.params().clone() {
                 Sink::Zarr { path } => Self::SinkZarr { path },
                 Sink::H5ad { path } => Self::SinkH5ad { path },
@@ -333,6 +375,7 @@ impl Step {
             Self::Neighbors { .. } => "neighbors",
             Self::Leiden { .. } => "leiden",
             Self::Louvain { .. } => "louvain",
+            Self::Umap { .. } => "umap",
             Self::SinkZarr { .. } => "sink_zarr",
             Self::SinkH5ad { .. } => "sink_h5ad",
         }
@@ -424,6 +467,31 @@ impl Step {
                 method: ClusterMethod::Louvain,
                 graph,
                 resolution,
+                seed,
+                into,
+            }),
+            Self::Umap {
+                graph,
+                n_components,
+                min_dist,
+                spread,
+                n_epochs,
+                alpha,
+                gamma,
+                negative_sample_rate,
+                init,
+                seed,
+                into,
+            } => input.umap(Umap {
+                graph,
+                n_components,
+                min_dist,
+                spread,
+                n_epochs,
+                alpha,
+                gamma,
+                negative_sample_rate,
+                init,
                 seed,
                 into,
             }),

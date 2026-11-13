@@ -44,6 +44,7 @@ VERSIONED_PACKAGES: tuple[str, ...] = (
     "scikit-learn",
     "scikit-misc",
     "scipy",
+    "umap-learn",
 )
 
 Arrays = dict[str, NDArray[np.generic]]
@@ -77,6 +78,10 @@ _SCALE_MAX_VALUE = 10.0
 _SEED = 0
 # Leiden and Louvain resolutions: scanpy's default 1 and the clustering tutorial's.
 _RESOLUTIONS: tuple[float, ...] = (0.02, 0.5, 1.0, 2.0)
+# UMAP seeds whose trustworthiness gives umap-learn's range (task 6.9), and the
+# neighbourhood sizes it is measured at (scikit-learn's default 5, and n_neighbors).
+_UMAP_SEEDS = [0, 1, 2, 3, 4]
+_TRUSTWORTHINESS_NEIGHBORS = [5, 15]
 # Genes seen in fewer cells are dropped before HVG and later steps on pbmc3k, as in
 # the scanpy tutorial. Without it scanpy's cell_ranger flavour raises ("Bin edges must
 # be unique") on the ~19k all-zero genes. synthetic keeps its empty genes (edge case).
@@ -442,6 +447,54 @@ def louvain(name: FixtureName) -> tuple[Parameters, Arrays]:
     return parameters, arrays
 
 
+def umap(name: FixtureName) -> tuple[Parameters, Arrays]:
+    """``tl.umap`` on the neighbours above, and its trustworthiness (task 6.9).
+
+    ``embedding`` is scanpy's ``X_umap`` at seed 0. ``trustworthiness/<k>`` holds
+    scikit-learn's trustworthiness of the layout against ``X_pca`` (the space the
+    neighbours were searched in) at ``k`` neighbours, one value per seed in
+    ``_UMAP_SEEDS``: umap-learn's range, which kyto's layout must fall in.
+    """
+    import scanpy as sc
+    from sklearn.manifold import trustworthiness
+
+    parameters: Parameters = {
+        "function": "scanpy.tl.umap",
+        "input": "neighbors reference graph",
+        "min_cells_per_gene": _MIN_CELLS_PER_GENE[name],
+        "min_dist": 0.5,
+        "spread": 1.0,
+        "n_components": 2,
+        "init_pos": "spectral",
+        "random_state": _UMAP_SEEDS,
+        "trustworthiness_n_neighbors": _TRUSTWORTHINESS_NEIGHBORS,
+    }
+    adata = _pca(name)
+    sc.pp.neighbors(
+        adata,
+        n_neighbors=_N_NEIGHBORS,
+        n_pcs=_N_COMPS[name],
+        method="umap",
+        metric="euclidean",
+        random_state=_SEED,
+    )
+    space = np.asarray(adata.obsm["X_pca"])[:, : _N_COMPS[name]]
+    arrays: Arrays = {}
+    scores: dict[int, list[float]] = {k: [] for k in _TRUSTWORTHINESS_NEIGHBORS}
+    for seed in _UMAP_SEEDS:
+        sc.tl.umap(adata, random_state=seed)
+        layout = np.asarray(adata.obsm["X_umap"])
+        if seed == _UMAP_SEEDS[0]:
+            arrays["embedding"] = layout
+            arrays["a"] = np.asarray([adata.uns["umap"]["params"]["a"]])
+            arrays["b"] = np.asarray([adata.uns["umap"]["params"]["b"]])
+        for k in _TRUSTWORTHINESS_NEIGHBORS:
+            scores[k].append(float(trustworthiness(space, layout, n_neighbors=k)))
+    for k, values in scores.items():
+        arrays[f"trustworthiness/{k}"] = np.asarray(values)
+    return parameters, arrays
+
+
 def rank_genes(name: FixtureName) -> tuple[Parameters, Arrays]:
     """``rank_genes_groups`` by cell type, t-test and Wilcoxon (task 6.10)."""
     import scanpy as sc
@@ -478,6 +531,7 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "neighbors": neighbors,
         "leiden": leiden,
         "louvain": louvain,
+        "umap": umap,
         "rank_genes": rank_genes,
     },
     "pbmc3k": {
@@ -489,6 +543,7 @@ STEPS: dict[FixtureName, dict[str, Step]] = {
         "neighbors": neighbors,
         "leiden": leiden,
         "louvain": louvain,
+        "umap": umap,
     },
 }
 

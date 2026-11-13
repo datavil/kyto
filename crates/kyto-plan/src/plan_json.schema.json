@@ -42,7 +42,7 @@
           "enum": [
             "with_default_layer", "filter_cells", "filter_genes", "select_genes", "take_cells",
             "normalize_total", "log1p", "scale", "highly_variable_genes", "pca", "with_cells",
-            "with_genes", "neighbors", "leiden", "louvain", "sink_zarr", "sink_h5ad"
+            "with_genes", "neighbors", "leiden", "louvain", "umap", "sink_zarr", "sink_h5ad"
           ]
         }}}}}
       ]
@@ -79,6 +79,7 @@
         {"if": {"required": ["method"], "properties": {"method": {"const": "neighbors"}}}, "then": {"$ref": "#/$defs/neighbors"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "leiden"}}}, "then": {"$ref": "#/$defs/cluster"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "louvain"}}}, "then": {"$ref": "#/$defs/cluster"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "umap"}}}, "then": {"$ref": "#/$defs/umap"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_zarr"}}}, "then": {"$ref": "#/$defs/sink"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_h5ad"}}}, "then": {"$ref": "#/$defs/sink"}}
       ]
@@ -208,6 +209,24 @@
         "method": true,
         "graph": {"type": "string"},
         "resolution": {"type": "number"},
+        "seed": {"$ref": "#/$defs/uint"},
+        "into": {"type": "string"}
+      }
+    },
+    "umap": {
+      "required": ["graph", "n_components", "min_dist", "spread", "alpha", "gamma", "negative_sample_rate", "init", "seed", "into"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "graph": {"type": "string"},
+        "n_components": {"$ref": "#/$defs/uint"},
+        "min_dist": {"type": "number"},
+        "spread": {"type": "number"},
+        "n_epochs": {"$ref": "#/$defs/uint_or_null", "description": "null: 500 epochs up to 10,000 cells, 200 above (scanpy)."},
+        "alpha": {"type": "number"},
+        "gamma": {"type": "number"},
+        "negative_sample_rate": {"$ref": "#/$defs/uint"},
+        "init": {"enum": ["spectral", "random"]},
         "seed": {"$ref": "#/$defs/uint"},
         "into": {"type": "string"}
       }

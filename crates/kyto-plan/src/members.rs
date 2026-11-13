@@ -173,6 +173,9 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
         Plan::Cluster(node) => {
             reads.insert(Member::Graph(node.params().graph.clone()));
         }
+        Plan::Umap(node) => {
+            reads.insert(Member::Graph(node.params().graph.clone()));
+        }
         Plan::Sink(_) => reads = all_members(plan.schema()),
     }
     reads
@@ -231,6 +234,9 @@ pub(crate) fn node_writes(plan: &Plan) -> Members {
         }
         Plan::Cluster(node) => {
             writes.insert(Member::CellColumn(node.params().into.clone()));
+        }
+        Plan::Umap(node) => {
+            writes.insert(Member::Embedding(node.params().into.clone()));
         }
     }
     writes

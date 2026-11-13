@@ -42,6 +42,7 @@ use crate::scan::Scan;
 use crate::select_genes::SelectGenes;
 use crate::sink::Sink;
 use crate::take_cells::TakeCells;
+use crate::umap::Umap;
 use crate::with_columns::WithColumns;
 use crate::with_default_layer::WithDefaultLayer;
 
@@ -71,6 +72,8 @@ pub enum Plan {
     Neighbors(Node<Neighbors>),
     /// Cluster cells on a graph.
     Cluster(Node<Cluster>),
+    /// Lay out a cell graph (UMAP).
+    Umap(Node<Umap>),
     /// Write the plan (the last node).
     Sink(Node<Sink>),
 }
@@ -108,6 +111,7 @@ impl Plan {
             Self::WithColumns(node) => of(node),
             Self::Neighbors(node) => of(node),
             Self::Cluster(node) => of(node),
+            Self::Umap(node) => of(node),
             Self::Sink(node) => of(node),
         }
     }
@@ -124,6 +128,7 @@ impl Plan {
             Self::WithColumns(node) => &mut node.input,
             Self::Neighbors(node) => &mut node.input,
             Self::Cluster(node) => &mut node.input,
+            Self::Umap(node) => &mut node.input,
             Self::Sink(node) => &mut node.input,
         }
     }
@@ -145,6 +150,7 @@ impl Plan {
             (Self::WithColumns(left), Self::WithColumns(right)) => left.params() == right.params(),
             (Self::Neighbors(left), Self::Neighbors(right)) => left.params() == right.params(),
             (Self::Cluster(left), Self::Cluster(right)) => left.params() == right.params(),
+            (Self::Umap(left), Self::Umap(right)) => left.params() == right.params(),
             (Self::Sink(left), Self::Sink(right)) => left.params() == right.params(),
             _ => false,
         }

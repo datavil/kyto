@@ -57,6 +57,7 @@ mod scan;
 mod select_genes;
 mod sink;
 mod take_cells;
+mod umap;
 mod with_columns;
 mod with_default_layer;
 
@@ -86,5 +87,6 @@ pub use scan::Scan;
 pub use select_genes::SelectGenes;
 pub use sink::Sink;
 pub use take_cells::TakeCells;
+pub use umap::{UMAP_MAX_COMPONENTS, Umap, UmapInit};
 pub use with_columns::{Columns, WithColumns, column_dtype};
 pub use with_default_layer::WithDefaultLayer;

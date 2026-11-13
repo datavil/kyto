@@ -119,7 +119,8 @@ fn node_tables(plan: &Plan) -> (bool, bool) {
         | Plan::MapElementwise(_)
         | Plan::CrossCell(_)
         | Plan::Neighbors(_)
-        | Plan::Cluster(_) => (false, false),
+        | Plan::Cluster(_)
+        | Plan::Umap(_) => (false, false),
     }
 }
 

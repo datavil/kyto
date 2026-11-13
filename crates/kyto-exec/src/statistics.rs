@@ -17,6 +17,7 @@ use kyto_plan::HvgFlavor;
 use crate::leiden::ClusterStatistics;
 use crate::neighbors::NeighborStatistics;
 use crate::pca::PcaStatistics;
+use crate::umap::UmapStatistics;
 
 pub use crate::scale::ScaleStatistics;
 
@@ -295,6 +296,9 @@ pub enum NodeStatistics {
     /// `leiden`/`louvain`: the clustering of the graph's cells (task 6.8; no
     /// statistics passes, it clusters the graph of the `neighbors` node below it).
     Cluster(Box<ClusterStatistics>),
+    /// `umap`: the layout of a `neighbors` node's connectivities (task 6.9; no
+    /// statistics passes, it runs after that node's search).
+    Umap(Box<UmapStatistics>),
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

@@ -21,11 +21,11 @@ use std::time::Duration;
 use kyto_core::{GeneIds, Tiling};
 use kyto_exec::{
     CellGraph, CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, cluster,
-    connectivities, nearest_neighbors,
+    connectivities, nearest_neighbors, umap_layout,
 };
 use kyto_plan::{
     Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, Operation, OptimizeOptions,
-    Output, PhysicalOptions, PhysicalPlan, Plan, physical_plan,
+    Output, PhysicalOptions, PhysicalPlan, Plan, Umap, physical_plan,
 };
 use kyto_store::{
     CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
@@ -480,6 +480,97 @@ fn highly_variable_genes_over_no_cell_is_refused() {
             assert!(error.to_string().contains("no cell"), "{error}");
         }
     }
+}
+
+#[test]
+fn umap_lays_out_the_connectivities_of_the_neighbors_below() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let neighbors = Neighbors {
+        embedding: "X_pca".to_owned(),
+        n_components: Some(2),
+        n_neighbors: 4,
+        metric: Metric::Euclidean,
+        search: NeighborSearch::Exact,
+        seed: 0,
+        key: None,
+    };
+    let pca = preprocess(&store)
+        .pca(Some("log1p"), "X_pca", 3, 0)
+        .unwrap();
+    let graphs = pca.neighbors(neighbors.clone()).unwrap();
+    let params = Umap {
+        n_epochs: Some(50),
+        seed: 3,
+        ..Umap::default()
+    };
+    let plan = graphs.umap(params.clone()).unwrap();
+    let found_graph = node_statistics(
+        &plan,
+        Member::Graph("connectivities".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Neighbors(neighbors) => Some((**neighbors).clone()),
+            _ => None,
+        },
+    );
+    let embedding = node_statistics(
+        &plan,
+        Member::Embedding("X_pca".to_owned()),
+        1,
+        |statistics| match statistics {
+            NodeStatistics::Pca(pca) => Some((**pca).clone()),
+            _ => None,
+        },
+    );
+    let data: Vec<f32> = embedding
+        .embedding()
+        .chunks(3)
+        .flat_map(|row| row[..2].iter().copied())
+        .collect();
+    let expected = umap_layout(
+        found_graph.connectivities(),
+        Some((&data, 2, Metric::Euclidean)),
+        &params,
+    )
+    .unwrap();
+    for threads_count in [1, 4] {
+        let found = node_statistics(
+            &plan,
+            Member::Embedding("X_umap".to_owned()),
+            threads_count,
+            |statistics| match statistics {
+                NodeStatistics::Umap(umap) => Some((**umap).clone()),
+                _ => None,
+            },
+        );
+        assert_eq!(found.cells(), found_graph.cells());
+        assert_eq!(found.layout(), &expected);
+        assert_eq!(found.layout().embedding().len(), N_CELLS * 2);
+    }
+
+    // umap lays out connectivities, not distances.
+    let distances = graphs
+        .umap(Umap {
+            graph: "distances".to_owned(),
+            ..params.clone()
+        })
+        .unwrap();
+    let physical = PhysicalPlan::new(distances.optimize(), PhysicalOptions::default());
+    let error = Pipeline::new(&physical, 0).unwrap_err();
+    assert_eq!(error.code(), "KY-E215");
+    assert!(error.to_string().contains("distances graph"), "{error}");
+    // The layout of the kept cells needs the graph's rows of those cells (5.11).
+    let taken = graphs
+        .take_cells((0..10).map(|cell| format!("c{cell}")))
+        .unwrap()
+        .umap(params)
+        .unwrap();
+    let physical = PhysicalPlan::new(taken.optimize(), PhysicalOptions::default());
+    let error = Pipeline::new(&physical, 0).unwrap_err();
+    assert_eq!(error.code(), "KY-E601");
+    assert!(error.to_string().contains("5.11"), "{error}");
 }
 
 /// The statistics of the first node `pick` takes, run on `threads` threads.

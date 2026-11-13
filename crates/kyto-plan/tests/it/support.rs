@@ -490,6 +490,26 @@ fn apply(plan: &Plan, data: &mut Data) -> Result<(), String> {
                 .unwrap();
             Ok(())
         }
+        Plan::Umap(node) => {
+            // A stand-in layout: each cell's graph row sum, then the seed, per dimension.
+            let params = node.params();
+            let graph = data
+                .graphs
+                .get(&params.graph)
+                .ok_or_else(|| format!("missing graph {}", params.graph))?;
+            let rows = graph
+                .iter()
+                .map(|row| {
+                    let sum = row.iter().sum::<f64>();
+                    (0..params.n_components)
+                        .map(|axis| sum * (axis + 1) as f64 + params.seed as f64)
+                        .collect()
+                })
+                .collect();
+            data.embeddings
+                .insert(params.into.clone(), (Axis::Cells, rows));
+            Ok(())
+        }
     }
 }
 

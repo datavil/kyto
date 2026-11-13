@@ -15,8 +15,8 @@ use kyto_core::{
 };
 use kyto_plan::{
     CellScope, Cluster, ClusterMethod, CrossCellOp, ElementwiseOp, HvgFlavor, Metric,
-    NeighborSearch, Neighbors, NodeId, Plan, PlanSchema, Sink, SparseMember, column_dtype,
-    hvg_columns,
+    NeighborSearch, Neighbors, NodeId, Plan, PlanSchema, Sink, SparseMember, Umap, UmapInit,
+    column_dtype, hvg_columns,
 };
 
 const SCHEMA: &str = r#"{
@@ -893,6 +893,89 @@ fn cluster_adds_a_string_cell_column() {
         },
     ] {
         assert_eq!(scan().cluster(bad).unwrap_err().code(), "KY-E215");
+    }
+}
+
+// --- Umap -----------------------------------------------------------------------
+
+#[test]
+fn umap_adds_a_float32_cell_embedding() {
+    let plan = scan().umap(Umap::default()).unwrap();
+    let embedding = plan.output_schema().embedding("X_umap").unwrap();
+    assert_eq!((embedding.axis, embedding.width), (Axis::Cells, 2));
+    assert_eq!(embedding.dtype, FloatDtype::Float32);
+    assert_eq!(plan.cell_scope(), CellScope::CrossCell);
+    assert_eq!(plan.changes_axis(), None);
+    assert_eq!(
+        first_line(&plan),
+        "UMAP \"connectivities\" -> \"X_umap\" n_components=2 min_dist=0.5 spread=1 \
+         n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0"
+    );
+    let three = scan()
+        .umap(Umap {
+            n_components: 3,
+            n_epochs: Some(10),
+            init: UmapInit::Random,
+            into: "X_pca".to_owned(),
+            ..Umap::default()
+        })
+        .unwrap();
+    // Replaces the embedding of that name.
+    assert_eq!(three.output_schema().embedding("X_pca").unwrap().width, 3);
+    assert!(first_line(&three).contains("n_epochs=10"));
+
+    for graph in ["missing", "coexpression"] {
+        let error = scan()
+            .umap(Umap {
+                graph: graph.to_owned(),
+                ..Umap::default()
+            })
+            .unwrap_err();
+        assert_eq!(error.code(), "KY-E109", "{graph}");
+    }
+    for bad in [
+        Umap {
+            n_components: 0,
+            ..Umap::default()
+        },
+        Umap {
+            n_components: 101,
+            ..Umap::default()
+        },
+        Umap {
+            n_components: 1 << 40,
+            ..Umap::default()
+        },
+        Umap {
+            spread: 0.0,
+            ..Umap::default()
+        },
+        Umap {
+            alpha: f64::NAN,
+            ..Umap::default()
+        },
+        Umap {
+            min_dist: -0.1,
+            ..Umap::default()
+        },
+        Umap {
+            gamma: f64::INFINITY,
+            ..Umap::default()
+        },
+        Umap {
+            min_dist: 2.0,
+            ..Umap::default()
+        },
+        Umap {
+            into: String::new(),
+            ..Umap::default()
+        },
+        Umap {
+            into: "x_PCA".to_owned(),
+            ..Umap::default()
+        },
+    ] {
+        assert_eq!(scan().umap(bad).unwrap_err().code(), "KY-E215");
     }
 }
 

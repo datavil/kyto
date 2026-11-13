@@ -25,3 +25,4 @@ mod run_control;
 mod scale_parity;
 mod sinks;
 mod thread_scaling;
+mod umap_parity;

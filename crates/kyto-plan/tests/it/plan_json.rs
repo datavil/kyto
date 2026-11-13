@@ -21,7 +21,7 @@ use kyto_core::{
 use kyto_error::KytoError;
 use kyto_plan::{
     Cluster, ClusterMethod, HvgFlavor, Metric, NeighborSearch, Neighbors, PLAN_JSON_VERSION, Plan,
-    Sink,
+    Sink, Umap, UmapInit,
 };
 use proptest::prelude::*;
 use serde_json::Value;
@@ -441,6 +441,24 @@ fn corpus() -> Vec<Arc<Plan>> {
                 .unwrap(),
         );
     }
+    plans.push(graphs.umap(Umap::default()).unwrap());
+    plans.push(
+        graphs
+            .umap(Umap {
+                n_components: 3,
+                min_dist: 0.1 + 0.2,
+                spread: 1.5,
+                n_epochs: Some(200),
+                alpha: 0.25,
+                gamma: 0.0,
+                negative_sample_rate: 0,
+                init: UmapInit::Random,
+                seed: u64::MAX,
+                into: "X_new".to_owned(),
+                ..Umap::default()
+            })
+            .unwrap(),
+    );
     // Sinks end plans.
     for sink in [
         Sink::Zarr {

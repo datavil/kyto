@@ -32,7 +32,9 @@
 //! on any embedding, [`connectivities`] weights any neighbour graph). `leiden` and
 //! `louvain` (task 6.8) cluster the graph of the `neighbors` node below them
 //! ([`cluster`] on any [`CellGraph`]) and add their labels as a cell column
-//! ([`ClusterStatistics`]).
+//! ([`ClusterStatistics`]). `umap` (task 6.9) lays out a `neighbors` node's
+//! connectivities ([`UmapStatistics`]; [`umap_layout`] lays out any connectivity
+//! graph).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -66,6 +68,8 @@ mod run_control;
 mod scale;
 mod sink;
 mod statistics;
+mod umap;
+mod umap_spectral;
 
 pub use block_stream::BlockStream;
 pub use cell_block_pool::CellBlockPool;
@@ -93,6 +97,7 @@ pub use statistics::{
     BatchStatistics, ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, HvgValues,
     NodeStatistics, ScaleStatistics, Statistics,
 };
+pub use umap::{UMAP_SMALL_GRAPH_CELLS, UmapLayout, UmapStatistics, find_ab_params, umap_layout};
 // The block type lives in kyto-store (the tile reader builds it, the writer consumes
 // it); the executor names it from here.
 pub use kyto_store::{

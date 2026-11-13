@@ -661,6 +661,68 @@
     "zero_center": true
    }
   },
+  "pbmc3k/umap": {
+   "arrays": {
+    "a": {
+     "digest": "924ec6abd5b7a691cbc698e8a37bfee79cb3b7f0b1a286a14d93947cb255cf6a",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "b": {
+     "digest": "11a7ce095e8d84069118b44472b4d90204732650e14ca15f0fd1883730ff6d2a",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "embedding": {
+     "digest": "5b08c320919c7aa9457b028bc8634d2e4802280128033056231a5e5f3819e945",
+     "dtype": "<f4",
+     "shape": [
+      2700,
+      2
+     ]
+    },
+    "trustworthiness/15": {
+     "digest": "69f78541e0ac05f3ffea3be5338ec38597d06956b53835d0d33f0d4ccf40f1a7",
+     "dtype": "<f8",
+     "shape": [
+      5
+     ]
+    },
+    "trustworthiness/5": {
+     "digest": "5e6c5ec820f91c1076fe1a40bd7f2a59f031c1e1493f780c489f18ee82a5c950",
+     "dtype": "<f8",
+     "shape": [
+      5
+     ]
+    }
+   },
+   "file": "pbmc3k/umap.npz",
+   "fixture_digest": "6566b9312f97756266a4b0e1fec5d82606a630ce55b1a429a616d03b52131579",
+   "parameters": {
+    "function": "scanpy.tl.umap",
+    "init_pos": "spectral",
+    "input": "neighbors reference graph",
+    "min_cells_per_gene": 3,
+    "min_dist": 0.5,
+    "n_components": 2,
+    "random_state": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "spread": 1.0,
+    "trustworthiness_n_neighbors": [
+     5,
+     15
+    ]
+   }
+  },
   "synthetic/hvg": {
    "arrays": {
     "cell_ranger/dispersions": {
@@ -1671,6 +1733,68 @@
     "stored": "full dense",
     "zero_center": true
    }
+  },
+  "synthetic/umap": {
+   "arrays": {
+    "a": {
+     "digest": "924ec6abd5b7a691cbc698e8a37bfee79cb3b7f0b1a286a14d93947cb255cf6a",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "b": {
+     "digest": "11a7ce095e8d84069118b44472b4d90204732650e14ca15f0fd1883730ff6d2a",
+     "dtype": "<f8",
+     "shape": [
+      1
+     ]
+    },
+    "embedding": {
+     "digest": "92c248ae4bf999a5429a11c45010d0800470655a47d8cfa6822aa9b4dc3695b1",
+     "dtype": "<f4",
+     "shape": [
+      500,
+      2
+     ]
+    },
+    "trustworthiness/15": {
+     "digest": "9cf5a3e82ae1fbadfaca79053c6c7dc34c87b5b1ceff07489eb60ec729ffd57a",
+     "dtype": "<f8",
+     "shape": [
+      5
+     ]
+    },
+    "trustworthiness/5": {
+     "digest": "f599f2ca048a431f53ed223ab36eea2f161462236bc0f4a101c8ca07b23cc7c5",
+     "dtype": "<f8",
+     "shape": [
+      5
+     ]
+    }
+   },
+   "file": "synthetic/umap.npz",
+   "fixture_digest": "ad7cb28a0480c507397b70d3d14b77cda161174a201f5c7a13d44167a9c28820",
+   "parameters": {
+    "function": "scanpy.tl.umap",
+    "init_pos": "spectral",
+    "input": "neighbors reference graph",
+    "min_cells_per_gene": 0,
+    "min_dist": 0.5,
+    "n_components": 2,
+    "random_state": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "spread": 1.0,
+    "trustworthiness_n_neighbors": [
+     5,
+     15
+    ]
+   }
   }
  },
  "versions": {
@@ -1681,6 +1805,7 @@
   "scanpy": "1.12.5",
   "scikit-learn": "1.9.1",
   "scikit-misc": "0.5.3",
-  "scipy": "1.18.1"
+  "scipy": "1.18.1",
+  "umap-learn": "0.5.12"
  }
 }

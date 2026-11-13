@@ -38,6 +38,7 @@
 //! memory limits (5.5). Tables of a remote store (`run_on` other storage)
 //! are still read from the scan's path (plan 5.8 Open).
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
@@ -46,8 +47,8 @@ use std::sync::Arc;
 use kyto_core::{Axis, ColumnDtype, Expr, ExprAxis, Source};
 use kyto_error::KytoError;
 use kyto_plan::{
-    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Neighbors, Operation, PhysicalPlan,
-    Plan, Predicate,
+    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, Neighbors, Operation,
+    PhysicalPlan, Plan, Predicate, Umap,
 };
 use kyto_store::{LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -72,6 +73,7 @@ use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
 use crate::sink::SinkSpec;
 use crate::statistics::{NodeStatistics, Statistics};
+use crate::umap::{self, UmapStatistics};
 
 /// How a pipeline runs, apart from the plan.
 #[derive(Debug, Clone)]
@@ -117,6 +119,8 @@ pub(crate) enum Stage {
     Neighbors(NeighborStage),
     /// `leiden`/`louvain` (task 6.8), clustered in memory once its graph is built.
     Cluster(ClusterStage),
+    /// `umap` (task 6.9), laid out in memory once its graph is computed.
+    Umap(UmapStage),
 }
 
 /// A clustering node and the `neighbors` node whose statistics hold its graph.
@@ -129,6 +133,17 @@ pub(crate) struct ClusterStage {
     source: usize,
     /// Whether the graph is that node's distances (else its connectivities).
     distances: bool,
+}
+
+/// A `umap` node and the nodes whose statistics hold its graph and the embedding the
+/// graph's neighbours were searched in.
+#[derive(Debug, Clone)]
+pub(crate) struct UmapStage {
+    /// The node's index in the optimized plan.
+    node: usize,
+    params: Umap,
+    /// The `neighbors` node writing the graph (resolved by `Pipeline::new`).
+    source: usize,
 }
 
 /// A `neighbors` node and the node whose statistics hold its embedding.
@@ -338,7 +353,11 @@ impl Pipeline {
         // Every statistics pass and the output's stream compute every cell once.
         let control = options.control.clone();
         let passes = self.stages.iter().fold(1_u64, |passes, stage| match stage {
-            Stage::Maps(_) | Stage::Cells(_) | Stage::Neighbors(_) | Stage::Cluster(_) => passes,
+            Stage::Maps(_)
+            | Stage::Cells(_)
+            | Stage::Neighbors(_)
+            | Stage::Cluster(_)
+            | Stage::Umap(_) => passes,
             Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
             Stage::Genes { passes: more, .. } => passes.saturating_add(u64::from(*more)),
         });
@@ -488,6 +507,31 @@ impl Pipeline {
                         .insert(stage.node, NodeStatistics::Cluster(Box::new(found)));
                     continue;
                 }
+                Stage::Umap(stage) => {
+                    let Some(NodeStatistics::Neighbors(neighbors)) =
+                        statistics.nodes.get(&stage.source)
+                    else {
+                        unreachable!("Pipeline::new resolved the neighbors below umap")
+                    };
+                    let data = neighbor_data(&statistics, &self.stages, stage.source);
+                    let layout = thread_pool.install(|| {
+                        umap::layout(
+                            neighbors.connectivities(),
+                            data.as_ref()
+                                .map(|(values, width, metric)| (&**values, *width, *metric)),
+                            &stage.params,
+                            &control,
+                        )
+                    })?;
+                    let found = UmapStatistics {
+                        cells: Arc::clone(&neighbors.cells),
+                        layout,
+                    };
+                    statistics
+                        .nodes
+                        .insert(stage.node, NodeStatistics::Umap(Box::new(found)));
+                    continue;
+                }
                 Stage::CrossCell(cross_cell) => cross_cell,
             };
             let n_genes = usize::try_from(tables.n_genes()).unwrap_or(usize::MAX);
@@ -627,6 +671,11 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
             params: node.params().clone(),
             source: usize::MAX,
             distances: false,
+        }))),
+        Plan::Umap(node) => Ok(Some(Stage::Umap(UmapStage {
+            node: index,
+            params: node.params().clone(),
+            source: usize::MAX,
         }))),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
             Predicate::Cells(predicate) => Stage::Cells(CellStage::Filter(cell_expression(
@@ -909,10 +958,12 @@ fn layer_names(members: &Members) -> impl Iterator<Item = String> + '_ {
 
 /// Point every `neighbors` stage at the `pca` stage below it that writes its embedding
 /// (the nearest one: a later `pca` into the same name replaces it), and every
-/// clustering at the `neighbors` stage below it that writes its graph, the same way.
-/// `KY-E601` (5.11) for an embedding or graph no stage writes (one read from the
-/// store), or a cell filter or `take_cells` between the two (the graph would need the
-/// embedding's rows, the clustering the graph's, of the kept cells).
+/// clustering and `umap` at the `neighbors` stage below it that writes its graph, the
+/// same way. `KY-E601` (5.11) for an embedding or graph no stage writes (one read from
+/// the store), or a cell filter or `take_cells` between the two (the graph would need
+/// the embedding's rows, the clustering or layout the graph's, of the kept cells).
+/// `KY-E215` for a `umap` of a `distances` graph (umap lays out connectivities, as
+/// scanpy's `tl.umap`).
 fn resolve_embeddings(
     stages: &mut [Stage],
     nodes: &[kyto_plan::OptimizedNode],
@@ -939,6 +990,35 @@ fn resolve_embeddings(
                 for entry in &mut graphs {
                     entry.3 = true;
                 }
+            }
+            Stage::Umap(umap) => {
+                let graph = &umap.params.graph;
+                match graphs.iter().find(|(name, ..)| name == graph) {
+                    Some((_, source, false, false)) => umap.source = *source,
+                    Some((_, _, true, _)) => {
+                        return Err(KytoError::InvalidArgument {
+                            function: "umap".to_owned(),
+                            parameter: "graph".to_owned(),
+                            value: format!("'{graph}'"),
+                            problem: "it is the distances graph of a neighbors step".to_owned(),
+                            accepted: "the connectivities graph of a neighbors step".to_owned(),
+                        });
+                    }
+                    Some((_, _, false, true)) => {
+                        return Err(not_yet(
+                            "umap after a cell filter or take_cells above its neighbors",
+                            "5.11",
+                        ));
+                    }
+                    None => {
+                        return Err(not_yet(
+                            &format!("umap on graph '{graph}' read from the store"),
+                            "5.11",
+                        ));
+                    }
+                }
+                // Its embedding replaces any of that name a pca wrote.
+                written.retain(|(name, _, _)| *name != umap.params.into);
             }
             Stage::Neighbors(neighbors) => {
                 let embedding = &neighbors.params.embedding;
@@ -992,6 +1072,38 @@ fn resolve_embeddings(
         }
     }
     Ok(())
+}
+
+/// The embedding the `neighbors` node `node` searched (the leading columns of its
+/// `pca`'s embedding it used) and its metric: umap places many graph components by
+/// their centroids in it.
+fn neighbor_data<'a>(
+    statistics: &'a Statistics,
+    stages: &[Stage],
+    node: usize,
+) -> Option<(Cow<'a, [f32]>, usize, Metric)> {
+    let stage = stages.iter().find_map(|stage| match stage {
+        Stage::Neighbors(neighbors) if neighbors.node == node => Some(neighbors),
+        _ => None,
+    })?;
+    let Some(NodeStatistics::Pca(pca)) = statistics.nodes.get(&stage.source) else {
+        return None;
+    };
+    let width = pca.n_components();
+    let used = stage.params.n_components.map_or(width, |used| {
+        usize::try_from(used).unwrap_or(width).min(width)
+    });
+    let values = if used == width {
+        Cow::Borrowed(pca.embedding())
+    } else {
+        Cow::Owned(
+            pca.embedding()
+                .chunks(width)
+                .flat_map(|row| row[..used].iter().copied())
+                .collect(),
+        )
+    };
+    Some((values, used, stage.params.metric))
 }
 
 fn not_yet(method: &str, task: &str) -> KytoError {

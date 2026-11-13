@@ -269,7 +269,7 @@ fn execution(node: &OptimizedNode, device: Device, cells: u64) -> Execution {
                     (false, Columns::Genes(_)) => streamed(1, false),
                 }
             }
-            Plan::Neighbors(_) | Plan::Cluster(_) => held(Blocks::InMemory),
+            Plan::Neighbors(_) | Plan::Cluster(_) | Plan::Umap(_) => held(Blocks::InMemory),
         },
     }
 }
