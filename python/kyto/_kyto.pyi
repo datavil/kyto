@@ -2001,6 +2001,20 @@ def convert(
 ) -> None:
     """Import `source` into a new store at `target` (see `kyto.convert`)."""
 
+def concat(
+    sources: list[str],
+    target: str,
+    /,
+    *,
+    label: str,
+    keys: list[str] | None,
+    join: str,
+    layer: str,
+    on_duplicate_ids: str,
+    overwrite: bool,
+) -> None:
+    """Combine `sources` into a new store at `target` (see `kyto.concat`)."""
+
 def sink_h5ad(
     store: str,
     target: str,

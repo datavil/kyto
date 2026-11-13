@@ -7,6 +7,7 @@
 use pyo3::prelude::*;
 
 pub mod atlas;
+pub mod concat;
 pub mod convert;
 pub mod errors;
 pub mod expr;
@@ -49,6 +50,7 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(qc::total_counts_in, module)?)?;
     module.add_function(wrap_pyfunction!(qc::percent_counts_in, module)?)?;
     module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
+    module.add_function(wrap_pyfunction!(concat::concat, module)?)?;
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;
     module.add_function(wrap_pyfunction!(errors::raise_error_example, module)?)?;
     module.add_function(wrap_pyfunction!(errors::error_example_text, module)?)?;

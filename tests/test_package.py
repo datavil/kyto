@@ -32,8 +32,8 @@ def test_extension_is_compiled() -> None:
     assert Path(_kyto.__file__).suffix in {".so", ".pyd"}
 
 
-# Task 7.1: the top-level surface, checked in. `scan`, `convert`, `from_json`, the
-# expression constructors (3.4, with the embedding constructors 3.4 added), the plan
+# Task 7.1: the top-level surface, checked in. `scan`, `convert`, `concat` (2.9),
+# `from_json`, the expression constructors (3.4, with the embedding constructors 3.4 added), the plan
 # JSON checks of 8.4 (`ky.validate_plan`, as that task names it, and its schema) and
 # the exception classes (8.1). Change it only on purpose, with the plan entry.
 EXPECTED_ALL = [
@@ -60,6 +60,7 @@ EXPECTED_ALL = [
     "cell_column",
     "cell_embedding",
     "cell_profile",
+    "concat",
     "convert",
     "feature",
     "from_json",

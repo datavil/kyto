@@ -31,5 +31,7 @@ futures = "0.3.34"
 url = "2.5.8"
 
 [dev-dependencies]
+# Peak heap of a concat, in its own test binary (tests/concat_memory.rs, task 2.9).
+peak_alloc = "0.3.0"
 proptest = "1.11.0"
 tempfile = "3.27.0"

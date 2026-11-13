@@ -5,6 +5,7 @@
 mod backends;
 
 mod atlas_schema;
+mod concat;
 mod export_h5ad;
 mod gene_symbols;
 mod import_parity;

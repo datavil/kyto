@@ -2138,6 +2138,7 @@ dependencies = [
  "kyto-core",
  "kyto-error",
  "object_store",
+ "peak_alloc",
  "polars",
  "proptest",
  "rayon",

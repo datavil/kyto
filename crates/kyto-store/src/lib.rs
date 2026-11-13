@@ -1,7 +1,8 @@
 //! kyto-store: the on-disk format of a kyto atlas.
 //!
 //! Does: the Zarr v3 layout, tiled sparse matrix I/O, metadata tables and
-//! importers (`.h5ad`, 10x `.h5`, `.mtx`), the `.h5ad` export, remote (object store) reads.
+//! importers (`.h5ad`, 10x `.h5`, `.mtx`), combining samples, the `.h5ad` export, remote
+//! (object store) reads.
 //! Does not: plan, optimize or compute anything; it only reads and writes tiles.
 //!
 //! So far: one whole tiled sparse layer, written by [`write_layer`] and read by
@@ -14,7 +15,8 @@
 //! [`CommitCheck`] before their target appears), and stores on S3, GCS
 //! or HTTP read through [`RemoteStorage`] by the same [`LayerReader`] (task 2.8), and `schema.json` read as a
 //! [`kyto_core::AtlasSchema`] by [`read_atlas_schema`] (task 3.1), the one typed model the
-//! writer also writes it from.
+//! writer also writes it from, and several stores or inputs combined into one by [`concat`]
+//! (task 2.9).
 #![forbid(unsafe_code)]
 
 mod aligned_buffer;
@@ -22,6 +24,8 @@ mod atomic_dir;
 mod atomic_file;
 mod cell_block;
 mod commit_check;
+mod concat;
+mod concat_tables;
 mod csr;
 mod export_h5;
 mod export_h5ad;
@@ -60,6 +64,8 @@ mod zarr_arrays;
 pub use aligned_buffer::{AlignedBuffer, BUFFER_ALIGNMENT};
 pub use cell_block::{CellBlock, CellBlockParts, CellData, CellValues, DenseValues};
 pub use commit_check::CommitCheck;
+pub use concat::{ConcatOptions, concat};
+pub use concat_tables::Join;
 pub use csr::CsrMatrix;
 pub use export_h5ad::{
     DEFAULT_EXPORT_BLOCKS_IN_FLIGHT, SinkH5adOptions, sink_h5ad, sink_h5ad_checked,

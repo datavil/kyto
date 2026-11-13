@@ -84,13 +84,13 @@ pub(crate) struct Import<'a> {
 
 /// The input kinds [`convert`] reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InputKind {
+pub(crate) enum InputKind {
     H5ad,
     TenxH5,
     Mtx,
 }
 
-fn input_kind(source: &Path) -> Result<InputKind, KytoError> {
+pub(crate) fn input_kind(source: &Path) -> Result<InputKind, KytoError> {
     let text = source.display().to_string();
     if let Err(error) = std::fs::metadata(source) {
         return Err(KytoError::StoreIo {
