@@ -9,13 +9,26 @@ import shutil
 import sys
 import time
 from pathlib import Path
+from typing import Literal
 
 import kyto as ky
 from kyto import cell_column, gene_column, qc
 
 
+def _search(value: str) -> Literal["exact", "approximate"]:
+    """The neighbour search named on the command line."""
+    if value == "exact":
+        return "exact"
+    if value == "approximate":
+        return "approximate"
+    raise SystemExit(f"search must be 'exact' or 'approximate', not {value!r}")
+
+
 def run(
-    input_path: str, store_path: str, output_path: str, search: str
+    input_path: str,
+    store_path: str,
+    output_path: str,
+    search: Literal["exact", "approximate"],
 ) -> dict[str, float]:
     """Convert, then run QC → normalize → HVG → PCA → neighbours → Leiden → UMAP.
 
@@ -27,7 +40,7 @@ def run(
         Where the converted kyto store goes.
     output_path : str
         Where the processed kyto store goes.
-    search : str
+    search : {"exact", "approximate"}
         Neighbour search, ``"exact"`` or ``"approximate"``.
 
     Returns
@@ -75,4 +88,5 @@ def run(
 
 
 if __name__ == "__main__":
-    print(json.dumps(run(*sys.argv[1:5])))
+    input_path, store_path, output_path, search = sys.argv[1:5]
+    print(json.dumps(run(input_path, store_path, output_path, _search(search))))

@@ -1,8 +1,13 @@
 """Run the basic clustering workflow with scanpy and print per-step timings."""
 
+# scanpy, anndata and pandas ship without complete type information (as in tests/).
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 import json
 import sys
 import time
+from typing import Any
 
 import scanpy as sc
 
@@ -62,7 +67,8 @@ def run(input_path: str, output_path: str) -> dict[str, float]:
     annotated.write_h5ad(output_path)
     lap("write")
     timings["n_cells_kept"] = annotated.n_obs
-    timings["n_clusters"] = annotated.obs["leiden"].nunique()
+    clusters: Any = annotated.obs["leiden"]
+    timings["n_clusters"] = clusters.nunique()
     return timings
 
 

@@ -9,9 +9,10 @@ import time
 
 import kyto as ky
 from kyto import cell_column, gene_column, qc
+from kyto._kyto import Atlas
 
 
-def build_prefixes(store_path: str) -> dict[str, ky.Atlas]:
+def build_prefixes(store_path: str) -> dict[str, Atlas]:
     """Return the workflow's plan cut after each step, in order.
 
     Parameters
@@ -25,7 +26,7 @@ def build_prefixes(store_path: str) -> dict[str, ky.Atlas]:
         Step name to the plan ending at that step.
     """
     mito = gene_column("symbol").str.starts_with("MT-")
-    prefixes: dict[str, ky.Atlas] = {}
+    prefixes: dict[str, Atlas] = {}
     plan = (
         ky.scan(store_path)
         .with_default_layer("counts")

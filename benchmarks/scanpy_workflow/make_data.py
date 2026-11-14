@@ -1,6 +1,11 @@
 """Write a seeded synthetic count matrix with cluster structure as an .h5ad file."""
 
+# anndata, pandas and scipy ship without complete type information (as in tests/).
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
+
 import sys
+from typing import Any
 
 import anndata
 import numpy as np
@@ -64,4 +69,5 @@ if __name__ == "__main__":
     output_path = sys.argv[2]
     annotated = make_counts(n_cells=n_cells, n_genes=20000, n_clusters=8, seed=0)
     annotated.write_h5ad(output_path)
-    print(output_path, annotated.shape, annotated.X.nnz)
+    matrix: Any = annotated.X
+    print(output_path, annotated.shape, matrix.nnz)
