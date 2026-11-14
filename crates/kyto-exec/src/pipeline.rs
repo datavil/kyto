@@ -617,7 +617,22 @@ impl Pipeline {
                 Some(_) => Some(tables.cells()?),
                 None => None,
             };
-            let mut accumulator = cross_cell.accumulator(n_genes, cells, &self.store);
+            // The genes a `pca` over a gene set uses, among the genes present here (as
+            // a QC metric's gene set, task 6.14).
+            let gene_set = match cross_cell.gene_set() {
+                Some(genes) => Some(GeneSet::evaluate(
+                    tables.genes()?.table(),
+                    genes,
+                    &format!("{}/genes.parquet", self.store),
+                )?),
+                None => None,
+            };
+            let mut accumulator = cross_cell.accumulator(
+                n_genes,
+                cells,
+                &self.store,
+                gene_set.as_ref().map(GeneSet::mask),
+            );
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
             for pass in 0..cross_cell.passes {
                 if accumulator.skips(pass) {
@@ -740,12 +755,14 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
                 layer,
                 n_components,
                 seed,
+                genes,
                 ..
             } => {
                 let kind = CrossCellKind::Pca {
                     layer: layer.clone(),
                     n_components: *n_components,
                     seed: *seed,
+                    genes: genes.clone(),
                 };
                 Ok(Some(Stage::CrossCell(CrossCellStage::new(
                     index, passes, kind,

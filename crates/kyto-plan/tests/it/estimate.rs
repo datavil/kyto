@@ -165,7 +165,7 @@ fn statistics_passes_stream_again_and_a_final_pass_reads_the_layers() {
         .unwrap()
         .log1p(Some("normalized"), "log1p")
         .unwrap();
-    let pca = normalized.pca(Some("log1p"), "X_pca", 50, 0).unwrap();
+    let pca = normalized.pca(Some("log1p"), "X_pca", 50, 0, None).unwrap();
     let pca_passes = 2 + PCA_POWER_ITERATIONS;
     // Median: 1 statistics pass; PCA's; then one pass delivers the layers.
     let all = estimate_all(&pca);
@@ -193,7 +193,9 @@ fn a_shared_sub_plan_makes_its_passes_once() {
     let hvg = normalized
         .highly_variable_genes(Some("normalized"), HvgFlavor::SeuratV3, Some(100), None)
         .unwrap();
-    let pca = normalized.pca(Some("normalized"), "X_pca", 10, 0).unwrap();
+    let pca = normalized
+        .pca(Some("normalized"), "X_pca", 10, 0, None)
+        .unwrap();
     let outputs = [
         Output::members(&hvg, [Member::GeneColumn("highly_variable".into())]).unwrap(),
         Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap(),
@@ -265,7 +267,7 @@ fn nodes_writing_layers_hold_an_output_block() {
 
 #[test]
 fn in_memory_members_and_statistics_are_resident() {
-    let pca = scan().pca(Some("counts"), "X_pca", 50, 0).unwrap();
+    let pca = scan().pca(Some("counts"), "X_pca", 50, 0, None).unwrap();
     let pca_estimate =
         estimate(&[Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()]);
     let embeddings = N_CELLS * 50 * 4 + N_GENES * 50 * 4;

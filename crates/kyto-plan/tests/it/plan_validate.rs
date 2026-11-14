@@ -45,7 +45,7 @@ fn plan() -> Arc<Plan> {
         .unwrap()
         .log1p(None, "log1p")
         .unwrap()
-        .pca(Some("log1p"), "X_pca", 2, 0)
+        .pca(Some("log1p"), "X_pca", 2, 0, None)
         .unwrap()
         .neighbors(Neighbors {
             embedding: "X_pca".to_owned(),

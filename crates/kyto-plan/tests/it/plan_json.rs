@@ -393,8 +393,13 @@ fn corpus() -> Vec<Arc<Plan>> {
         base.highly_variable_genes(Some("counts"), HvgFlavor::SeuratV3, Some(2), Some("batch"))
             .unwrap(),
     );
-    plans.push(base.pca(None, "X_new", 2, u64::MAX).unwrap());
-    plans.push(base.pca(Some("counts"), "X_pca", 3, 0).unwrap());
+    plans.push(base.pca(None, "X_new", 2, u64::MAX, None).unwrap());
+    plans.push(base.pca(Some("counts"), "X_pca", 3, 0, None).unwrap());
+    for predicate in gene_predicates() {
+        if predicate.is_metadata_only() {
+            plans.push(base.pca(None, "X_new", 2, 1, Some(&predicate)).unwrap());
+        }
+    }
     // Columns.
     plans.push(
         base.with_cells([
@@ -430,7 +435,7 @@ fn corpus() -> Vec<Arc<Plan>> {
     );
     plans.push(base.with_cells(Vec::<(String, CellExpr)>::new()).unwrap());
     // Graphs and clusters.
-    let pca = base.pca(None, "X_new", 3, 0).unwrap();
+    let pca = base.pca(None, "X_new", 3, 0, None).unwrap();
     for metric in [Metric::Euclidean, Metric::Cosine] {
         for search in [NeighborSearch::Exact, NeighborSearch::Approximate] {
             plans.push(
@@ -536,7 +541,7 @@ fn corpus() -> Vec<Arc<Plan>> {
         .unwrap()
         .scale(None, "scaled", true, Some(10.0))
         .unwrap()
-        .pca(Some("scaled"), "X_pca", 2, 0)
+        .pca(Some("scaled"), "X_pca", 2, 0, None)
         .unwrap()
         .neighbors(neighbors(None))
         .unwrap()
@@ -942,7 +947,7 @@ fn text_edited_into_an_invalid_plan_is_refused_by_the_builders() {
     let plan = layered()
         .filter_cells(&bin(cell("score"), BinaryOp::Gt, Literal::Int(1)))
         .unwrap()
-        .pca(None, "X_new", 2, 0)
+        .pca(None, "X_new", 2, 0, None)
         .unwrap();
     let cases: Vec<(String, &str)> = vec![
         (
@@ -1144,7 +1149,7 @@ fn apply(plan: &Arc<Plan>, step: Step) -> Result<Arc<Plan>, KytoError> {
         Step::Hvg(flavor, n, batch) => {
             plan.highly_variable_genes(None, flavor, n, batch.then_some("batch"))
         }
-        Step::Pca(n, seed, into) => plan.pca(None, &into, n, seed),
+        Step::Pca(n, seed, into) => plan.pca(None, &into, n, seed, None),
         Step::WithCells(name, expr) => plan.with_cells([(name, expr)]),
         Step::Neighbors(n_components, n_neighbors, key) => plan.neighbors(Neighbors {
             n_components,

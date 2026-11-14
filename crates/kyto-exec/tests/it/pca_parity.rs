@@ -222,7 +222,7 @@ fn pca_matches_scanpy_on_fixtures() {
             .unwrap()
             .select_genes(read_lines(&reference.join("hvg")))
             .unwrap();
-        let plan = log1p.pca(Some("log1p"), "X_pca", n_comps, 0).unwrap();
+        let plan = log1p.pca(Some("log1p"), "X_pca", n_comps, 0, None).unwrap();
         let (pca, streamed) = run(&plan, 1, None);
         let k = n_comps as usize;
         let n_genes = read_lines(&reference.join("hvg")).len();
@@ -286,7 +286,7 @@ fn pca_matches_scanpy_on_fixtures() {
             );
         }
         let (other, _) = run(
-            &log1p.pca(Some("log1p"), "X_pca", n_comps, 1).unwrap(),
+            &log1p.pca(Some("log1p"), "X_pca", n_comps, 1, None).unwrap(),
             1,
             None,
         );

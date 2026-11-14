@@ -27,6 +27,7 @@
 
 use kyto_core::{ColumnDtype, ExprNode, Source, TableSchema};
 
+use crate::cross_cell::CrossCellOp;
 use crate::estimate::column_value_bytes;
 use crate::filter::Predicate;
 use crate::members::for_each_leaf;
@@ -114,10 +115,14 @@ fn node_tables(plan: &Plan) -> (bool, bool) {
         Plan::TakeCells(_) => (true, false),
         Plan::SelectGenes(_) => (false, true),
         Plan::Sink(_) => (true, true),
+        // A `pca` over a gene set evaluates its predicate on the gene table.
+        Plan::CrossCell(node) => (
+            false,
+            matches!(node.params().op(), CrossCellOp::Pca { genes: Some(_), .. }),
+        ),
         Plan::Scan(_)
         | Plan::WithDefaultLayer(_)
         | Plan::MapElementwise(_)
-        | Plan::CrossCell(_)
         | Plan::Neighbors(_)
         | Plan::Cluster(_)
         | Plan::Umap(_) => (false, false),

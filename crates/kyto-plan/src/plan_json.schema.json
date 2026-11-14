@@ -168,7 +168,8 @@
         "layer": {"type": "string"},
         "into": {"type": "string"},
         "n_components": {"$ref": "#/$defs/uint"},
-        "seed": {"$ref": "#/$defs/uint"}
+        "seed": {"$ref": "#/$defs/uint"},
+        "genes": {"type": ["array", "null"], "items": {"$ref": "#/$defs/expr_entry"}, "description": "A gene expression selecting the genes the components are computed over (scanpy's mask_var); null or absent: every gene."}
       }
     },
     "with_columns": {

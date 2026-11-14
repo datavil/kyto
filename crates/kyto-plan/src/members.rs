@@ -143,8 +143,14 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
             reads.insert(Member::Layer(node.params().layer().to_owned()));
         }
         Plan::CrossCell(node) => match node.params().op() {
-            CrossCellOp::Scale { layer, .. } | CrossCellOp::Pca { layer, .. } => {
+            CrossCellOp::Scale { layer, .. } => {
                 reads.insert(Member::Layer(layer.clone()));
+            }
+            CrossCellOp::Pca { layer, genes, .. } => {
+                reads.insert(Member::Layer(layer.clone()));
+                if let Some(genes) = genes {
+                    expr_reads(genes, input, &mut reads);
+                }
             }
             CrossCellOp::HighlyVariableGenes {
                 layer, batch_key, ..

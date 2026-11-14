@@ -300,7 +300,7 @@ fn every_node_runs_and_a_missing_output_is_refused() {
     // clustering past a `take_cells` above its `neighbors` since 5.11 (the subgraph of
     // the kept cells, `embeddings_graphs.rs`).
     let leiden = base
-        .pca(Some("counts"), "X_pca", 2, 0)
+        .pca(Some("counts"), "X_pca", 2, 0, None)
         .unwrap()
         .neighbors(neighbors_params(2))
         .unwrap()
@@ -492,7 +492,7 @@ fn umap_lays_out_the_connectivities_of_the_neighbors_below() {
         key: None,
     };
     let pca = preprocess(&store)
-        .pca(Some("log1p"), "X_pca", 3, 0)
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
         .unwrap();
     let graphs = pca.neighbors(neighbors.clone()).unwrap();
     let params = Umap {
@@ -601,7 +601,7 @@ fn neighbors_search_the_embedding_of_the_pca_below() {
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let pca = preprocess(&store)
-        .pca(Some("log1p"), "X_pca", 3, 0)
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
         .unwrap();
     let params = Neighbors {
         embedding: "X_pca".to_owned(),
@@ -670,7 +670,7 @@ fn clusterings_label_the_cells_of_the_graph_below() {
     let store = work.path().join("atlas.kyto");
     write_store(&store);
     let neighbors = preprocess(&store)
-        .pca(Some("log1p"), "X_pca", 3, 0)
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
         .unwrap()
         .neighbors(neighbors_params(8))
         .unwrap();

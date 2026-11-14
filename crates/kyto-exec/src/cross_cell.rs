@@ -26,6 +26,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use kyto_core::GeneExpr;
 use kyto_error::KytoError;
 use kyto_plan::{ElementwiseOp, HvgFlavor, MapElementwise, Scrublet};
 use kyto_store::{CellBlock, CellValues};
@@ -80,6 +81,8 @@ pub(crate) enum CrossCellKind {
         layer: String,
         n_components: u64,
         seed: u64,
+        /// The genes the components are computed over (task 6.14), if not all.
+        genes: Option<GeneExpr>,
     },
     /// `scrublet` of `layer`.
     Scrublet { layer: String, params: Scrublet },
@@ -133,13 +136,23 @@ impl CrossCellStage {
         }
     }
 
+    /// The gene set of a `pca` over some of the genes (task 6.14).
+    pub(crate) fn gene_set(&self) -> Option<&GeneExpr> {
+        match &self.kind {
+            CrossCellKind::Pca { genes, .. } => genes.as_ref(),
+            _ => None,
+        }
+    }
+
     /// An empty accumulator for a stream of `n_genes` genes; `cells` is the store's
-    /// cell table (`store` its path), which a `batch_key` is read from.
+    /// cell table (`store` its path), which a `batch_key` is read from; `gene_set`
+    /// flags the genes of [`CrossCellStage::gene_set`] among the stream's.
     pub(crate) fn accumulator(
         &self,
         n_genes: usize,
         cells: Option<Arc<DataFrame>>,
         store: &str,
+        gene_set: Option<&[bool]>,
     ) -> Accumulator {
         match &self.kind {
             CrossCellKind::MedianNormalize { .. } => Accumulator::Totals(Vec::new()),
@@ -150,11 +163,13 @@ impl CrossCellStage {
                 layer,
                 n_components,
                 seed,
+                ..
             } => Accumulator::Pca(Box::new(PcaAccumulator::new(
                 layer,
                 *n_components,
                 *seed,
                 n_genes,
+                gene_set,
             ))),
             CrossCellKind::HighlyVariableGenes {
                 layer,
@@ -435,7 +450,7 @@ mod tests {
 
     /// Run every pass of `stage` over `block`, one leaf a pass.
     fn run_passes(stage: &CrossCellStage, n_genes: usize, block: &CellBlock) -> Accumulator {
-        let mut accumulator = stage.accumulator(n_genes, None, "store");
+        let mut accumulator = stage.accumulator(n_genes, None, "store", None);
         let rows = pipeline_block(block);
         for pass in 0..stage.passes {
             let mut leaf = accumulator.leaf(0);
@@ -532,7 +547,7 @@ mod tests {
     fn seurat_v3_refuses_values_that_are_not_counts() {
         let block = CellBlock::from_f32(vec![0, 1], vec![0], vec![1.5], 1).unwrap();
         let stage = CrossCellStage::new(0, 2, hvg(HvgFlavor::SeuratV3));
-        let mut accumulator = stage.accumulator(1, None, "store");
+        let mut accumulator = stage.accumulator(1, None, "store", None);
         let mut leaf = accumulator.leaf(0);
         accumulator
             .fold(0, &mut leaf, &block, &pipeline_block(&block))

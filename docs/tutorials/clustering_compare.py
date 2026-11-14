@@ -61,7 +61,8 @@ class Comparison(NamedTuple):
         Per percentage column: the largest difference relative to scanpy's value
         (kyto computes in ``float64``, scanpy in ``float32``).
     same_genes : bool
-        Both kept the same genes after the filters (by gene ID).
+        Both kept the same genes after the filters (by gene ID), and kyto's clustered
+        data and its Wilcoxon ranking hold every one of them (task 6.14).
     hvg_kyto, hvg_scanpy, hvg_common : int
         Highly variable genes of each, and of both.
     pca_variance_error : float
@@ -78,7 +79,7 @@ class Comparison(NamedTuple):
     marker_overlap : dict of str to int
         Per kyto ``leiden_res_0.50`` cluster: how many of its first 10 Wilcoxon genes
         are among the first 10 of the scanpy cluster sharing most cells with it
-        (Jaccard), scanpy's ranking restricted to kyto's highly variable genes.
+        (Jaccard); both rank every kept gene.
     """
 
     same_cells: bool
@@ -111,7 +112,7 @@ def compare(
     Parameters
     ----------
     kyto : anndata.AnnData
-        ``kyto.h5ad`` from ``clustering.py`` (highly variable genes, ``var["gene_id"]``).
+        ``kyto.h5ad`` from ``clustering.py`` (every kept gene, ``var["gene_id"]``).
     scanpy : anndata.AnnData
         scanpy's processed data from ``clustering_scanpy.py`` (every kept gene).
     gene_ids : dict of str to str
@@ -143,7 +144,6 @@ def compare(
         )
 
     scanpy_genes = {gene_ids[name] for name in scanpy.var_names}
-    kyto_ids = set(np.asarray(kyto.var["gene_id"], dtype=str).tolist())
     kyto_flags = np.asarray(kyto.var["highly_variable"], dtype=bool)
     hvg_kyto = set(np.asarray(kyto.var["gene_id"], dtype=str)[kyto_flags].tolist())
     scanpy_flags = np.asarray(scanpy.var["highly_variable"], dtype=bool)
@@ -151,8 +151,12 @@ def compare(
         gene_ids[name]
         for name in np.asarray(scanpy.var_names, dtype=str)[scanpy_flags].tolist()
     }
-    same_genes = set(kept_genes) == scanpy_genes and len(kept_genes) == len(
-        scanpy_genes
+    kyto_genes = np.asarray(kyto.var["gene_id"], dtype=str).tolist()
+    same_genes = (
+        set(kept_genes) == scanpy_genes
+        and len(kept_genes) == len(scanpy_genes)
+        and sorted(kyto_genes) == sorted(kept_genes)
+        and set(ranked["gene_id"].unique().to_list()) == scanpy_genes
     )
 
     kyto_variance = np.var(np.asarray(kyto.obsm["X_pca"], np.float64), axis=0, ddof=1)
@@ -212,9 +216,7 @@ def compare(
         }
         match = max(jaccard, key=lambda label: jaccard[label])
         scanpy_names = sc.get.rank_genes_groups_df(scanpy, group=match)["names"]
-        scanpy_top = [
-            gene_ids[name] for name in scanpy_names if gene_ids[name] in kyto_ids
-        ][:MARKER_TOP]
+        scanpy_top = [gene_ids[name] for name in scanpy_names[:MARKER_TOP]]
         kyto_top = ranked.filter(pl.col("group") == group)["gene_id"].head(MARKER_TOP)
         marker_overlap[group] = len(set(scanpy_top) & set(kyto_top.to_list()))
     return Comparison(

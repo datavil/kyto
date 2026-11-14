@@ -505,7 +505,7 @@ fn highly_variable_genes_adds_the_flavours_columns() {
 
 #[test]
 fn pca_adds_a_cell_embedding_and_gene_loadings() {
-    let plan = layered().pca(None, "X_pca", 2, 0).unwrap();
+    let plan = layered().pca(None, "X_pca", 2, 0, None).unwrap();
     let schema = plan.output_schema();
     let cells = schema.embedding("X_pca").unwrap();
     assert_eq!(
@@ -528,12 +528,14 @@ fn pca_adds_a_cell_embedding_and_gene_loadings() {
     );
 
     for n_components in [0, 4] {
-        let error = layered().pca(None, "X_pca", n_components, 0).unwrap_err();
+        let error = layered()
+            .pca(None, "X_pca", n_components, 0, None)
+            .unwrap_err();
         assert_eq!(error.code(), "KY-E215");
     }
     assert!(
         layered()
-            .pca(None, "X_pca", 4, 0)
+            .pca(None, "X_pca", 4, 0, None)
             .unwrap_err()
             .to_string()
             .contains("the plan has at most 3 cells or genes")
@@ -541,6 +543,58 @@ fn pca_adds_a_cell_embedding_and_gene_loadings() {
     // The PCA's embedding is readable downstream (R6 against the new schema).
     let component = plan.resolve(&CellExpr::embedding("X_pca", 1)).unwrap();
     assert_eq!(component.to_string(), "cell_embedding('X_pca', 1)");
+}
+
+#[test]
+fn pca_over_a_gene_set_keeps_every_gene() {
+    // Task 6.14 (scanpy's `mask_var`): the set is a resolved boolean predicate on gene
+    // columns; the node changes no axis and reads the columns of the predicate.
+    let plan = layered().pca(None, "X_new", 2, 0, Some(&hvg())).unwrap();
+    assert_eq!(plan.changes_axis(), None);
+    assert_eq!(
+        plan.output_schema().axis_len_bound(Axis::Genes),
+        layered().output_schema().axis_len_bound(Axis::Genes)
+    );
+    assert_eq!(
+        first_line(&plan),
+        "PCA \"log1p\" -> \"X_new\" n_components=2 seed=0 genes=gene_column('highly_variable')"
+    );
+    assert_ne!(*plan, *layered().pca(None, "X_new", 2, 0, None).unwrap());
+    let Plan::CrossCell(node) = plan.as_ref() else {
+        panic!("a cross-cell node");
+    };
+    assert!(matches!(
+        node.params().op(),
+        CrossCellOp::Pca { genes: Some(_), .. }
+    ));
+
+    // Not boolean, or reading more than the gene table: KY-E205, naming the argument.
+    let numeric = layered()
+        .pca(None, "X_new", 2, 0, Some(&GeneExpr::column("symbol")))
+        .unwrap_err();
+    assert_eq!(numeric.code(), "KY-E205");
+    assert!(numeric.to_string().contains("pca(genes=...)"), "{numeric}");
+    let profile = GeneExpr::binary(
+        GeneExpr::profile(Some("counts".to_owned()), "AAAC-1"),
+        BinaryOp::Gt,
+        Literal::Int(0),
+    )
+    .unwrap();
+    let matrix = layered()
+        .pca(None, "X_new", 2, 0, Some(&profile))
+        .unwrap_err();
+    assert_eq!(matrix.code(), "KY-E205");
+    assert!(
+        matrix
+            .to_string()
+            .contains("reads matrix or embedding values"),
+        "{matrix}"
+    );
+    // An unknown column is the resolver's error (R6: when the plan is built).
+    let unknown = layered()
+        .pca(None, "X_new", 2, 0, Some(&GeneExpr::column("hvg")))
+        .unwrap_err();
+    assert_eq!(unknown.code(), "KY-E210");
 }
 
 // --- WithColumns ----------------------------------------------------------------
@@ -819,7 +873,7 @@ fn neighbors_checks_the_embedding_and_its_parameters() {
     }
     // An embedding made by the plan is found.
     let after_pca = layered()
-        .pca(None, "X_new", 2, 1)
+        .pca(None, "X_new", 2, 1, None)
         .unwrap()
         .neighbors(Neighbors {
             embedding: "X_new".to_owned(),
@@ -1116,7 +1170,7 @@ fn a_symbol_shared_with_a_removed_gene_names_the_kept_one() {
 fn node_ids_count_from_the_scan_and_ignore_what_is_built_on_top() {
     let base = layered().filter_genes(&hvg()).unwrap();
     let left = base.log1p(None, "a").unwrap();
-    let right = base.pca(None, "X", 1, 0).unwrap();
+    let right = base.pca(None, "X", 1, 0, None).unwrap();
     let ids: Vec<u64> = left.nodes().map(|node| node.id().0).collect();
     assert_eq!(ids, [3, 2, 1, 0]);
     assert_eq!(right.id(), NodeId(3));
@@ -1125,9 +1179,9 @@ fn node_ids_count_from_the_scan_and_ignore_what_is_built_on_top() {
 
 #[test]
 fn every_node_kind_compares_by_its_parameters() {
-    let a = layered().pca(None, "X", 2, 0).unwrap();
-    assert_eq!(*a, *layered().pca(None, "X", 2, 0).unwrap());
-    assert_ne!(*a, *layered().pca(None, "X", 2, 1).unwrap());
+    let a = layered().pca(None, "X", 2, 0, None).unwrap();
+    assert_eq!(*a, *layered().pca(None, "X", 2, 0, None).unwrap());
+    assert_ne!(*a, *layered().pca(None, "X", 2, 1, None).unwrap());
     assert_ne!(*a, *layered().scale(None, "X", true, None).unwrap());
     let b = scan().neighbors(neighbors()).unwrap();
     assert_eq!(*b, *scan().neighbors(neighbors()).unwrap());
@@ -1149,6 +1203,7 @@ fn parameters_round_trip_through_serde() {
         into: "X_pca".to_owned(),
         n_components: 50,
         seed: 0,
+        genes: None,
     };
     let json = serde_json::to_string(&op).unwrap();
     assert_eq!(
@@ -1156,6 +1211,19 @@ fn parameters_round_trip_through_serde() {
         r#"{"op":"pca","layer":"log1p","into":"X_pca","n_components":50,"seed":0}"#
     );
     assert_eq!(serde_json::from_str::<CrossCellOp>(&json).unwrap(), op);
+    let masked = CrossCellOp::Pca {
+        layer: "log1p".to_owned(),
+        into: "X_pca".to_owned(),
+        n_components: 50,
+        seed: 0,
+        genes: Some(hvg()),
+    };
+    let json = serde_json::to_string(&masked).unwrap();
+    assert!(
+        json.ends_with(r#""genes":[{"op":"column","name":"highly_variable"}]}"#),
+        "{json}"
+    );
+    assert_eq!(serde_json::from_str::<CrossCellOp>(&json).unwrap(), masked);
     let elementwise = ElementwiseOp::NormalizeTotal {
         target_sum: Some(1e4),
     };

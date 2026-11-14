@@ -130,6 +130,8 @@ enum Step {
         into: String,
         n_components: u64,
         seed: u64,
+        /// The gene set, a gene expression (`null` or absent for every gene).
+        genes: Option<ExprJson>,
     },
     Scrublet {
         layer: String,
@@ -277,11 +279,13 @@ impl Step {
                     into,
                     n_components,
                     seed,
+                    genes,
                 } => Self::Pca {
                     layer,
                     into,
                     n_components,
                     seed,
+                    genes: genes.as_ref().map(ExprJson::from_expr),
                 },
                 CrossCellOp::Scrublet { layer, params } => {
                     let Scrublet {
@@ -464,7 +468,20 @@ impl Step {
                 into,
                 n_components,
                 seed,
-            } => input.pca(Some(&layer), &into, n_components, seed),
+                genes,
+            } => {
+                let genes =
+                    match genes {
+                        Some(genes) => {
+                            let context = format!("{node}, genes");
+                            Some(genes.to_expr(&context).map_err(|error| {
+                                Located::in_expression("/genes", &context, error)
+                            })?)
+                        }
+                        None => None,
+                    };
+                input.pca(Some(&layer), &into, n_components, seed, genes.as_ref())
+            }
             Self::Scrublet {
                 layer,
                 batch_key,

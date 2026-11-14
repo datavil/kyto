@@ -131,7 +131,7 @@ fn analysis(store: &Path) -> Arc<Plan> {
         .unwrap()
         .log1p(Some("norm"), "log1p")
         .unwrap()
-        .pca(Some("log1p"), "X_pca", 4, 0)
+        .pca(Some("log1p"), "X_pca", 4, 0, None)
         .unwrap()
         .neighbors(neighbors_params("X_pca"))
         .unwrap()
@@ -347,7 +347,7 @@ fn a_cell_filter_before_the_sink_keeps_the_rows_and_edges_of_the_kept_cells() {
         .unwrap()
         .log1p(Some("norm"), "log1p")
         .unwrap()
-        .pca(Some("log1p"), "X_pca", 3, 0)
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
         .unwrap()
         .neighbors(neighbors_params("X_pca"))
         .unwrap();
@@ -525,7 +525,7 @@ fn embedding_components_are_cell_and_gene_leaves() {
         .unwrap()
         .log1p(Some("norm"), "log1p")
         .unwrap()
-        .pca(Some("log1p"), "X_pca", 3, 0)
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
         .unwrap();
     let found = statistics(&pca);
     let pca_found = found

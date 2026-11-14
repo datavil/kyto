@@ -71,7 +71,7 @@ TRUSTWORTHINESS_MARGIN = 0.01
 DOUBLET_CALLS = (400, 480)
 DOUBLET_SHARED_FLOOR = 0.9
 DOUBLET_SCORE_CORRELATION_FLOOR = 0.95
-# Measured mean 6.8 of 10 (the 11 large clusters 7 to 10).
+# Measured mean 6.6 of 10 over every kept gene (the 11 large clusters 7 to 10).
 MARKER_OVERLAP_FLOOR = 5.5
 
 
@@ -134,8 +134,13 @@ def test_notebook_runs_and_draws_every_plot(kyto_run: Path) -> None:
     run = json.loads((kyto_run / "run.json").read_text())
     assert run["total"] > 0
     result = anndata.read_h5ad(kyto_run / "kyto.h5ad")
-    assert result.n_vars == 2000
+    # One plan over every kept gene (task 6.14): PCA on the highly variable genes
+    # (`genes=`), the ranking and the plots on all of them.
+    assert result.n_vars == len(run["kept_genes"]) > 2000
+    assert int(result.var["highly_variable"].sum()) == 2000
     assert {"X_pca", "X_umap"} <= set(result.obsm)
+    ranked = pl.read_parquet(kyto_run / "ranked.parquet")
+    assert ranked["gene_id"].n_unique() == result.n_vars
 
 
 def test_matches_scanpys_run(

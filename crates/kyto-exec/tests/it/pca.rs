@@ -7,7 +7,9 @@
 //! counts are read as numbers; cell filters before the node select the embedding's rows;
 //! components beyond the data's rank have zero variance and orthonormal loadings; too
 //! few cells, too many components for the cells reaching the node, and a value that is
-//! not finite are `KY-E215` (nothing panics).
+//! not finite are `KY-E215` (nothing panics). Task 6.14: `pca` over a gene set gives the
+//! bits of a gene filter before it, with every gene kept and zero loadings outside the
+//! set; an empty set, or one with fewer genes than components, is `KY-E215`.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -17,7 +19,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use faer::Mat;
-use kyto_core::{BinaryOp, CellExpr, Expr, GeneIds, Literal, Tiling};
+use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, Tiling};
 use kyto_error::KytoError;
 use kyto_exec::{ExecuteOptions, NodeStatistics, PcaStatistics, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
@@ -75,15 +77,22 @@ fn data(n_cells: usize, n_genes: usize, rank: usize, noise: f64, seed: u64) -> V
 }
 
 /// Write `rows` as layer `values` (`float32`, or `uint32` rounded when `counts`) of a
-/// store with cell column `score` = the cell's position.
+/// store with cell column `score` = the cell's position and the boolean gene column
+/// `selected` (false for every third gene, null for gene 1).
 fn write_store(target: &Path, rows: &[Vec<f32>], counts: bool) {
     let n_genes = rows[0].len();
     let gene_ids: Vec<String> = (0..n_genes).map(|gene| format!("G{gene}")).collect();
     let cell_ids: Vec<String> = (0..rows.len()).map(|cell| format!("c{cell}")).collect();
     let scores: Vec<f64> = (0..rows.len()).map(|cell| cell as f64).collect();
+    let selected: Vec<Option<bool>> = (0..n_genes)
+        .map(|gene| (gene != 1).then_some(gene % 3 != 0))
+        .collect();
     let genes = DataFrame::new(
         n_genes,
-        vec![Series::new("gene_id".into(), gene_ids).into_column()],
+        vec![
+            Series::new("gene_id".into(), gene_ids).into_column(),
+            Series::new("selected".into(), selected).into_column(),
+        ],
     )
     .unwrap();
     let cells = DataFrame::new(
@@ -271,7 +280,13 @@ fn a_basis_spanning_every_gene_gives_the_exact_pca() {
     let store = work.path().join("small.kyto");
     let rows = data(300, 40, 6, 0.5, 1);
     write_store(&store, &rows, false);
-    let pca = run(&scan(&store).pca(Some("values"), "X_pca", 5, 0).unwrap(), 4).unwrap();
+    let pca = run(
+        &scan(&store)
+            .pca(Some("values"), "X_pca", 5, 0, None)
+            .unwrap(),
+        4,
+    )
+    .unwrap();
     assert_eq!(pca.cells(), (0..300).collect::<Vec<u64>>());
     assert_exact(&pca, &rows, 5, 1e-10, "40 genes");
     // Every gene's mean.
@@ -286,7 +301,13 @@ fn a_sketched_basis_finds_the_leading_components() {
     // 600 genes: the basis holds at most 13 x 9 = 117 directions.
     let rows = data(400, 600, 4, 0.2, 2);
     write_store(&store, &rows, false);
-    let pca = run(&scan(&store).pca(Some("values"), "X_pca", 3, 0).unwrap(), 2).unwrap();
+    let pca = run(
+        &scan(&store)
+            .pca(Some("values"), "X_pca", 3, 0, None)
+            .unwrap(),
+        2,
+    )
+    .unwrap();
     assert_exact(&pca, &rows, 3, 1e-8, "600 genes");
 }
 
@@ -299,7 +320,13 @@ fn counts_are_read_as_numbers() {
         .map(|row| row.into_iter().map(|value| (value * 3.0).round()).collect())
         .collect();
     write_store(&store, &rows, true);
-    let pca = run(&scan(&store).pca(Some("values"), "X_pca", 4, 0).unwrap(), 1).unwrap();
+    let pca = run(
+        &scan(&store)
+            .pca(Some("values"), "X_pca", 4, 0, None)
+            .unwrap(),
+        1,
+    )
+    .unwrap();
     assert_exact(&pca, &rows, 4, 1e-10, "uint32 counts");
 }
 
@@ -315,7 +342,7 @@ fn a_cell_filter_before_pca_selects_the_rows() {
         .unwrap()
         .take_cells((0..150).step_by(2).map(|cell| format!("c{cell}")))
         .unwrap()
-        .pca(Some("values"), "X_pca", 3, 0)
+        .pca(Some("values"), "X_pca", 3, 0, None)
         .unwrap();
     let pca = run(&plan, 3).unwrap();
     let kept: Vec<u64> = (0..150).step_by(2).collect();
@@ -341,7 +368,13 @@ fn components_beyond_the_rank_have_zero_variance() {
         })
         .collect();
     write_store(&store, &rows, false);
-    let pca = run(&scan(&store).pca(Some("values"), "X_pca", 5, 0).unwrap(), 2).unwrap();
+    let pca = run(
+        &scan(&store)
+            .pca(Some("values"), "X_pca", 5, 0, None)
+            .unwrap(),
+        2,
+    )
+    .unwrap();
     let variance = pca.variance();
     assert!(variance[0] > 0.1 && variance[1] > 0.1, "{variance:?}");
     let total = variance[0] / pca.variance_ratio()[0];
@@ -372,7 +405,13 @@ fn components_beyond_the_rank_have_zero_variance() {
             .all(|value| value.abs() < 1e-3)
     );
     assert_eq!(
-        run(&scan(&store).pca(Some("values"), "X_pca", 5, 0).unwrap(), 1).unwrap(),
+        run(
+            &scan(&store)
+                .pca(Some("values"), "X_pca", 5, 0, None)
+                .unwrap(),
+            1
+        )
+        .unwrap(),
         pca
     );
 }
@@ -401,7 +440,7 @@ fn too_few_cells_too_many_components_and_non_finite_values_are_refused() {
         ),
     ] {
         let plan = below(cells)
-            .pca(Some("values"), "X_pca", components, 0)
+            .pca(Some("values"), "X_pca", components, 0, None)
             .unwrap();
         let error = run(&plan, 2).unwrap_err();
         assert_eq!(error.code(), "KY-E215", "{error}");
@@ -409,17 +448,26 @@ fn too_few_cells_too_many_components_and_non_finite_values_are_refused() {
     }
     // As many components as cells is fine.
     assert_eq!(
-        run(&below(3).pca(Some("values"), "X_pca", 3, 0).unwrap(), 1)
-            .unwrap()
-            .variance()
-            .len(),
+        run(
+            &below(3).pca(Some("values"), "X_pca", 3, 0, None).unwrap(),
+            1
+        )
+        .unwrap()
+        .variance()
+        .len(),
         3
     );
     // A NaN.
     rows[7][3] = f32::NAN;
     let store = work.path().join("nan.kyto");
     write_store(&store, &rows, false);
-    let error = run(&scan(&store).pca(Some("values"), "X_pca", 2, 0).unwrap(), 2).unwrap_err();
+    let error = run(
+        &scan(&store)
+            .pca(Some("values"), "X_pca", 2, 0, None)
+            .unwrap(),
+        2,
+    )
+    .unwrap_err();
     assert_eq!(error.code(), "KY-E215", "{error}");
     assert!(
         error
@@ -440,7 +488,13 @@ fn large_means_are_centred_row_by_row() {
             .map(|row| row.into_iter().map(|value| value * 8.0 + offset).collect())
             .collect();
         write_store(&store, &rows, false);
-        let pca = run(&scan(&store).pca(Some("values"), "X_pca", 3, 0).unwrap(), 2).unwrap();
+        let pca = run(
+            &scan(&store)
+                .pca(Some("values"), "X_pca", 3, 0, None)
+                .unwrap(),
+            2,
+        )
+        .unwrap();
         assert_exact(&pca, &rows, 3, 1e-6, &format!("offset {offset}"));
     }
 }
@@ -452,7 +506,13 @@ fn equal_cells_have_no_variance() {
     for row in [[0.1_f32, 0.7, 3.3, 0.1, 0.1, 5.5], [2.0; 6]] {
         let store = work.path().join(format!("constant{}.kyto", row[0]));
         write_store(&store, &vec![row.to_vec(); 7], false);
-        let pca = run(&scan(&store).pca(Some("values"), "X_pca", 3, 0).unwrap(), 1).unwrap();
+        let pca = run(
+            &scan(&store)
+                .pca(Some("values"), "X_pca", 3, 0, None)
+                .unwrap(),
+            1,
+        )
+        .unwrap();
         assert_eq!(pca.variance(), [0.0; 3], "{row:?}");
         assert!(
             pca.variance_ratio().iter().all(|ratio| ratio.is_nan()),
@@ -463,4 +523,175 @@ fn equal_cells_have_no_variance() {
             "{row:?}"
         );
     }
+}
+
+/// Whether gene `gene` of a `write_store` store is in its `selected` set.
+fn is_selected(gene: usize) -> bool {
+    gene != 1 && !gene.is_multiple_of(3)
+}
+
+#[test]
+fn a_gene_set_gives_the_bits_of_a_gene_filter_and_keeps_every_gene() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("gene_set.kyto");
+    // More genes in the set (199) than the Krylov basis holds (15 columns x 10), so the
+    // result is sketched: any difference in the order of the sums would show.
+    let rows = data(260, 300, 6, 0.5, 9);
+    write_store(&store, &rows, false);
+    let selected = GeneExpr::column("selected");
+    let keep = Expr::binary(CellExpr::column("score"), BinaryOp::Lt, Literal::Int(240)).unwrap();
+    let base = scan(&store).filter_cells(&keep).unwrap();
+    let masked = base
+        .pca(Some("values"), "X_pca", 5, 3, Some(&selected))
+        .unwrap();
+    let filtered = base
+        .filter_genes(&selected)
+        .unwrap()
+        .pca(Some("values"), "X_pca", 5, 3, None)
+        .unwrap();
+    let expected = run(&filtered, 2).unwrap();
+    let kept: Vec<u64> = (0..300)
+        .filter(|&gene| is_selected(gene))
+        .map(|gene| gene as u64)
+        .collect();
+    assert_eq!(expected.genes(), kept);
+    for threads in [1, 4] {
+        let pca = run(&masked, threads).unwrap();
+        assert_eq!(pca.cells(), expected.cells());
+        let bits = |values: &[f32]| {
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        let bits64 = |values: &[f64]| {
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(pca.embedding()), bits(expected.embedding()));
+        assert_eq!(bits64(pca.variance()), bits64(expected.variance()));
+        assert_eq!(
+            bits64(pca.variance_ratio()),
+            bits64(expected.variance_ratio())
+        );
+        assert_eq!(bits64(pca.means()), bits64(expected.means()));
+        // Every gene keeps a loadings row: the filter's rows in the set, zeros outside.
+        assert_eq!(pca.genes(), (0..300).collect::<Vec<u64>>());
+        assert_eq!(pca.loadings().len(), 300 * 5);
+        let mut next = expected.loadings().chunks(5);
+        for (gene, row) in pca.loadings().chunks(5).enumerate() {
+            if is_selected(gene) {
+                assert_eq!(bits(row), bits(next.next().unwrap()), "gene {gene}");
+            } else {
+                assert_eq!(row, [0.0; 5], "gene {gene}");
+            }
+        }
+        assert!(next.next().is_none());
+    }
+    // And against the exact PCA of the set's columns (a spectral gap: close, not exact).
+    let subset: Vec<Vec<f32>> = rows[..240]
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .filter(|(gene, _)| is_selected(*gene))
+                .map(|(_, &value)| value)
+                .collect()
+        })
+        .collect();
+    let exact = exact(&subset, 5);
+    assert!(relative(expected.variance(), &exact.variance) < 1e-6);
+}
+
+#[test]
+fn a_gene_set_is_taken_over_the_genes_present_at_the_node() {
+    // A selection before the node reorders and drops genes: the set follows the genes
+    // of the stream, and the loadings rows are theirs.
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("gene_set_order.kyto");
+    let rows = data(120, 24, 4, 0.5, 10);
+    write_store(&store, &rows, false);
+    let order: Vec<usize> = (2..24).rev().collect();
+    let selection = scan(&store)
+        .select_genes(order.iter().map(|gene| format!("G{gene}")))
+        .unwrap();
+    let selected = GeneExpr::column("selected");
+    let pca = run(
+        &selection
+            .pca(Some("values"), "X_pca", 3, 0, Some(&selected))
+            .unwrap(),
+        2,
+    )
+    .unwrap();
+    assert_eq!(
+        pca.genes(),
+        order.iter().map(|&gene| gene as u64).collect::<Vec<_>>()
+    );
+    let in_set: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&gene| is_selected(gene))
+        .collect();
+    let subset: Vec<Vec<f32>> = rows
+        .iter()
+        .map(|row| in_set.iter().map(|&gene| row[gene]).collect())
+        .collect();
+    // 14 genes: the basis spans them, so the result is exact.
+    let exact = exact(&subset, 3);
+    assert!(relative(pca.variance(), &exact.variance) < 1e-10);
+    let mut expected = exact.loadings.chunks(3);
+    for (&gene, row) in order.iter().zip(pca.loadings().chunks(3)) {
+        if is_selected(gene) {
+            let exact = expected.next().unwrap();
+            for (kyto, exact) in row.iter().zip(exact) {
+                assert!((f64::from(*kyto) - exact).abs() < 1e-6, "gene {gene}");
+            }
+        } else {
+            assert_eq!(row, [0.0; 3], "gene {gene}");
+        }
+    }
+}
+
+#[test]
+fn a_gene_set_with_too_few_genes_is_refused() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("gene_set_small.kyto");
+    write_store(&store, &data(40, 12, 3, 0.5, 11), false);
+    // 7 of the 12 genes are in the set: 8 components pass the plan's bound, not the run.
+    let few = scan(&store)
+        .pca(
+            Some("values"),
+            "X_pca",
+            8,
+            0,
+            Some(&GeneExpr::column("selected")),
+        )
+        .unwrap();
+    let error = run(&few, 2).unwrap_err();
+    assert_eq!(error.code(), "KY-E215");
+    let message = error.to_string();
+    assert!(
+        message.contains("40 cells and 7 genes (those of its gene set, `genes`) reach pca"),
+        "{message}"
+    );
+    // No gene in the set at all.
+    let none = Expr::binary(
+        GeneExpr::column("gene_id"),
+        BinaryOp::Eq,
+        Literal::String("none".to_owned()),
+    )
+    .unwrap();
+    let empty = scan(&store)
+        .pca(Some("values"), "X_pca", 1, 0, Some(&none))
+        .unwrap();
+    let error = run(&empty, 1).unwrap_err();
+    assert_eq!(error.code(), "KY-E215");
+    assert!(
+        error
+            .to_string()
+            .contains("the predicate is true for none of the genes reaching pca"),
+        "{error}"
+    );
 }

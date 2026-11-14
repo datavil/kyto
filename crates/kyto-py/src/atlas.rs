@@ -645,6 +645,11 @@ impl Atlas {
     /// Krylov method) and never densifies it. Adds the cell embedding ``into`` (one row
     /// per cell, ``n_components`` wide) and the gene embedding ``into + "_loadings"``.
     ///
+    /// With ``genes`` (scanpy's ``mask_var``) the components are computed over the genes
+    /// where the predicate is true, with the same result as ``filter(genes)`` before the
+    /// PCA, but the plan keeps every gene: later steps (marker ranking, plots) still see
+    /// all of them, and a gene outside the set has loadings of 0.
+    ///
     /// Parameters
     /// ----------
     /// layer : str or None, default=None
@@ -655,6 +660,11 @@ impl Atlas {
     ///     Components computed.
     /// seed : int
     ///     Seed of the random start (R7, R11: the same seed gives the same result).
+    /// genes : GeneExpr[Boolean] or None, default=None
+    ///     The genes the components are computed over: a predicate on gene columns, such
+    ///     as ``gene_column("highly_variable")`` (false and null leave a gene out);
+    ///     ``None`` for every gene. There is no implicit default (R7): scanpy uses
+    ///     ``highly_variable`` when that column exists, kyto only when asked.
     ///
     /// Returns
     /// -------
@@ -664,8 +674,11 @@ impl Atlas {
     /// Raises
     /// ------
     /// PlanError
-    ///     ``KY-E215``: ``n_components`` is below 1 or above the cells or genes, or
-    ///     ``seed`` is negative.
+    ///     ``KY-E215``: ``n_components`` is below 1 or above the cells or genes (those of
+    ///     ``genes``, checked when the plan runs), or ``seed`` is negative.
+    /// ExpressionError
+    ///     ``KY-E205``: ``genes`` is not a ``GeneExpr``, not boolean, or reads more than
+    ///     gene columns (store it with ``with_genes`` first).
     /// ResolutionError
     ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
     /// MissingMemberError
@@ -676,7 +689,11 @@ impl Atlas {
     /// >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0))
     /// PCA "counts" -> "pca" n_components=1 seed=0
     /// SCAN "..." (2 cells x 3 genes)
-    #[pyo3(signature = (*, layer = None, into, n_components = None, seed))]
+    /// >>> genes = gene_column("symbol") != "CD3E"
+    /// >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0, genes=genes))
+    /// PCA "counts" -> "pca" n_components=1 seed=0 genes=gene_column('symbol') != 'CD3E'
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, into, n_components = None, seed, genes = None))]
     fn pca(
         &self,
         py: Python<'_>,
@@ -684,11 +701,25 @@ impl Atlas {
         into: &str,
         n_components: Option<&Bound<'_, PyAny>>,
         seed: &Bound<'_, PyAny>,
+        genes: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let n_components =
             chain::optional_integer(py, "pca", "n_components", n_components, 1)?.unwrap_or(50);
         let seed = chain::integer(py, "pca", "seed", seed, 0)?;
-        self.derive(py, self.plan.pca(layer, into, n_components, seed))
+        let genes = match genes {
+            Some(genes) => match genes.cast::<PyGeneExpr>() {
+                Ok(genes) => Some(genes.get().core().clone()),
+                Err(_) => {
+                    let error = wrong_type("pca", "a boolean GeneExpr or None", genes);
+                    return Err(to_py_err(py, &error));
+                }
+            },
+            None => None,
+        };
+        let plan = self
+            .plan
+            .pca(layer, into, n_components, seed, genes.as_ref());
+        self.derive(py, plan)
     }
 
     /// The k nearest neighbours of every cell in a cell embedding (scanpy's

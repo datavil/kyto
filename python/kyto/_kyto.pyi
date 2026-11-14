@@ -502,12 +502,18 @@ class Atlas:
         into: str,
         n_components: int = 50,
         seed: int,
+        genes: _GeneExprBoolean | None = None,
     ) -> Atlas:
         """Principal components of a layer (scanpy's ``pca``, implicit centring).
 
         Streams the layer in ``2 + PCA_POWER_ITERATIONS`` passes (a randomized block
         Krylov method) and never densifies it. Adds the cell embedding ``into`` (one row
         per cell, ``n_components`` wide) and the gene embedding ``into + "_loadings"``.
+
+        With ``genes`` (scanpy's ``mask_var``) the components are computed over the genes
+        where the predicate is true, with the same result as ``filter(genes)`` before the
+        PCA, but the plan keeps every gene: later steps (marker ranking, plots) still see
+        all of them, and a gene outside the set has loadings of 0.
 
         Parameters
         ----------
@@ -519,6 +525,11 @@ class Atlas:
             Components computed.
         seed : int
             Seed of the random start (R7, R11: the same seed gives the same result).
+        genes : GeneExpr[Boolean] or None, default=None
+            The genes the components are computed over: a predicate on gene columns, such
+            as ``gene_column("highly_variable")`` (false and null leave a gene out);
+            ``None`` for every gene. There is no implicit default (R7): scanpy uses
+            ``highly_variable`` when that column exists, kyto only when asked.
 
         Returns
         -------
@@ -528,8 +539,11 @@ class Atlas:
         Raises
         ------
         PlanError
-            ``KY-E215``: ``n_components`` is below 1 or above the cells or genes, or
-            ``seed`` is negative.
+            ``KY-E215``: ``n_components`` is below 1 or above the cells or genes (those of
+            ``genes``, checked when the plan runs), or ``seed`` is negative.
+        ExpressionError
+            ``KY-E205``: ``genes`` is not a ``GeneExpr``, not boolean, or reads more than
+            gene columns (store it with ``with_genes`` first).
         ResolutionError
             ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
         MissingMemberError
@@ -539,6 +553,10 @@ class Atlas:
         --------
         >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0))
         PCA "counts" -> "pca" n_components=1 seed=0
+        SCAN "..." (2 cells x 3 genes)
+        >>> genes = gene_column("symbol") != "CD3E"
+        >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0, genes=genes))
+        PCA "counts" -> "pca" n_components=1 seed=0 genes=gene_column('symbol') != 'CD3E'
         SCAN "..." (2 cells x 3 genes)
         """
     def neighbors(

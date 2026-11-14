@@ -381,7 +381,7 @@ fn pipeline_neighbors_on_kytos_pca_match_scanpy() {
         .unwrap()
         .select_genes(read_lines(&out.join("hvg")))
         .unwrap()
-        .pca(Some("log1p"), "X_pca", fixture.n_pcs, 0)
+        .pca(Some("log1p"), "X_pca", fixture.n_pcs, 0, None)
         .unwrap()
         .neighbors(params(
             fixture.n_pcs,

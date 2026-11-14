@@ -133,7 +133,7 @@ fn plan_build_errors() -> Vec<KytoError> {
                 .and_then(|expr| expr.recompute()),
         ),
         // A step argument out of range.
-        error(layered().pca(None, "pca", 0, 0)),
+        error(layered().pca(None, "pca", 0, 0, None)),
         // A step after the sink.
         error(
             layered()
@@ -252,12 +252,12 @@ fn new_layer_names_follow_the_member_rules() {
 fn derived_member_names_are_checked_too() {
     let plan = layered();
     // `<into>_loadings` would be 66 bytes.
-    let message = refused(plan.pca(None, &"p".repeat(57), 2, 0));
+    let message = refused(plan.pca(None, &"p".repeat(57), 2, 0, None));
     assert!(message.contains(&format!("the embedding name '{}_loadings'", "p".repeat(57))));
-    plan.pca(None, &"p".repeat(55), 2, 0).unwrap();
-    assert!(refused(plan.pca(None, "x_PCA", 2, 0)).contains("'X_pca'"));
+    plan.pca(None, &"p".repeat(55), 2, 0, None).unwrap();
+    assert!(refused(plan.pca(None, "x_PCA", 2, 0, None)).contains("'X_pca'"));
     // Cell and gene embeddings share one group.
-    assert!(refused(plan.pca(None, "pcs", 2, 0)).contains("embedding 'pcs' differs"));
+    assert!(refused(plan.pca(None, "pcs", 2, 0, None)).contains("embedding 'pcs' differs"));
     let graphs = scan().neighbors(neighbors(None)).unwrap();
     assert!(refused(graphs.neighbors(neighbors(Some("a b")))).contains("'a b_distances'"));
     assert!(refused(scan().neighbors(neighbors(Some("")))).contains("never empty"));

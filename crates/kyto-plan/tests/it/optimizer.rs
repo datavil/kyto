@@ -165,7 +165,7 @@ output #3 reads [layer:counts, layer:log1p, layer:logn, layer:norm, cells:batch,
         ),
     );
     let pca = scan()
-        .pca(Some("log1p"), "X_new", 2, 0)
+        .pca(Some("log1p"), "X_new", 2, 0, None)
         .unwrap()
         .filter_cells(&gt(cell("score"), 0.0))
         .unwrap();
@@ -332,7 +332,7 @@ fn projection_pushdown_reads_only_what_the_output_needs() {
     let plan = scan()
         .log1p(Some("counts"), "logc")
         .unwrap()
-        .pca(Some("logc"), "X_new", 2, 0)
+        .pca(Some("logc"), "X_new", 2, 0, None)
         .unwrap()
         .with_cells([(
             "double".to_owned(),
@@ -529,7 +529,7 @@ fn reuse_computes_a_shared_sub_plan_once() {
     let left = scan()
         .log1p(Some("counts"), "logc")
         .unwrap()
-        .pca(Some("logc"), "X_new", 2, 7)
+        .pca(Some("logc"), "X_new", 2, 7, None)
         .unwrap();
     let right = scan()
         .log1p(Some("counts"), "logc")
@@ -621,7 +621,7 @@ fn all_rules_on_a_standard_pipeline() {
         .unwrap()
         .scale(Some("logn"), "scaled", true, Some(10.0))
         .unwrap()
-        .pca(Some("scaled"), "X_new", 2, 0)
+        .pca(Some("scaled"), "X_new", 2, 0, None)
         .unwrap()
         .neighbors(Neighbors {
             embedding: "X_new".to_owned(),
@@ -874,7 +874,7 @@ fn apply(plan: &Arc<Plan>, step: Step) -> Option<Arc<Plan>> {
         Step::Hvg(flavor, n, batch) => {
             plan.highly_variable_genes(Some("counts"), flavor, n, batch.then_some("batch"))
         }
-        Step::Pca(n, into) => plan.pca(Some("counts"), into, n, 3),
+        Step::Pca(n, into) => plan.pca(Some("counts"), into, n, 3, None),
         Step::WithCells(name, expr) => plan.with_cells([(name.to_owned(), expr)]),
         Step::WithGenes(name, expr) => plan.with_genes([(name.to_owned(), expr)]),
         Step::Neighbors(embedding, n_components) => plan.neighbors(Neighbors {

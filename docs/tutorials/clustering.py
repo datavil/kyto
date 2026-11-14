@@ -145,8 +145,7 @@ lap("filters")
 # Scrublet scores each sample on its own (`batch_key="sample"`); `seed` is required
 # (R7). The counts stay in their layer (scanpy copies `X` to `layers["counts"]`).
 # `normalize_total` without `target_sum` scales to the median total, as scanpy's
-# default. The plan is collected once here so the two branches below do not run it
-# again.
+# default. The plan is collected once here so the steps below do not run it again.
 
 # %%
 preprocessed = (
@@ -164,9 +163,10 @@ lap("scrublet, normalize, log1p, hvg")
 # ## PCA, neighbours, UMAP, Leiden
 #
 # scanpy's `pca` uses the highly variable genes and keeps every gene in the data
-# (`mask_var`). kyto's `pca` reads every gene of the plan, so this branch keeps only
-# the highly variable genes (the marker plots go back to `preprocessed`; a gene mask
-# for `pca` is proposed task 6.14). The tutorial's first Leiden runs igraph's flavour
+# (`mask_var`). kyto's `pca` does the same when asked (`genes=`, task 6.14; there is
+# no implicit default, R7): the components come from the highly variable genes and
+# the plan keeps every gene, so the marker ranking and the marker plots below read
+# all of them from this one plan. The tutorial's first Leiden runs igraph's flavour
 # with `n_iterations=2`; kyto's runs until no move improves (deviations.md "Leiden and
 # Louvain parameters not provided"). `pca_variance_ratio` cannot be drawn: PCA's
 # variances do not reach Python (7.8 Open (2)).
@@ -174,8 +174,9 @@ lap("scrublet, normalize, log1p, hvg")
 # %%
 resolutions = (0.02, 0.5, 2.0)
 plan = (
-    preprocessed.filter(gene_column("highly_variable"))
-    .pca(into="pca", n_components=50, seed=0)
+    preprocessed.pca(
+        into="pca", n_components=50, seed=0, genes=gene_column("highly_variable")
+    )
     .neighbors("pca")
     .umap(into="umap", seed=0)
     .leiden(into="leiden", seed=0)
@@ -190,22 +191,16 @@ lap("pca, neighbors, umap, leiden")
 # %% [markdown]
 # ## Marker genes
 #
-# The Wilcoxon test runs on the clustered plan, so on its highly variable genes only
-# (scanpy tests every gene; task 6.14 would close this). The marker dotplots read every
-# gene: `preprocessed` is handed over and the Leiden columns are copied into its
-# `AnnData` by cell (kyto cannot add another plan's cell column to a plan).
+# The Wilcoxon test runs on the clustered plan, over every kept gene, as scanpy's
+# (`rank_genes_groups(method="wilcoxon")`). The same plan is handed to `AnnData` for
+# the plots.
 
 # %%
 ranked = clustered.rank_genes_groups("leiden_res_0.50", method="wilcoxon").collect()
 lap("rank genes groups")
 
 adata = clustered.to_anndata(var_names="symbol")
-markers = preprocessed.to_anndata(var_names="symbol")
-if not markers.obs_names.equals(adata.obs_names):
-    raise ValueError("the clustered and preprocessed plans hold other cells")
 leiden_columns = ["leiden", *(f"leiden_res_{r:4.2f}" for r in resolutions)]
-for column in leiden_columns:
-    markers.obs[column] = adata.obs[column]
 lap("to_anndata")
 
 # %%
@@ -285,7 +280,7 @@ plots: dict[str, Any] = {
     "qc_violins": qc_violins,
     "qc_scatter": qc_scatter,
     "highly_variable_genes": cl.xyplot(
-        markers,
+        adata,
         "means",
         "dispersions_norm",
         axis=1,
@@ -308,10 +303,10 @@ plots: dict[str, Any] = {
         adata, leiden_columns[1:], size=0.4, ncol=3, legend_ondata=True
     ),
     "markers_res_0.02": cl.dotplot(
-        markers, one_group_each(marker_genes), group_by="leiden_res_0.02"
+        adata, one_group_each(marker_genes), group_by="leiden_res_0.02"
     ),
     "markers_res_0.50": cl.dotplot(
-        markers, one_group_each(marker_genes), group_by="leiden_res_0.50"
+        adata, one_group_each(marker_genes), group_by="leiden_res_0.50"
     ),
     "ranked_genes": cl.dotplot(
         adata, one_group_each(top_genes), group_by="leiden_res_0.50"

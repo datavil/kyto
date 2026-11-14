@@ -14,7 +14,9 @@
 //!   with a `batch_key` also `highly_variable_nbatches` and (not `seurat_v3`)
 //!   `highly_variable_intersection`.
 //! - `pca` adds the cell embedding `into` (`n_components` wide) and the gene embedding
-//!   `<into>_loadings` (scanpy's `varm['PCs']`), both `float32`.
+//!   `<into>_loadings` (scanpy's `varm['PCs']`), both `float32`. With `genes` (scanpy's
+//!   `mask_var`, task 6.14) the components are computed over the genes where that
+//!   boolean predicate on gene-table columns holds; the plan keeps every gene.
 //! - `scrublet` adds the cell columns of its doublet scores (`Float64`) and calls
 //!   (`Boolean`), replacing columns of the same names (task 6.12, see `scrublet.rs`).
 //!
@@ -26,8 +28,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use kyto_core::{
-    Axis, CellExpr, ColumnDtype, ColumnSchema, EmbeddingSchema, ExprNode, FloatDtype, LayerDtype,
-    LayerSchema, Source,
+    Axis, CellExpr, ColumnDtype, ColumnSchema, EmbeddingSchema, ExprDtype, ExprNode, FloatDtype,
+    GeneExpr, LayerDtype, LayerSchema, Source,
 };
 use kyto_error::KytoError;
 use serde::{Deserialize, Serialize};
@@ -97,6 +99,14 @@ pub enum CrossCellOp {
         n_components: u64,
         /// The random seed (R7: required, never global).
         seed: u64,
+        /// The genes the components are computed over (scanpy's `mask_var`): a
+        /// resolved boolean predicate on gene-table columns; `None` for every gene.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "gene_set_json"
+        )]
+        genes: Option<GeneExpr>,
     },
     /// Doublet scores and calls of the counts in `layer` (Scrublet).
     Scrublet {
@@ -105,6 +115,31 @@ pub enum CrossCellOp {
         /// scanpy's arguments and the columns written.
         params: Scrublet,
     },
+}
+
+/// `pca`'s gene set as JSON: the expression's entries ([`ExprJson`]), as the plan JSON
+/// writes it.
+mod gene_set_json {
+    use kyto_core::{ExprJson, GeneExpr};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+
+    pub(super) fn serialize<S: Serializer>(
+        genes: &Option<GeneExpr>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        genes
+            .as_ref()
+            .map(ExprJson::from_expr)
+            .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<GeneExpr>, D::Error> {
+        Option::<ExprJson>::deserialize(deserializer)?
+            .map(|genes| genes.to_expr("pca, genes").map_err(D::Error::custom))
+            .transpose()
+    }
 }
 
 /// A step that needs statistics over all cells before it outputs anything.
@@ -222,10 +257,17 @@ impl LogicalNode for CrossCell {
                 into,
                 n_components,
                 seed,
-            } => write!(
-                formatter,
-                "{layer:?} -> {into:?} n_components={n_components} seed={seed}"
-            ),
+                genes,
+            } => {
+                write!(
+                    formatter,
+                    "{layer:?} -> {into:?} n_components={n_components} seed={seed}"
+                )?;
+                if let Some(genes) = genes {
+                    write!(formatter, " genes={genes}")?;
+                }
+                Ok(())
+            }
             CrossCellOp::Scrublet { layer, params } => write!(formatter, "{layer:?} {params}"),
         }
     }
@@ -376,23 +418,52 @@ impl Plan {
 
     /// This plan with `n_components` principal components of `layer` (or the default
     /// layer) as the cell embedding `into`, and their loadings as the gene embedding
-    /// `<into>_loadings`. `seed` is required (R7).
+    /// `<into>_loadings`. `seed` is required (R7). With `genes` (scanpy's `mask_var`)
+    /// the components are computed over the genes where it is true (false and null
+    /// leave a gene out), as `filter_genes(genes)` before the PCA would, but the plan
+    /// keeps every gene: a gene outside the set has loadings of 0. It is resolved
+    /// against this plan now (R6).
     ///
     /// # Errors
     /// `KY-E109` and `KY-E211` for the layer as [`Plan::scale`]; `KY-E215` for
     /// `n_components` of 0 or above the plan's bound of `min(n_cells, n_genes)`, or an
     /// `into` such that `into` or `<into>_loadings` breaks format.md §2.1 or differs
-    /// from an embedding of the plan only in case; `KY-E216` if this plan ends in a
-    /// sink.
+    /// from an embedding of the plan only in case; any error of [`Plan::resolve`] for
+    /// `genes`, and `KY-E205` if it is not a boolean expression on gene-table columns
+    /// alone; `KY-E216` if this plan ends in a sink.
     pub fn pca(
         self: &Arc<Self>,
         layer: Option<&str>,
         into: &str,
         n_components: u64,
         seed: u64,
+        genes: Option<&GeneExpr>,
     ) -> Result<Arc<Self>, KytoError> {
         self.check_open("pca")?;
         let layer = self.input_layer("pca", layer)?;
+        let genes = match genes {
+            Some(genes) => {
+                let genes = self.resolve(genes)?;
+                if genes.dtype() != ExprDtype::Boolean || !genes.is_metadata_only() {
+                    let got = if genes.dtype() == ExprDtype::Boolean {
+                        "a boolean expression that reads matrix or embedding values".to_owned()
+                    } else {
+                        format!("a {} expression", genes.dtype().name())
+                    };
+                    return Err(KytoError::ExpressionOperand {
+                        operation: "pca(genes=...)".to_owned(),
+                        accepted: "a boolean expression on gene-table columns, such as \
+                                   gene_column('highly_variable') (store anything else as \
+                                   a gene column with with_genes first)"
+                            .to_owned(),
+                        got,
+                        operand: genes.to_string(),
+                    });
+                }
+                Some(genes)
+            }
+            None => None,
+        };
         for name in [into.to_owned(), loadings_name(into)] {
             self.check_member_name("pca", "into", into, MemberGroup::Embeddings, &name)?;
         }
@@ -421,6 +492,7 @@ impl Plan {
             into: into.to_owned(),
             n_components,
             seed,
+            genes,
         })
     }
 

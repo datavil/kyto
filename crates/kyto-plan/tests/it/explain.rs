@@ -54,7 +54,7 @@ fn pipelines() -> Vec<(&'static str, Arc<Plan>)> {
         .unwrap()
         .scale(Some("logn"), "scaled", true, Some(10.0))
         .unwrap()
-        .pca(Some("scaled"), "X_new", 2, 0)
+        .pca(Some("scaled"), "X_new", 2, 0, None)
         .unwrap();
     // 4. Clustering: median normalization fused with log1p (a statistics pass), a
     // cell filter that stays above it (pushdown stops at cross-cell statistics), the
@@ -66,7 +66,7 @@ fn pipelines() -> Vec<(&'static str, Arc<Plan>)> {
         .unwrap()
         .filter_cells(&gt_cell(CellExpr::column("score"), -2.0))
         .unwrap()
-        .pca(Some("logn"), "X_new", 2, 0)
+        .pca(Some("logn"), "X_new", 2, 0, None)
         .unwrap()
         .neighbors(Neighbors {
             embedding: "X_new".to_owned(),

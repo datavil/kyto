@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 07101301c9a07eff75cb011deda98a4e84671598adef92edddd9e982ebddd31b # shrinks to steps = [FilterGenes(Expr { node: Source(Column { name: "highly_variable" }), dtype: Unknown, depth: 1, axis: PhantomData<kyto_core::expr::GeneAxis> }), WithCells("double", Expr { node: Binary { op: Eq, left: Source(Expression { layer: Some("counts"), gene_id: "G1" }), right: Source(Column { name: "total_counts" }) }, dtype: Boolean, depth: 2, axis: PhantomData<kyto_core::expr::CellAxis> }), WithCells("double", Expr { node: Source(Column { name: "score" }), dtype: Unknown, depth: 1, axis: PhantomData<kyto_core::expr::CellAxis> })], rules = (false, true, false, false)

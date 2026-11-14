@@ -93,14 +93,11 @@ Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11): see [Implementat
 
 Goal: the standard scanpy workflow, streamed, with each step checked against scanpy on the 1.5 fixtures.
 
-Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
+Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
 
 - [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
-- [ ] **6.14 PCA on a gene subset.** `pca(..., genes=<GeneExpr>)`, scanpy's `mask_var`: the components are computed over the genes where the predicate holds (`gene_column("highly_variable")`) while the plan keeps every gene, so marker plots and `rank_genes_groups` after clustering see all genes in one plan. (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial clusters on a branch filtered to the HVGs and ranks only those genes)
-  - Depends: 6.5, 7.2
-  - Done when: `pca(genes=gene_column("highly_variable"))` gives the same embedding as `filter(gene_column("highly_variable")).pca(...)` bit for bit, and the clustering tutorial runs as one plan with its Wilcoxon ranking over every kept gene compared with scanpy's.
 - [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.

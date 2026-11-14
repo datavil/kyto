@@ -23,6 +23,11 @@
 //! Variance `lambda / (n - 1)` and its ratio to the total variance (the genes'
 //! variances with `ddof=1`, as scikit-learn's `explained_variance_ratio_`). Every
 //! reduction folds through `reduction.rs`'s fixed tree (R11).
+//! Over a gene set (`pca(genes=...)`, scanpy's `mask_var`, task 6.14) `X` is the
+//! stream's cells x the genes of the set: every other gene's values are skipped as
+//! each row is read, so the sums run in the order a `filter_genes` before the node
+//! gives them (the same bits), and those genes' loadings are 0 (scanpy's
+//! `varm['PCs']`).
 //! Does not: write the embeddings into the stream's blocks or a store (they are
 //! statistics, [`PcaStatistics`]; terminals, 7.3), scanpy's other solvers, or
 //! `zero_center=False`.
@@ -77,8 +82,9 @@ impl PcaStatistics {
     }
 
     /// The loadings (scanpy's `varm['PCs']`), row-major: one row of `n_components()`
-    /// values per gene of the stream at the node, in its order. Each component's
-    /// largest absolute loading is positive (scikit-learn's `svd_flip`).
+    /// values per gene of the stream at the node, in its order (zeros for a gene
+    /// outside the node's gene set). Each component's largest absolute loading is
+    /// positive (scikit-learn's `svd_flip`).
     pub fn loadings(&self) -> &[f32] {
         &self.loadings
     }
@@ -94,7 +100,9 @@ impl PcaStatistics {
         &self.variance_ratio
     }
 
-    /// Each gene's mean over the cells reaching the node (the implicit centring).
+    /// Each gene's mean over the cells reaching the node (the implicit centring): one
+    /// per gene the components are computed over (the node's gene set, every gene of
+    /// the stream without one), in the stream's order.
     pub fn means(&self) -> &[f64] {
         &self.means
     }
@@ -212,7 +220,13 @@ pub(crate) struct PcaAccumulator {
     layer: String,
     n_components: usize,
     seed: u64,
+    /// The genes the components are computed over (those of the gene set).
     n_genes: usize,
+    /// The genes of the stream's blocks.
+    stream_genes: usize,
+    /// With a gene set: the position among its genes of each gene of the stream,
+    /// `u32::MAX` for a gene outside it.
+    subset: Option<Vec<u32>>,
     /// Columns of `Omega` (`l`).
     width: usize,
     n_cells: u64,
@@ -236,9 +250,35 @@ pub(crate) struct PcaAccumulator {
 }
 
 impl PcaAccumulator {
-    /// An accumulator for `n_components` components of `layer`, over `n_genes` genes.
-    pub(crate) fn new(layer: &str, n_components: u64, seed: u64, n_genes: usize) -> Self {
+    /// An accumulator for `n_components` components of `layer`, whose blocks hold
+    /// `stream_genes` genes: over all of them, or over those flagged in `gene_set`
+    /// (one flag per gene of the stream).
+    pub(crate) fn new(
+        layer: &str,
+        n_components: u64,
+        seed: u64,
+        stream_genes: usize,
+        gene_set: Option<&[bool]>,
+    ) -> Self {
         let n_components = usize::try_from(n_components).unwrap_or(usize::MAX);
+        let subset = gene_set.map(|flags| {
+            let mut next = 0_u32;
+            flags
+                .iter()
+                .map(|&flag| {
+                    if flag {
+                        next += 1;
+                        next - 1
+                    } else {
+                        u32::MAX
+                    }
+                })
+                .collect::<Vec<u32>>()
+        });
+        let n_genes = match gene_set {
+            Some(flags) => flags.iter().filter(|&&flag| flag).count(),
+            None => stream_genes,
+        };
         let width = n_components
             .saturating_add(PCA_OVERSAMPLES as usize)
             .min(n_genes);
@@ -247,6 +287,8 @@ impl PcaAccumulator {
             n_components,
             seed,
             n_genes,
+            stream_genes,
+            subset,
             width,
             n_cells: 0,
             means: Vec::new(),
@@ -304,12 +346,13 @@ impl PcaAccumulator {
         layer: &CellBlock,
         block: &PipelineBlock,
     ) -> Result<(), KytoError> {
-        if layer.n_genes() as usize != self.n_genes {
+        let flags = self.subset.as_ref().map_or(self.stream_genes, Vec::len);
+        if layer.n_genes() as usize != self.stream_genes || flags != self.stream_genes {
             return Err(KytoError::InvalidCellBlock {
                 context: "pca statistics pass".to_owned(),
                 problem: format!(
-                    "a statistics pass over {} genes got a block of {} genes",
-                    self.n_genes,
+                    "a statistics pass over {} genes (a gene set over {flags}) got a block of {} genes",
+                    self.stream_genes,
                     layer.n_genes()
                 ),
             });
@@ -334,13 +377,25 @@ impl PcaAccumulator {
         block: &PipelineBlock,
     ) {
         let n_rows = indptr.len().saturating_sub(1);
+        let subset = self.subset.as_deref();
+        // A row's stored values, by position among the genes computed over (a gene
+        // outside the gene set is skipped).
         let row = |index: usize| {
             let start = indptr[index] as usize;
             let end = indptr[index + 1] as usize;
             indices[start..end]
                 .iter()
                 .zip(&values[start..end])
-                .map(|(&gene, &value)| (gene as usize, value.to_f64()))
+                .filter_map(move |(&gene, &value)| {
+                    let gene = match subset {
+                        Some(subset) => match subset[gene as usize] {
+                            u32::MAX => return None,
+                            position => position as usize,
+                        },
+                        None => gene as usize,
+                    };
+                    Some((gene, value.to_f64()))
+                })
         };
         match leaf {
             PcaPartial::Sketch {
@@ -415,8 +470,8 @@ impl PcaAccumulator {
     /// End pass `pass` with its reduction (`None` for a stream without cells).
     ///
     /// # Errors
-    /// `KY-E215` if fewer than 2 cells or more components than cells or genes reach
-    /// the node, or the layer holds a value that is not finite.
+    /// `KY-E215` if fewer than 2 cells or more components than cells or genes (those
+    /// of the gene set) reach the node, or the layer holds a value that is not finite.
     pub(crate) fn end_pass(
         &mut self,
         pass: u32,
@@ -510,6 +565,20 @@ impl PcaAccumulator {
         let Some(loadings) = self.loadings else {
             unreachable!("a run's last pass follows the Rayleigh-Ritz step")
         };
+        // One row per gene of the stream: zeros outside the gene set.
+        let loadings: Vec<f32> = match &self.subset {
+            Some(subset) => subset
+                .iter()
+                .flat_map(|&position| {
+                    (0..self.n_components).map(move |component| (position, component))
+                })
+                .map(|(position, component)| match position {
+                    u32::MAX => 0.0,
+                    position => loadings.row(position as usize)[component] as f32,
+                })
+                .collect(),
+            None => loadings.values.iter().map(|&value| value as f32).collect(),
+        };
         let denominator = self.n_cells as f64 - 1.0;
         // Every cell equal (no variance at all): the eigenvalues are rounding, so 0, and
         // each ratio 0 / 0 is NaN as scikit-learn's (bug-hunter: was inf).
@@ -528,7 +597,7 @@ impl PcaAccumulator {
             cells: Arc::new(self.cells),
             genes: Arc::new(Vec::new()),
             embedding: Arc::new(self.rows.iter().map(|&value| value as f32).collect()),
-            loadings: Arc::new(loadings.values.iter().map(|&value| value as f32).collect()),
+            loadings: Arc::new(loadings),
             variance,
             variance_ratio,
             means: Arc::new(self.means),
@@ -576,6 +645,19 @@ impl PcaAccumulator {
                 "a plan keeping at least 2 cells before pca",
             ));
         }
+        if self.subset.is_some() && self.n_genes == 0 {
+            // An empty gene set (bug-hunter: the range "1 to 0" said nothing).
+            return Err(KytoError::InvalidArgument {
+                function: "pca".to_owned(),
+                parameter: "genes".to_owned(),
+                value: "a gene set without genes".to_owned(),
+                problem: "the predicate is true for none of the genes reaching pca".to_owned(),
+                accepted: format!(
+                    "a predicate true for at least {} genes (n_components)",
+                    self.n_components
+                ),
+            });
+        }
         let limit = (n_cells as usize).min(self.n_genes);
         if self.n_components > limit {
             return Err(KytoError::InvalidArgument {
@@ -583,8 +665,13 @@ impl PcaAccumulator {
                 parameter: "n_components".to_owned(),
                 value: self.n_components.to_string(),
                 problem: format!(
-                    "{n_cells} cells and {} genes reach pca, so it has at most {limit} components",
-                    self.n_genes
+                    "{n_cells} cells and {} genes{} reach pca, so it has at most {limit} components",
+                    self.n_genes,
+                    if self.subset.is_some() {
+                        " (those of its gene set, `genes`)"
+                    } else {
+                        ""
+                    }
                 ),
                 accepted: format!("an int from 1 to {limit}"),
             });

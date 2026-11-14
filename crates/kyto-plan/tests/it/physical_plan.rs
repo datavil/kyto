@@ -78,7 +78,7 @@ const C: Blocks = Blocks::Cells(4096);
 /// One plan per node kind and variant, with the passes its last node must show.
 fn cases() -> Vec<(&'static str, Arc<Plan>, u32, u32, Blocks)> {
     let base = scan();
-    let pca = base.pca(Some("log1p"), "X_new", 2, 0).unwrap();
+    let pca = base.pca(Some("log1p"), "X_new", 2, 0, None).unwrap();
     let graphs = base.neighbors(neighbors()).unwrap();
     let hvg = |flavor| {
         base.highly_variable_genes(Some("log1p"), flavor, Some(3), None)
@@ -356,7 +356,7 @@ fn standard_pipeline_snapshots() {
         .unwrap()
         .scale(Some("logn"), "scaled", true, Some(10.0))
         .unwrap()
-        .pca(Some("scaled"), "X_new", 2, 0)
+        .pca(Some("scaled"), "X_new", 2, 0, None)
         .unwrap()
         .neighbors(Neighbors {
             embedding: "X_new".to_owned(),
