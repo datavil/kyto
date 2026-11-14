@@ -77,8 +77,9 @@ cache-keys = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Test helpers (tests/fixtures) import as `fixtures`.
-pythonpath = ["tests"]
+# Test helpers (tests/fixtures) import as `fixtures`; the clustering tutorial's
+# comparison (docs/tutorials, task 10.7) as `clustering_compare`.
+pythonpath = ["tests", "docs/tutorials"]
 
 [tool.ruff]
 target-version = "py310"
@@ -98,5 +99,6 @@ typeCheckingMode = "strict"
 pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
-# Test helpers (tests/fixtures) import as `fixtures`.
-extraPaths = ["tests"]
+# Test helpers (tests/fixtures) import as `fixtures`; the clustering tutorial's
+# comparison (docs/tutorials, task 10.7) as `clustering_compare`.
+extraPaths = ["tests", "docs/tutorials"]

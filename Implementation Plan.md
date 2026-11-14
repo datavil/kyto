@@ -89,6 +89,12 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12): see [Implementat
 - [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
+- [ ] **6.13 Per-gene QC metrics.** The rest of scanpy's `calculate_qc_metrics`: per-gene `n_cells_by_counts`, `total_counts`, `mean_counts` and `pct_dropout_by_counts` as gene expressions (a reduction over the plan's cells, 5.6), so `filter(<cells detected> >= 3)` is scanpy's `filter_genes(min_cells=3)` inside a plan; and `log1p` on numeric expressions for the `log1p_` QC columns (6.1 Open (2)). (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial's gene filter had to be computed outside the plan)
+  - Depends: 6.1, 5.6, 5.8
+  - Done when: the per-gene columns and the `log1p_` cell columns equal `calculate_qc_metrics(log1p=True)` on the fixtures (dtypes as deviations.md "QC metric dtypes"), and `docs/tutorials/clustering.py` filters genes with a plan filter instead of its NumPy stand-in.
+- [ ] **6.14 PCA on a gene subset.** `pca(..., genes=<GeneExpr>)`, scanpy's `mask_var`: the components are computed over the genes where the predicate holds (`gene_column("highly_variable")`) while the plan keeps every gene, so marker plots and `rank_genes_groups` after clustering see all genes in one plan. (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial clusters on a branch filtered to the HVGs and ranks only those genes)
+  - Depends: 6.5, 7.2
+  - Done when: `pca(genes=gene_column("highly_variable"))` gives the same embedding as `filter(gene_column("highly_variable")).pca(...)` bit for bit, and the clustering tutorial runs as one plan with its Wilcoxon ranking over every kept gene compared with scanpy's.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -156,6 +162,8 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 
 Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels with a migration guide. 10.1–10.3 start with M1 and grow with each milestone.
 
+Done (10.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
+
 - [ ] **10.1 Property tests.** `proptest` for storage and kernels; `hypothesis` for the Python API (random chains of valid methods must not crash).
   - Depends: 2.2, 7.2
   - Done when: both suites run in CI with fixed seeds.
@@ -174,9 +182,6 @@ Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels wi
 - [ ] **10.6 Release.** abi3 wheels via maturin, PyPI trusted publishing, semantic versioning, and a stated policy for reading older `format_version` stores.
   - Depends: 1.4, 10.5
   - Done when: `pip install kyto` works on Linux, macOS and Windows from a tagged release.
-- [ ] **10.7 Clustering tutorial end to end.** scanpy's basic clustering tutorial (https://scanpy.scverse.org/en/stable/tutorials/basics/clustering.html) written in kyto and run as a test: two samples combined, QC metrics (mitochondrial, ribosomal, haemoglobin), doublet detection, cell and gene filters, `normalize_total`, `log1p`, highly variable genes by sample, PCA, neighbours, UMAP, Leiden at several resolutions, marker genes, and the plots through cellestial. (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
-  - Depends: 2.9, 5.11, 6.6–6.10, 6.12, 7.1–7.5, 7.8
-  - Done when: the notebook runs end to end in the gate, and its results are compared with scanpy's run of the tutorial (QC columns and HVG sets equal; PCA variance to 1e-3; Leiden adjusted Rand index and UMAP trustworthiness reported).
 
 ## 11. Milestones
 
