@@ -429,6 +429,9 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 - [ ] **9.7 GPU CI.** GPU tests on a self-hosted runner; skipped with a visible notice elsewhere.
   - Depends: 1.4, 9.2
   - Done when: the GPU job runs on every PR that touches `kyto-gpu` or `kyto-exec`.
+- [ ] **9.8 Portable matrix kernels (Metal).** PCA's products (sparse × dense SpMM and dense GEMM) and 9.4's tiled distances plus top-k written in CubeCL, so PCA and neighbours run through wgpu on Metal (and ROCm) as well as CUDA. 9.3's cuSPARSE/cuBLAS stays the CUDA path; `device="auto"` picks it on NVIDIA and these kernels elsewhere, by the 9.1 rules shown in `explain()`. (added Nov 14, 2026, at the user's request: Apple GPUs otherwise run only the 9.2 kernels)
+  - Depends: 9.2, 9.3, 9.4
+  - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
 
 ## 10. Testing, benchmarks, docs, release
 
@@ -470,5 +473,5 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
 | M3 Full analysis | 2.9, 6.4–6.10, 6.12, 7.8, 8.4–8.7, 10.4, 10.7 |
-| M4 GPU backend | 9.1–9.7 |
+| M4 GPU backend | 9.1–9.8 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
