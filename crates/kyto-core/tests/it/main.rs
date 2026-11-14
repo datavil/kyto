@@ -4,6 +4,7 @@
 
 mod expressions;
 mod feature_names;
+mod gene_qc_metrics;
 mod gene_symbols;
 mod missing_values;
 mod qc_metrics;

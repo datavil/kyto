@@ -73,8 +73,12 @@ EXPECTED_ALL = [
 ]
 
 EXPECTED_QC_ALL = [
+    "cells_detected",
+    "gene_mean_counts",
+    "gene_total_counts",
     "genes_detected",
     "percent_counts_in",
+    "percent_dropout",
     "total_counts",
     "total_counts_in",
 ]

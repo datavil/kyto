@@ -103,6 +103,14 @@ impl<'a> Recipes<'a> {
                     })
                 }
             }
+            ExprNode::Log1p(input) => {
+                let new = self.substitute(input, axis)?;
+                if Arc::ptr_eq(&new, input) {
+                    Arc::clone(node)
+                } else {
+                    Arc::new(ExprNode::Log1p(new))
+                }
+            }
         })
     }
 

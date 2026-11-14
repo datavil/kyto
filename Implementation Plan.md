@@ -84,14 +84,11 @@ Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11): see [Implementat
 
 Goal: the standard scanpy workflow, streamed, with each step checked against scanpy on the 1.5 fixtures.
 
-Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
+Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
 
 - [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
-- [ ] **6.13 Per-gene QC metrics.** The rest of scanpy's `calculate_qc_metrics`: per-gene `n_cells_by_counts`, `total_counts`, `mean_counts` and `pct_dropout_by_counts` as gene expressions (a reduction over the plan's cells, 5.6), so `filter(<cells detected> >= 3)` is scanpy's `filter_genes(min_cells=3)` inside a plan; and `log1p` on numeric expressions for the `log1p_` QC columns (6.1 Open (2)). (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial's gene filter had to be computed outside the plan)
-  - Depends: 6.1, 5.6, 5.8
-  - Done when: the per-gene columns and the `log1p_` cell columns equal `calculate_qc_metrics(log1p=True)` on the fixtures (dtypes as deviations.md "QC metric dtypes"), and `docs/tutorials/clustering.py` filters genes with a plan filter instead of its NumPy stand-in.
 - [ ] **6.14 PCA on a gene subset.** `pca(..., genes=<GeneExpr>)`, scanpy's `mask_var`: the components are computed over the genes where the predicate holds (`gene_column("highly_variable")`) while the plan keeps every gene, so marker plots and `rank_genes_groups` after clustering see all genes in one plan. (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial clusters on a branch filtered to the HVGs and ranks only those genes)
   - Depends: 6.5, 7.2
   - Done when: `pca(genes=gene_column("highly_variable"))` gives the same embedding as `filter(gene_column("highly_variable")).pca(...)` bit for bit, and the clustering tutorial runs as one plan with its Wilcoxon ranking over every kept gene compared with scanpy's.

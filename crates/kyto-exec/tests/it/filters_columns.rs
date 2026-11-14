@@ -18,7 +18,7 @@
 //! `uint32` gene values (the `counts` layer) take part in arithmetic as `Float64`, as
 //! the reference reads every layer (user decision, Nov 12, 2026; deviations.md).
 //!
-//! Not covered here: QC leaves (the reference has none; `kyto-algo`'s `qc_parity.rs`
+//! Not covered here: per-cell QC leaves (the reference has none; `kyto-algo`'s `qc_parity.rs`
 //! and this crate's `filter_qc_parity.rs` compare them with scanpy), and `take_cells`
 //! order: the executor keeps store order, so the
 //! reference's rows are put in store order before comparing (plan 5.8, deviations.md).
@@ -33,7 +33,9 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, QcMetric, Tiling};
+use kyto_core::{
+    BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, GeneQcMetric, Literal, QcMetric, Tiling,
+};
 use kyto_error::KytoError;
 use kyto_exec::{CellBlock, CellValues, ExecuteOptions, Pipeline};
 use kyto_plan::{OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
@@ -500,7 +502,10 @@ fn cell_expr() -> impl Strategy<Value = CellExpr> {
             (inner.clone(), operator(), literal())
                 .prop_filter_map("kinds", |(left, op, right)| Expr::binary(left, op, right)
                     .ok()),
-            inner.prop_filter_map("kinds", |expr| expr.not().ok()),
+            inner
+                .clone()
+                .prop_filter_map("kinds", |expr| expr.not().ok()),
+            inner.prop_filter_map("kinds", |expr| expr.log1p().ok()),
         ]
     })
 }
@@ -527,6 +532,23 @@ fn gene_expr() -> impl Strategy<Value = GeneExpr> {
                 .unwrap()
             }),
     ]
+}
+
+/// A per-gene QC metric of a layer (task 6.13), half of them through `log1p`: computed
+/// as `with_genes` columns in the random chains. Filters on them are fixed cases
+/// (`gene_qc_filters_match_the_reference`): a random gene filter on data removes genes
+/// often enough that a later, overwritten (so never run, deviations.md "Unused steps")
+/// `with_cells` reading a removed gene fails in the reference only.
+fn gene_qc_expr() -> impl Strategy<Value = GeneExpr> {
+    (
+        prop::sample::select(GeneQcMetric::ALL.to_vec()),
+        prop::sample::select(vec![None, Some("counts"), Some("log1p"), Some("a")]),
+        any::<bool>(),
+    )
+        .prop_map(|(metric, layer, logged)| {
+            let expr = GeneExpr::qc(layer.map(str::to_owned), metric);
+            if logged { expr.log1p().unwrap() } else { expr }
+        })
 }
 
 fn operator() -> impl Strategy<Value = BinaryOp> {
@@ -582,6 +604,7 @@ fn step() -> impl Strategy<Value = Step> {
         3 => (layers(), layers()).prop_map(|(layer, into)| Step::Log1p(layer, into)),
         3 => (prop::sample::select(vec!["double", "score"]), cell_expr()).prop_map(|(name, expr)| Step::WithCells(name, expr)),
         2 => (prop::sample::select(vec!["flag", "mean"]), gene_expr()).prop_map(|(name, expr)| Step::WithGenes(name, expr)),
+        2 => (prop::sample::select(vec!["detected", "dropout"]), gene_qc_expr()).prop_map(|(name, expr)| Step::WithGenes(name, expr)),
     ]
 }
 
@@ -698,6 +721,106 @@ fn a_standard_chain_matches_the_reference() {
 
 /// `uint32` counts are `Float64` in arithmetic (no wrapping below zero); a plain read
 /// keeps `UInt32`, a QC count of detected genes too.
+/// Task 6.13: gene filters and columns on per-gene QC metrics, over the cells present
+/// (after a cell filter and a `take_cells`), next to a cell's profile in the same
+/// step, under every combination of optimizer rules (a cell filter above the gene
+/// step must stay above it: the metrics are over the cells below).
+#[test]
+fn gene_qc_filters_match_the_reference() {
+    let qc = |metric, layer: &str| GeneExpr::qc(Some(layer.to_owned()), metric);
+    let at_least = |expr: GeneExpr, value: f64| {
+        Expr::binary(expr, BinaryOp::GtEq, Literal::Float(value)).unwrap()
+    };
+    let score =
+        |value: i64| Expr::binary(cell("score"), BinaryOp::Gt, Literal::Int(value)).unwrap();
+    let base = scan(&fixture().path);
+    let detected = base
+        .filter_cells(&score(-2))
+        .unwrap()
+        .filter_genes(&at_least(qc(GeneQcMetric::CellsDetected, "counts"), 8.0))
+        .unwrap()
+        .filter_cells(&score(1))
+        .unwrap();
+    let taken = base
+        .take_cells(["c0", "c2", "c5", "c9", "c3", "c17", "c23"].map(str::to_owned))
+        .unwrap()
+        .with_genes([
+            (
+                "detected".to_owned(),
+                qc(GeneQcMetric::CellsDetected, "counts"),
+            ),
+            ("total".to_owned(), qc(GeneQcMetric::TotalCounts, "log1p")),
+            (
+                "log_mean".to_owned(),
+                qc(GeneQcMetric::MeanCounts, "counts").log1p().unwrap(),
+            ),
+            (
+                "dropout".to_owned(),
+                qc(GeneQcMetric::PercentDropout, "log1p"),
+            ),
+        ])
+        .unwrap()
+        .filter_genes(
+            &Expr::binary(
+                at_least(qc(GeneQcMetric::MeanCounts, "counts"), 0.5),
+                BinaryOp::And,
+                at_least(GeneExpr::profile(Some("counts".to_owned()), "c9"), 0.0),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .filter_cells(&score(0))
+        .unwrap();
+    // No cell left: no gene is detected, means and percentages are NaN, which is not
+    // below any number (Polars orders NaN above every number).
+    let empty = base
+        .filter_cells(&score(100))
+        .unwrap()
+        .with_genes([("mean".to_owned(), qc(GeneQcMetric::MeanCounts, "counts"))])
+        .unwrap()
+        .filter_genes(
+            &Expr::binary(
+                qc(GeneQcMetric::PercentDropout, "counts"),
+                BinaryOp::Lt,
+                Literal::Float(200.0),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    for plan in [&detected, &taken, &empty] {
+        support::run_logical(plan, &fixture().data).unwrap();
+        for rules in 0..16_u8 {
+            let options = OptimizeOptions {
+                reuse_sub_plans: rules & 1 != 0,
+                projection_pushdown: rules & 2 != 0,
+                fuse_elementwise: rules & 4 != 0,
+                predicate_pushdown: rules & 8 != 0,
+            };
+            if let Err(message) = check(plan, options) {
+                panic!("{message}\nrules {rules:04b}, plan:\n{plan}");
+            }
+        }
+    }
+    let run = execute(&detected, all_rules()).unwrap();
+    let kept = support::ids(&run.gene_table, "gene_id");
+    assert!(!kept.is_empty() && kept.len() < 6, "{kept:?}");
+    let run = execute(&taken, all_rules()).unwrap();
+    assert_eq!(
+        run.gene_table.column("detected").unwrap().dtype(),
+        &DataType::UInt32
+    );
+    for name in ["total", "log_mean", "dropout"] {
+        assert_eq!(
+            run.gene_table.column(name).unwrap().dtype(),
+            &DataType::Float64,
+            "{name}"
+        );
+    }
+    let run = execute(&empty, all_rules()).unwrap();
+    assert!(run.cells.is_empty(), "{:?}", run.cells);
+    assert_eq!(run.gene_table.height(), 0);
+}
+
 #[test]
 fn uint32_arithmetic_does_not_wrap() {
     let counts = || CellExpr::expression(Some("counts".to_owned()), "G0");

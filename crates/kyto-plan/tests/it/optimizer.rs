@@ -202,6 +202,33 @@ output #2 reads {ALL}
 "#
         ),
     );
+    // A per-gene QC metric is over the cells below it (task 6.13): a cell filter above
+    // stays above.
+    let detected = Expr::binary(
+        GeneExpr::qc(
+            Some("counts".to_owned()),
+            kyto_core::GeneQcMetric::CellsDetected,
+        ),
+        BinaryOp::GtEq,
+        Literal::Int(3),
+    )
+    .unwrap();
+    let gene_filter = scan()
+        .filter_genes(&detected)
+        .unwrap()
+        .filter_cells(&gt(cell("score"), 0.0))
+        .unwrap();
+    assert_snapshot(
+        &optimized(&[Output::all(&gene_filter)], predicate_pushdown()),
+        &format!(
+            r#"
+output #2 reads {ALL}
+#2 FILTER_CELLS cell_column('score') > 0.0 <- #1 (node 2)
+#1 FILTER_GENES cells_detected(layer='counts') >= 3 <- #0 (node 1)
+#0 SCAN "synthetic.kyto" (24 cells x 6 genes) reads {ALL} (node 0)
+"#
+        ),
+    );
 }
 
 #[test]

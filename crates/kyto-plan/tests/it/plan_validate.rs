@@ -163,7 +163,7 @@ fn the_schema_is_a_draft_2020_12_schema_naming_every_method_and_op() {
     let ops = schema["$defs"]["expr_entry"]["properties"]["op"]["enum"]
         .as_array()
         .unwrap();
-    assert_eq!(ops.len(), 18);
+    assert_eq!(ops.len(), 20);
 }
 
 #[test]

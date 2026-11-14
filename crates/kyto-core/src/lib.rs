@@ -24,6 +24,7 @@ mod expr_polars;
 mod expr_source;
 mod feature_name;
 mod gene_ids;
+mod gene_qc_metric;
 mod member_name;
 mod qc_metric;
 mod removed_genes;
@@ -41,6 +42,7 @@ pub use expr_json::{ExprEntry, ExprJson, MAX_EXPANDED_NODES, Operator, QcMetricN
 pub use expr_source::Source;
 pub use feature_name::FeatureName;
 pub use gene_ids::GeneIds;
+pub use gene_qc_metric::GeneQcMetric;
 pub use member_name::{MAX_MEMBER_NAME_BYTES, column_name_problem, member_name_problem};
 pub use qc_metric::QcMetric;
 pub use removed_genes::RemovedGenes;

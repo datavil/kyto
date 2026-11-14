@@ -4,9 +4,10 @@
 //! Does: keep the genes present at each step of the stream and their table
 //! ([`Genes`]: the store's gene table at the kept genes, in their order, with the
 //! columns `with_genes` computed); evaluate a gene predicate or column over that table,
-//! with the profile of a cell (its values across the genes present) collected by one
-//! pass over the stream below the step ([`collect_profiles`], the statistics pass the
-//! physical plan gives such a step); and turn a change of genes into a
+//! with the profile of a cell (its values across the genes present) and the per-gene
+//! QC metrics (task 6.13, `gene_qc.rs`) collected by one pass over the stream below
+//! the step ([`collect_inputs`], the statistics pass the physical plan gives such a
+//! step); and turn a change of genes into a
 //! [`GeneSelection`], the operator that remaps every later block's genes (dropping
 //! the others, in the selection's order). `select_genes` keeps the order it lists
 //! (4.1 Open (2)); a filter keeps the table order. A gene embedding component (task
@@ -25,11 +26,13 @@ use kyto_store::{CellBlock, CellData, CellValues, TableAxis, read_table};
 use polars::prelude::{DataFrame, IdxCa, IdxSize, NamedFrom, Series};
 use zarrs::storage::ReadableStorageTraits;
 
-use crate::block_stream::{StreamSource, Windows};
+use crate::block_stream::StreamSource;
 use crate::cell_block_pool::CellBlockPool;
 use crate::cell_steps::embedding_values;
 use crate::expression::{Prepared, cast, mask};
+use crate::gene_qc::GeneCounts;
 use crate::pipeline_block::PipelineBlock;
+use crate::reduction::reduce_blocks;
 use crate::run_members::Rows;
 use crate::statistics::HvgValues;
 
@@ -204,8 +207,25 @@ impl GeneStepKind {
         profiles
     }
 
+    /// The layers its per-gene QC metrics read (task 6.13), without repeats.
+    pub(crate) fn qc_layers(&self) -> Vec<String> {
+        let prepared = self.prepared();
+        let mut layers = Vec::new();
+        for leaf in prepared.iter().flat_map(|prepared| &prepared.leaves) {
+            if let Source::GeneQc {
+                layer: Some(layer), ..
+            } = leaf
+                && !layers.contains(layer)
+            {
+                layers.push(layer.clone());
+            }
+        }
+        layers
+    }
+
     /// Run the step on `genes`, with the profiles of [`GeneStepKind::profiles`]
-    /// (`profiles[i]` the values of the `i`-th, one per gene present) and the rows of
+    /// (`profiles[i]` the values of the `i`-th, one per gene present), the per-gene
+    /// QC counts of each layer of [`GeneStepKind::qc_layers`] and the rows of
     /// the gene embeddings its leaves read (by name; task 5.11). Returns the operator
     /// for later blocks if the genes change.
     ///
@@ -216,6 +236,7 @@ impl GeneStepKind {
         &self,
         genes: &mut Genes,
         profiles: &[((String, String), Series)],
+        counts: &[(String, GeneCounts)],
         embeddings: &[(String, Arc<Rows>)],
         store: &str,
     ) -> Result<Option<GeneSelection>, KytoError> {
@@ -235,6 +256,14 @@ impl GeneStepKind {
                         })
                         .map(|(_, values)| values.clone())
                         .ok_or_else(|| corrupt(&path, format!("no profile of cell '{cell_id}'"))),
+                    Source::GeneQc {
+                        layer: Some(layer),
+                        metric,
+                    } => counts
+                        .iter()
+                        .find(|(known, _)| known == layer)
+                        .map(|(_, counts)| counts.values(*metric))
+                        .ok_or_else(|| corrupt(&path, format!("no QC counts of layer '{layer}'"))),
                     Source::Embedding { name, component } => embeddings
                         .iter()
                         .find(|(known, _)| known == name)
@@ -313,53 +342,100 @@ fn corrupt(path: &str, problem: String) -> KytoError {
     }
 }
 
-/// The profile of each cell of `wanted` ((layer, store position)), one value per gene
-/// present (absent entries are 0, R9), read from one pass over `source`'s stream, in
-/// the layer's dtype. `None` for a cell the stream does not carry.
+/// What one pass over the stream below a gene step gives its expressions.
+#[derive(Debug, Clone)]
+pub(crate) struct GeneInputs {
+    /// The profile of each cell asked for, one value per gene present (absent entries
+    /// are 0, R9), in the layer's dtype; `None` for a cell the stream does not carry.
+    pub(crate) profiles: Vec<Option<Series>>,
+    /// The per-gene counts of each layer asked for (task 6.13), over the stream's
+    /// cells.
+    pub(crate) counts: Vec<GeneCounts>,
+}
+
+impl GeneInputs {
+    fn empty(profiles: usize, layers: usize, n_genes: usize) -> Self {
+        Self {
+            profiles: vec![None; profiles],
+            counts: vec![GeneCounts::empty(n_genes); layers],
+        }
+    }
+
+    /// The inputs of `self`'s cells followed by `right`'s.
+    fn combine(self, right: Self) -> Self {
+        Self {
+            profiles: self
+                .profiles
+                .into_iter()
+                .zip(right.profiles)
+                .map(|(left, right)| left.or(right))
+                .collect(),
+            counts: self
+                .counts
+                .into_iter()
+                .zip(right.counts)
+                .map(|(left, right)| left.combine(right))
+                .collect(),
+        }
+    }
+}
+
+/// One pass over `source`'s stream for a gene step: the profile of each cell of
+/// `wanted` ((layer, store position)) and the per-gene QC counts of each layer of
+/// `qc_layers` over the `n_genes` genes present, as a deterministic reduction (5.6:
+/// the same bits on any thread count and block size).
 ///
 /// # Errors
-/// Any error of the stream.
-pub(crate) fn collect_profiles<S>(
+/// Any error of the stream; `KY-E109` if a block lacks a layer asked for and
+/// `KY-E117` if its genes are not the `n_genes` present (kyto bugs, reported).
+pub(crate) fn collect_inputs<S>(
     source: &StreamSource<S>,
     thread_pool: &rayon::ThreadPool,
     wanted: &[(String, u64)],
-) -> Result<Vec<Option<Series>>, KytoError>
+    qc_layers: &[String],
+    n_genes: usize,
+) -> Result<GeneInputs, KytoError>
 where
     S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
 {
-    let pool = CellBlockPool::new(source.window.get());
-    thread_pool.install(|| {
-        let mut found: Vec<Option<Series>> = vec![None; wanted.len()];
-        let mut windows = Windows::open(source, &pool)?;
-        while let Some(items) = windows.next_window() {
-            for item in items {
-                let block = item?;
-                for (slot, (layer, cell)) in found.iter_mut().zip(wanted) {
+    let empty = || GeneInputs::empty(wanted.len(), qc_layers.len(), n_genes);
+    let found = thread_pool.install(|| {
+        reduce_blocks(
+            source,
+            false,
+            empty,
+            |inputs: &mut GeneInputs, block| {
+                for (slot, (layer, cell)) in inputs.profiles.iter_mut().zip(wanted) {
                     if let Some(row) = block.cells.iter().position(|known| known == cell) {
-                        let values =
-                            block
-                                .layers
-                                .get(layer)
-                                .ok_or_else(|| KytoError::MissingMember {
-                                    kind: "layer".to_owned(),
-                                    name: layer.clone(),
-                                    store: source.store.clone(),
-                                    suggestions: Box::default(),
-                                })?;
-                        *slot = Some(dense_row(values, row));
+                        *slot = Some(dense_row(layer_of(block, layer, &source.store)?, row));
                     }
                 }
-                recycle(&pool, block);
-            }
-        }
-        Ok(found)
-    })
+                for (counts, layer) in inputs.counts.iter_mut().zip(qc_layers) {
+                    counts.fold(layer_of(block, layer, &source.store)?)?;
+                }
+                Ok(())
+            },
+            GeneInputs::combine,
+        )
+    })?;
+    Ok(found.unwrap_or_else(empty))
 }
 
-fn recycle(pool: &CellBlockPool, block: PipelineBlock) {
-    for (_, layer) in block.layers {
-        pool.recycle(layer);
-    }
+/// Layer `name` of `block`; `KY-E109` if the stream does not carry it.
+fn layer_of<'a>(
+    block: &'a PipelineBlock,
+    name: &str,
+    store: &str,
+) -> Result<&'a CellBlock, KytoError> {
+    block
+        .layers
+        .get(name)
+        .ok_or_else(|| KytoError::MissingMember {
+            kind: "layer".to_owned(),
+            name: name.to_owned(),
+            store: store.to_owned(),
+            suggestions: Box::default(),
+        })
 }
 
 /// Row `row` of `block` as a dense series over its genes.
@@ -478,7 +554,12 @@ impl GeneSelection {
     }
 }
 
-/// The layers `kind`'s profiles read.
-pub(crate) fn profile_layers(profiles: &[(String, String)]) -> BTreeSet<String> {
-    profiles.iter().map(|(layer, _)| layer.clone()).collect()
+/// The layers a gene step's pass reads: its profiles' and its QC metrics'.
+pub(crate) fn pass_layers(profiles: &[(String, String)], qc_layers: &[String]) -> BTreeSet<String> {
+    profiles
+        .iter()
+        .map(|(layer, _)| layer)
+        .chain(qc_layers)
+        .cloned()
+        .collect()
 }

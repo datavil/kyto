@@ -62,7 +62,7 @@ use crate::connectivities::{self, ConnectivityGraph};
 use crate::cross_cell::{Accumulator, CrossCellKind, CrossCellStage, starts_with_median};
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
-use crate::gene_steps::{GeneStepKind, Genes, collect_profiles, profile_layers};
+use crate::gene_steps::{GeneStepKind, Genes, collect_inputs, pass_layers};
 use crate::hvg;
 use crate::leiden::{self, ClusterStatistics};
 use crate::neighbors::{self, NeighborStatistics};
@@ -463,8 +463,10 @@ impl Pipeline {
                 }
                 Stage::Genes { kind, passes } => {
                     let profiles = kind.profiles();
+                    let qc_layers = kind.qc_layers();
                     let mut values = Vec::new();
-                    if profiles.is_empty() {
+                    let mut counts = Vec::new();
+                    if profiles.is_empty() && qc_layers.is_empty() {
                         // A pass the plan counts that this step does not need (a gene
                         // embedding leaf is read in memory): counted as done.
                         control.add_done(self.grid.n_cells().saturating_mul(u64::from(*passes)));
@@ -478,12 +480,20 @@ impl Pipeline {
                                 ))
                             })
                             .collect::<Result<Vec<_>, KytoError>>()?;
-                        let found = collect_profiles(
-                            &source(Arc::clone(&readers), &operators, profile_layers(&profiles)),
+                        let n_genes = tables.genes()?.len();
+                        let found = collect_inputs(
+                            &source(
+                                Arc::clone(&readers),
+                                &operators,
+                                pass_layers(&profiles, &qc_layers),
+                            ),
                             &thread_pool,
                             &wanted,
+                            &qc_layers,
+                            n_genes,
                         )?;
-                        for (profile, found) in profiles.into_iter().zip(found) {
+                        counts.extend(qc_layers.into_iter().zip(found.counts));
+                        for (profile, found) in profiles.into_iter().zip(found.profiles) {
                             let Some(found) = found else {
                                 return Err(KytoError::UnknownName {
                                     kind: "cell".to_owned(),
@@ -503,7 +513,9 @@ impl Pipeline {
                     }
                     let embeddings = self.embedding_rows(position, &mut members, &statistics)?;
                     let genes = tables.genes()?;
-                    if let Some(selection) = kind.apply(genes, &values, &embeddings, &self.store)? {
+                    if let Some(selection) =
+                        kind.apply(genes, &values, &counts, &embeddings, &self.store)?
+                    {
                         operators.push(Operator::Genes(selection));
                     }
                     continue;
@@ -840,7 +852,8 @@ fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, K
 
 /// Every leaf of a cell step is one the stream computes (table columns, a gene's
 /// values, a QC metric of a named layer, an embedding component), and every leaf of a
-/// gene step one the run computes (table columns, a cell's profile in a named layer,
+/// gene step one the run computes (table columns, a cell's profile or a per-gene QC
+/// metric in a named layer,
 /// a gene embedding component). A resolved plan holds nothing else (R6), so another
 /// leaf means a plan not built by kyto: `KY-E215`.
 fn check_leaves(stages: &[Stage]) -> Result<(), KytoError> {
@@ -861,7 +874,9 @@ fn check_leaves(stages: &[Stage]) -> Result<(), KytoError> {
                 Source::Expression { layer, .. } | Source::Qc { layer, .. } => {
                     cells && layer.is_some() && is_block_leaf(leaf)
                 }
-                Source::Profile { layer, .. } => !cells && layer.is_some(),
+                Source::Profile { layer, .. } | Source::GeneQc { layer, .. } => {
+                    !cells && layer.is_some()
+                }
                 _ => false,
             };
             if !supported {

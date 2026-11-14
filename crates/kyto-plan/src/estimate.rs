@@ -88,13 +88,13 @@
 
 use std::fmt;
 
-use kyto_core::{ColumnDtype, FloatDtype, LayerDtype, LayerSchema};
+use kyto_core::{ColumnDtype, ExprNode, FloatDtype, LayerDtype, LayerSchema, Source};
 
 use crate::cross_cell::CrossCellOp;
 use crate::estimate_tables::TableReads;
 use crate::filter::Predicate;
 use crate::map_elementwise::ElementwiseOp;
-use crate::members::Member;
+use crate::members::{Member, for_each_leaf};
 use crate::node::{CellScope, LogicalNode};
 use crate::optimized_plan::{Operation, OptimizedNode};
 use crate::physical_plan::{Blocks, Device, PCA_POWER_ITERATIONS, PhysicalPlan};
@@ -701,9 +701,37 @@ fn node_resident(node: &OptimizedNode, schema: &PlanSchema, input: Option<&PlanS
     bytes.saturating_add(statistics_bytes(node, input.unwrap_or(schema)))
 }
 
+/// The number of layers the per-gene QC metrics of the gene step `plan` read (task
+/// 6.13); 0 for any other node.
+fn gene_qc_layers(plan: &Plan) -> u128 {
+    let roots: Vec<&ExprNode> = match plan {
+        Plan::Filter(filter) => match filter.params().predicate() {
+            Predicate::Genes(predicate) => vec![predicate.node()],
+            Predicate::Cells(_) => Vec::new(),
+        },
+        Plan::WithColumns(with_columns) => match with_columns.params().columns() {
+            Columns::Genes(columns) => columns.iter().map(|(_, expr)| &**expr.node()).collect(),
+            Columns::Cells(_) => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let mut layers: Vec<Option<String>> = Vec::new();
+    for root in roots {
+        for_each_leaf(root, &mut |source| {
+            if let Source::GeneQc { layer, .. } = source
+                && !layers.contains(layer)
+            {
+                layers.push(layer.clone());
+            }
+        });
+    }
+    layers.len() as u128
+}
+
 /// The leaves a statistics pass of a per-gene node holds at once (task 5.6,
 /// kyto-exec's `reduction.rs`): one per block in flight and the reduction tree's
-/// subtrees (at most `log2(n_blocks) + 1`), each a sum and a sum of squares per gene.
+/// subtrees (at most `log2(n_blocks) + 1`), each a sum and a sum of squares per gene
+/// (a gene step's QC metrics: detected cells and a sum per gene and layer).
 fn reduction_bytes(node: &OptimizedNode, input: &PlanSchema, window: u128, n_blocks: u128) -> u128 {
     let n_genes = u128::from(input.atlas().n_genes);
     let per_leaf = match node.operation() {
@@ -716,7 +744,9 @@ fn reduction_bytes(node: &OptimizedNode, input: &PlanSchema, window: u128, n_blo
                 // Its leaves hold the gathered rows, counted in `statistics_bytes`.
                 CrossCellOp::Scrublet { .. } => 0,
             },
-            _ => 0,
+            // A gene step's per-gene QC metrics (task 6.13): detected cells and a sum
+            // per gene, for each layer read.
+            _ => n_genes * 16 * gene_qc_layers(plan),
         },
         _ => 0,
     };
@@ -744,9 +774,12 @@ fn statistics_bytes(node: &OptimizedNode, input: &PlanSchema) -> u128 {
                 _ => 0,
             },
             Plan::Filter(filter) => match filter.params().predicate() {
-                Predicate::Genes(_) if plan.cell_scope() == CellScope::CrossCell => n_genes * 8,
+                Predicate::Genes(_) if plan.cell_scope() == CellScope::CrossCell => {
+                    n_genes * (8 + 16 * gene_qc_layers(plan))
+                }
                 _ => 0,
             },
+            Plan::WithColumns(_) => n_genes * 16 * gene_qc_layers(plan),
             Plan::CrossCell(cross_cell) => match cross_cell.params().op() {
                 CrossCellOp::Scale { .. } | CrossCellOp::HighlyVariableGenes { .. } => n_genes * 16,
                 CrossCellOp::Pca { n_components, .. } => {

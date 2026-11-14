@@ -56,6 +56,10 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(qc::genes_detected, module)?)?;
     module.add_function(wrap_pyfunction!(qc::total_counts_in, module)?)?;
     module.add_function(wrap_pyfunction!(qc::percent_counts_in, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::cells_detected, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::gene_total_counts, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::gene_mean_counts, module)?)?;
+    module.add_function(wrap_pyfunction!(qc::percent_dropout, module)?)?;
     module.add_function(wrap_pyfunction!(convert::convert, module)?)?;
     module.add_function(wrap_pyfunction!(concat::concat, module)?)?;
     module.add_function(wrap_pyfunction!(sink_h5ad::sink_h5ad, module)?)?;

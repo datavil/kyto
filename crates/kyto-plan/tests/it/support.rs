@@ -18,7 +18,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use kyto_core::{AtlasSchema, Axis, Expr, ExprAxis, ExprNode, GeneIds, Source};
+use kyto_core::{AtlasSchema, Axis, Expr, ExprAxis, ExprNode, GeneIds, GeneQcMetric, Source};
 use kyto_plan::{
     Columns, CrossCellOp, ElementwiseOp, MapElementwise, Member, Members, Operation,
     OptimizeOptions, OptimizedPlan, Output, Plan, Predicate, hvg_columns, loadings_name, optimize,
@@ -872,7 +872,10 @@ fn evaluate<A: ExprAxis>(expr: &Expr<A>, data: &Data) -> Result<Series, String> 
                 stack.push(left);
                 stack.push(right);
             }
-            ExprNode::Not(input) | ExprNode::Str { input, .. } | ExprNode::Null { input, .. } => {
+            ExprNode::Not(input)
+            | ExprNode::Str { input, .. }
+            | ExprNode::Null { input, .. }
+            | ExprNode::Log1p(input) => {
                 stack.push(input);
             }
         }
@@ -921,6 +924,30 @@ fn leaf_values(source: &Source, axis: Axis, data: &Data) -> Result<Vec<f64>, Str
         ) => {
             let cell = positions(&cell_ids, std::slice::from_ref(cell_id))?[0];
             Ok(layer(data, name)?[cell].clone())
+        }
+        // Per-gene QC metrics over the cells present (task 6.13), as scanpy's
+        // `calculate_qc_metrics` per gene.
+        (
+            Source::GeneQc {
+                layer: Some(name),
+                metric,
+            },
+            Axis::Genes,
+        ) => {
+            let rows = layer(data, name)?;
+            let cells = rows.len() as f64;
+            Ok((0..gene_ids.len())
+                .map(|gene| {
+                    let detected = rows.iter().filter(|row| row[gene] != 0.0).count() as f64;
+                    let total: f64 = rows.iter().map(|row| row[gene]).sum();
+                    match metric {
+                        GeneQcMetric::CellsDetected => detected,
+                        GeneQcMetric::TotalCounts => total,
+                        GeneQcMetric::MeanCounts => total / cells,
+                        GeneQcMetric::PercentDropout => (1.0 - detected / cells) * 100.0,
+                    }
+                })
+                .collect())
         }
         (Source::Embedding { name, component }, _) => {
             let (_, rows) = data

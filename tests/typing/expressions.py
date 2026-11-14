@@ -13,7 +13,16 @@ off here, so each ignore names only the error under test.
 from kyto import cell_column, gene_column, gene_expression
 from kyto._kyto import Atlas, CellExpr, GeneExpr
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
-from kyto.qc import genes_detected, percent_counts_in, total_counts, total_counts_in
+from kyto.qc import (
+    cells_detected,
+    gene_mean_counts,
+    gene_total_counts,
+    genes_detected,
+    percent_counts_in,
+    percent_dropout,
+    total_counts,
+    total_counts_in,
+)
 
 
 def accepted(
@@ -108,3 +117,19 @@ def qc_metrics(atlas: Atlas) -> None:
     _ = (total, detected, in_set, resolved, percent < 5)
     _ = total_counts_in(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
     _ = percent_counts_in(cell_column("mito"))  # pyright: ignore[reportArgumentType]
+
+
+def gene_qc_metrics(atlas: Atlas) -> None:
+    """Per-gene QC metrics are numeric gene expressions, and ``log1p`` takes numbers
+    only (task 6.13)."""
+    detected: GeneExpr[Numeric] = cells_detected(layer="counts")
+    total: GeneExpr[Numeric] = gene_total_counts()
+    mean: GeneExpr[Numeric] = gene_mean_counts()
+    dropout: GeneExpr[Numeric] = percent_dropout(layer="counts")
+    logged: GeneExpr[Numeric] = total.log1p()
+    cell_logged: CellExpr[Numeric] = total_counts().log1p()
+    resolved: GeneExpr[Numeric] = atlas.resolve(mean)
+    _ = atlas.filter(detected >= 3).with_genes(log1p_total_counts=logged)
+    _ = (dropout < 99, cell_logged, resolved)
+    _ = (detected >= 3).log1p()  # pyright: ignore[reportAttributeAccessIssue]
+    _ = detected + total_counts()  # pyright: ignore[reportOperatorIssue]

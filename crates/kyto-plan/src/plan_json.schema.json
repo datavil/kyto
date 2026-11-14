@@ -268,8 +268,8 @@
         "op": {
           "enum": [
             "column", "recompute", "gene_expression", "gene_symbol", "cell_profile", "embedding",
-            "feature", "qc", "boolean", "int", "float", "string", "binary", "not", "starts_with",
-            "ends_with", "is_null", "is_not_null"
+            "feature", "qc", "gene_qc", "boolean", "int", "float", "string", "binary", "not",
+            "starts_with", "ends_with", "is_null", "is_not_null", "log1p"
           ]
         }
       },
@@ -280,12 +280,13 @@
         {"if": {"required": ["op"], "properties": {"op": {"const": "cell_profile"}}}, "then": {"$ref": "#/$defs/entry_cell_profile"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "embedding"}}}, "then": {"$ref": "#/$defs/entry_embedding"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "qc"}}}, "then": {"$ref": "#/$defs/entry_qc"}},
+        {"if": {"required": ["op"], "properties": {"op": {"const": "gene_qc"}}}, "then": {"$ref": "#/$defs/entry_gene_qc"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "boolean"}}}, "then": {"$ref": "#/$defs/entry_boolean"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "int"}}}, "then": {"$ref": "#/$defs/entry_int"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "float"}}}, "then": {"$ref": "#/$defs/entry_float"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "string"}}}, "then": {"$ref": "#/$defs/entry_string"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "binary"}}}, "then": {"$ref": "#/$defs/entry_binary"}},
-        {"if": {"required": ["op"], "properties": {"op": {"enum": ["not", "is_null", "is_not_null"]}}}, "then": {"$ref": "#/$defs/entry_unary"}},
+        {"if": {"required": ["op"], "properties": {"op": {"enum": ["not", "is_null", "is_not_null", "log1p"]}}}, "then": {"$ref": "#/$defs/entry_unary"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "starts_with"}}}, "then": {"$ref": "#/$defs/entry_starts_with"}},
         {"if": {"required": ["op"], "properties": {"op": {"const": "ends_with"}}}, "then": {"$ref": "#/$defs/entry_ends_with"}}
       ]
@@ -329,6 +330,16 @@
         "genes": {"type": ["array", "null"], "items": {"$ref": "#/$defs/expr_entry"}}
       }
     },
+    "entry_gene_qc": {
+      "description": "A per-gene QC metric over the cells present (gene expressions only).",
+      "required": ["metric"],
+      "additionalProperties": false,
+      "properties": {
+        "op": true,
+        "metric": {"enum": ["cells_detected", "gene_total_counts", "gene_mean_counts", "percent_dropout"]},
+        "layer": {"$ref": "#/$defs/string_or_null"}
+      }
+    },
     "entry_boolean": {
       "required": ["value"],
       "additionalProperties": false,
@@ -366,7 +377,7 @@
       }
     },
     "entry_unary": {
-      "description": "not, is_null, is_not_null: input is the operand's entry.",
+      "description": "not, is_null, is_not_null, log1p: input is the operand's entry.",
       "required": ["input"],
       "additionalProperties": false,
       "properties": {"op": true, "input": {"$ref": "#/$defs/uint"}}

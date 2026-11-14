@@ -1,7 +1,8 @@
 //! Where the values of an expression come from: the leaves of an expression tree.
 //!
 //! Does: name the four source tags (`Column`, `Expression`, `Profile`, `Embedding`),
-//! plus `Qc`, a per-cell QC metric (task 6.1), `Feature`, a name not yet resolved to one of them (task 3.4), `GeneSymbol`, a
+//! plus `Qc`, a per-cell QC metric (task 6.1), `GeneQc`, a per-gene QC metric (task
+//! 6.13), `Feature`, a name not yet resolved to one of them (task 3.4), `GeneSymbol`, a
 //! gene named by symbol and not yet resolved to its ID (task 3.9), and `Recompute`, a
 //! derived column computed again from its lineage (task 3.8); and say whether a source
 //! is metadata (a table column) or reads the matrix or an embedding.
@@ -11,6 +12,7 @@
 //! ([`crate::CellExpr`] and [`crate::GeneExpr`] constructors do).
 
 use crate::FeatureName;
+use crate::gene_qc_metric::GeneQcMetric;
 use crate::qc_metric::QcMetric;
 
 /// The source tag of an expression leaf.
@@ -69,6 +71,16 @@ pub enum Source {
         layer: Option<String>,
         /// The metric, with its gene set.
         metric: QcMetric,
+    },
+    /// A per-gene QC metric computed from a layer over the cells present where the
+    /// gene step runs (task 6.13): what `cells_detected()`, `gene_total_counts()`,
+    /// `gene_mean_counts()` and `percent_dropout()` build. Gene axis only; reads the
+    /// matrix, so it is not metadata.
+    GeneQc {
+        /// The layer to read; `None` means the plan's default layer.
+        layer: Option<String>,
+        /// The metric.
+        metric: GeneQcMetric,
     },
     /// A derived column of this axis's table computed again from the lineage the store
     /// records for it (task 3.8, format.md §8), not read as stored: what

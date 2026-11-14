@@ -315,6 +315,26 @@ macro_rules! expr_class {
                 self.null_test(py, NullTest::IsNotNull)
             }
 
+            /// The natural logarithm of one plus each value: a float expression.
+            ///
+            /// ``numpy.log1p``: ``-1`` gives ``-inf``, a value below ``-1`` gives
+            /// ``NaN``, a missing value stays missing. scanpy's ``log1p_`` QC columns
+            /// are ``qc.total_counts().log1p()`` and the like. A ``Float32`` input
+            /// gives ``Float32``, every other number ``Float64``.
+            ///
+            /// Returns
+            /// -------
+            /// The same expression class, numeric. Nothing is read.
+            ///
+            /// Raises
+            /// ------
+            /// ExpressionError
+            ///     ``KY-E205``: the expression is not numeric. ``KY-E207``: the
+            ///     expression would be too deep.
+            fn log1p(&self, py: Python<'_>) -> PyResult<Self> {
+                self.expr.log1p().map(|expr| Self { expr }).map_err(|error| to_py_err(py, &error))
+            }
+
             /// This column, computed again from its lineage instead of read as stored.
             ///
             /// A derived column the store computed (one whose ``schema.json`` entry

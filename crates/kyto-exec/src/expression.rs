@@ -3,7 +3,7 @@
 //!
 //! Does: run a resolved expression tree through Polars over a frame holding the table
 //! columns it reads, with every other leaf (a gene's values in a block, a QC metric, a
-//! cell's profile) given as a column of values computed beforehand; turn a boolean
+//! cell's profile, a per-gene QC metric) given as a column of values computed beforehand; turn a boolean
 //! result into a row mask (null is false, R9); cast a column to its declared dtype
 //! (task 4.1: the plan declares it, the executor casts).
 //! Does not: compute the leaves (the cell and gene steps do), or check names and
@@ -137,7 +137,10 @@ fn sources(node: &ExprNode) -> Vec<&Source> {
                 stack.push(right);
                 stack.push(left);
             }
-            ExprNode::Not(input) | ExprNode::Str { input, .. } | ExprNode::Null { input, .. } => {
+            ExprNode::Not(input)
+            | ExprNode::Str { input, .. }
+            | ExprNode::Null { input, .. }
+            | ExprNode::Log1p(input) => {
                 stack.push(input);
             }
         }

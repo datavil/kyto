@@ -32,7 +32,6 @@ from typing import Any
 
 import cellestial as cl
 import kyto as ky
-import numpy as np
 from ggrust import aes
 from kyto import cell_column, gene_column, qc
 
@@ -98,8 +97,7 @@ lap("concat")
 # QC metrics are expressions computed on read (scanpy: `calculate_qc_metrics(qc_vars=
 # ["mt", "ribo", "hb"])`). The haemoglobin pattern `^HB[^(P)]` is "starts with HB, not
 # with HBP": kyto's string expressions have no regular expressions, and no symbol is
-# `HB` alone. kyto has no `log1p_` variants and no per-gene QC columns yet (proposed
-# task 6.13).
+# `HB` alone. The `log1p_` variants are `.log1p()` on the same expressions.
 
 # %%
 symbol = gene_column("symbol")
@@ -108,7 +106,9 @@ ribo = symbol.str.starts_with("RPS") | symbol.str.starts_with("RPL")
 hb = symbol.str.starts_with("HB") & ~symbol.str.starts_with("HBP")
 samples_qc = atlas.with_cells(
     n_genes_by_counts=qc.genes_detected(),
+    log1p_n_genes_by_counts=qc.genes_detected().log1p(),
     total_counts=qc.total_counts(),
+    log1p_total_counts=qc.total_counts().log1p(),
     total_counts_mt=qc.total_counts_in(mito),
     pct_counts_mt=qc.percent_counts_in(mito),
     total_counts_ribo=qc.total_counts_in(ribo),
@@ -128,23 +128,15 @@ qc_scatter = cl.xyplot(
 # %% [markdown]
 # ## Filtering cells and genes
 #
-# `filter_cells(min_genes=100)` is a filter on the QC column. kyto cannot express
-# `filter_genes(min_cells=3)` yet (no per-gene count of detected cells, proposed task
-# 6.13). As a stand-in, the counts of the kept cells are read once (`to_scipy`), the
-# cells per gene counted in NumPy, and the genes kept by ID (`select_genes`).
+# `filter_cells(min_genes=100)` is a filter on the QC column, and
+# `filter_genes(min_cells=3)` a filter on `qc.cells_detected()`: each gene's number of
+# cells with a count, over the cells the plan has kept at that step (scanpy's
+# `n_cells_by_counts`). Both are plan steps: nothing is read here.
 
 # %%
-cells = samples_qc.filter(cell_column("n_genes_by_counts") >= 100)
-gene_ids = cells.gene_ids().to_list()
-counts = cells.layer("counts").to_scipy()
-cells_per_gene = np.bincount(counts.indices, minlength=len(gene_ids))
-kept_genes = [
-    gene_id
-    for gene_id, n_cells in zip(gene_ids, cells_per_gene, strict=True)
-    if n_cells >= 3
-]
-del counts
-filtered = cells.select_genes(kept_genes)
+filtered = samples_qc.filter(cell_column("n_genes_by_counts") >= 100).filter(
+    qc.cells_detected() >= 3
+)
 lap("filters")
 
 # %% [markdown]
@@ -165,6 +157,7 @@ preprocessed = (
     .highly_variable_genes(n_top_genes=2000, batch_key="sample")
     .collect()
 )
+kept_genes = preprocessed.gene_ids().to_list()
 lap("scrublet, normalize, log1p, hvg")
 
 # %% [markdown]
@@ -282,8 +275,7 @@ for group, gene_id in (
 #
 # Highly variable genes (`sc.pl.highly_variable_genes`: normalised dispersion against
 # mean, one point per gene), PCA by sample and mitochondrial share on components 1-2
-# and 3-4, UMAP by sample, cluster, doublet calls and QC (kyto has no `log1p_` QC
-# columns, so the counts are shown as they are), the three resolutions, the marker
+# and 3-4, UMAP by sample, cluster, doublet calls and QC, the three resolutions, the marker
 # dotplots at 0.02 and 0.5 (cellestial has no `standard_scale="var"`), the top five
 # ranked genes of each 0.5 cluster (`sc.pl.rank_genes_groups_dotplot`) and the UMAP of
 # cluster 7's top genes (cluster labels are arbitrary: kyto's 7 is not scanpy's).
@@ -308,7 +300,7 @@ plots: dict[str, Any] = {
     ),
     "umap_qc": cl.umaps(
         adata,
-        ["leiden", "total_counts", "pct_counts_mt", "n_genes_by_counts"],
+        ["leiden", "log1p_total_counts", "pct_counts_mt", "log1p_n_genes_by_counts"],
         size=0.4,
         ncol=2,
     ),

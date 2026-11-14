@@ -307,6 +307,7 @@ impl<'a> Resolver<'a> {
             ExprNode::Not(input) => self.node::<A>(input)?.not(),
             ExprNode::Str { function, input } => self.node::<A>(input)?.str(function.clone()),
             ExprNode::Null { test, input } => self.node::<A>(input)?.null_test(*test),
+            ExprNode::Log1p(input) => self.node::<A>(input)?.log1p(),
         }
     }
 
@@ -600,6 +601,24 @@ impl<'a> Resolver<'a> {
                     Source::Qc {
                         layer: Some(layer),
                         metric,
+                    },
+                    ExprDtype::Numeric,
+                )
+            }
+            Source::GeneQc { layer, metric } => {
+                if A::AXIS != GeneAxis::AXIS {
+                    return Err(unknown(
+                        "QC metric".to_owned(),
+                        metric.function(),
+                        "per-gene QC metrics are gene expressions".to_owned(),
+                        Vec::new(),
+                    ));
+                }
+                let layer = self.layer(layer.as_deref(), &code())?;
+                (
+                    Source::GeneQc {
+                        layer: Some(layer),
+                        metric: *metric,
                     },
                     ExprDtype::Numeric,
                 )

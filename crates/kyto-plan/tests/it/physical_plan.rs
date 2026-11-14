@@ -11,7 +11,7 @@ use crate::support;
 
 use std::sync::Arc;
 
-use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, Literal};
+use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneQcMetric, Literal};
 use kyto_plan::{
     Blocks, Cluster, ClusterMethod, Device, HvgFlavor, Member, Metric, NeighborSearch, Neighbors,
     OptimizeOptions, Output, PCA_POWER_ITERATIONS, PhysicalOptions, PhysicalPlan, Plan, Sink,
@@ -132,6 +132,17 @@ fn cases() -> Vec<(&'static str, Arc<Plan>, u32, u32, Blocks)> {
             C,
         ),
         (
+            "filter_genes on a QC metric",
+            base.filter_genes(&gt_gene(
+                GeneExpr::qc(Some("counts".to_owned()), GeneQcMetric::CellsDetected),
+                2.0,
+            ))
+            .unwrap(),
+            2,
+            1,
+            C,
+        ),
+        (
             "select_genes",
             base.select_genes(["G3".to_owned(), "G1".to_owned()])
                 .unwrap(),
@@ -225,6 +236,19 @@ fn cases() -> Vec<(&'static str, Arc<Plan>, u32, u32, Blocks)> {
             base.with_genes([(
                 "in_c1".to_owned(),
                 GeneExpr::profile(Some("counts".to_owned()), "c1"),
+            )])
+            .unwrap(),
+            1,
+            1,
+            C,
+        ),
+        (
+            "with_genes on a QC metric",
+            base.with_genes([(
+                "log_total".to_owned(),
+                GeneExpr::qc(Some("counts".to_owned()), GeneQcMetric::TotalCounts)
+                    .log1p()
+                    .unwrap(),
             )])
             .unwrap(),
             1,

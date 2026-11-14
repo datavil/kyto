@@ -33,6 +33,7 @@ use crate::expr::{
 use crate::expr_dtype::ExprDtype;
 use crate::expr_source::Source;
 use crate::feature_name::FeatureName;
+use crate::gene_qc_metric::GeneQcMetric;
 use crate::qc_metric::QcMetric;
 use crate::schema::Axis;
 
@@ -104,6 +105,14 @@ pub enum ExprEntry {
         /// The gene set, a gene expression (`null` for a metric without one).
         genes: Option<ExprJson>,
     },
+    /// `cells_detected(layer=layer)`, `gene_total_counts(...)`, `gene_mean_counts(...)`
+    /// or `percent_dropout(...)` (gene axis only, task 6.13).
+    GeneQc {
+        /// The metric, as its constructor's name.
+        metric: GeneQcMetric,
+        /// The layer; `null` is the plan's default layer (resolved plans name it).
+        layer: Option<String>,
+    },
     /// A boolean literal.
     Boolean {
         /// The value.
@@ -161,6 +170,11 @@ pub enum ExprEntry {
     },
     /// `input.is_not_null()`.
     IsNotNull {
+        /// The entry of the operand.
+        input: usize,
+    },
+    /// `input.log1p()` (task 6.13).
+    Log1p {
         /// The entry of the operand.
         input: usize,
     },
@@ -346,7 +360,8 @@ fn operand_positions(entry: &ExprEntry) -> Vec<usize> {
         | ExprEntry::StartsWith { input, .. }
         | ExprEntry::EndsWith { input, .. }
         | ExprEntry::IsNull { input }
-        | ExprEntry::IsNotNull { input } => vec![*input],
+        | ExprEntry::IsNotNull { input }
+        | ExprEntry::Log1p { input } => vec![*input],
         _ => Vec::new(),
     }
 }
@@ -356,7 +371,10 @@ fn operands(node: &Arc<ExprNode>) -> Vec<&Arc<ExprNode>> {
     match node.as_ref() {
         ExprNode::Source(_) | ExprNode::Literal(_) => Vec::new(),
         ExprNode::Binary { left, right, .. } => vec![left, right],
-        ExprNode::Not(input) | ExprNode::Str { input, .. } | ExprNode::Null { input, .. } => {
+        ExprNode::Not(input)
+        | ExprNode::Str { input, .. }
+        | ExprNode::Null { input, .. }
+        | ExprNode::Log1p(input) => {
             vec![input]
         }
     }
@@ -397,6 +415,10 @@ fn entry_of(node: &ExprNode, position: impl Fn(&Arc<ExprNode>) -> usize) -> Expr
                 layer: layer.clone(),
                 genes: metric.genes().map(ExprJson::from_expr),
             },
+            Source::GeneQc { layer, metric } => ExprEntry::GeneQc {
+                metric: *metric,
+                layer: layer.clone(),
+            },
         },
         ExprNode::Literal(literal) => match literal {
             Literal::Boolean(value) => ExprEntry::Boolean { value: *value },
@@ -431,6 +453,9 @@ fn entry_of(node: &ExprNode, position: impl Fn(&Arc<ExprNode>) -> usize) -> Expr
             NullTest::IsNotNull => ExprEntry::IsNotNull {
                 input: position(input),
             },
+        },
+        ExprNode::Log1p(input) => ExprEntry::Log1p {
+            input: position(input),
         },
     }
 }
@@ -552,6 +577,16 @@ fn build_entry<A: ExprAxis>(
                 expr.depth(),
             ))
         }
+        ExprEntry::GeneQc { metric, layer } => {
+            only_on(Axis::Genes, "gene_qc")?;
+            source(
+                Source::GeneQc {
+                    layer: layer.clone(),
+                    metric: *metric,
+                },
+                ExprDtype::Numeric,
+            )
+        }
         ExprEntry::Boolean { value } => literal(Literal::Boolean(*value)),
         ExprEntry::Int { value } => literal(Literal::Int(*value)),
         ExprEntry::Float { value } => literal(Literal::Float(*value)),
@@ -574,6 +609,7 @@ fn build_entry<A: ExprAxis>(
         }
         ExprEntry::IsNull { input } => operand(*input)?.null_test(NullTest::IsNull),
         ExprEntry::IsNotNull { input } => operand(*input)?.null_test(NullTest::IsNotNull),
+        ExprEntry::Log1p { input } => operand(*input)?.log1p(),
     }
 }
 

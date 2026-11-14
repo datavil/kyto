@@ -249,6 +249,8 @@ pub enum ExprNode {
         /// The input, of any kind.
         input: Arc<ExprNode>,
     },
+    /// `input.log1p()`: the natural logarithm of one plus the input (task 6.13).
+    Log1p(Arc<ExprNode>),
 }
 
 impl ExprNode {
@@ -259,9 +261,10 @@ impl ExprNode {
             Self::Source(source) => source.is_metadata(),
             Self::Literal(_) => true,
             Self::Binary { left, right, .. } => left.is_metadata_only() && right.is_metadata_only(),
-            Self::Not(input) | Self::Str { input, .. } | Self::Null { input, .. } => {
-                input.is_metadata_only()
-            }
+            Self::Not(input)
+            | Self::Str { input, .. }
+            | Self::Null { input, .. }
+            | Self::Log1p(input) => input.is_metadata_only(),
         }
     }
 }
@@ -539,6 +542,30 @@ impl<A: ExprAxis> Expr<A> {
         ))
     }
 
+    /// `self.log1p()`: the natural logarithm of one plus each value, a float (task
+    /// 6.13): scanpy's `log1p_` QC columns are `total_counts().log1p()` and the like.
+    /// Follows `numpy.log1p`: `-1` gives `-inf`, a value below `-1` gives `NaN`, a
+    /// missing value stays missing.
+    ///
+    /// # Errors
+    /// `KY-E205` if this expression is not numeric (or unknown); `KY-E207` if the result
+    /// would be deeper than [`MAX_EXPR_DEPTH`].
+    pub fn log1p(&self) -> Result<Self, KytoError> {
+        if !self.dtype.is_one_of(&[ExprDtype::Numeric]) {
+            return Err(operand_error(
+                "log1p",
+                "a numeric expression".to_owned(),
+                &Operand::Expr(self.clone()),
+            ));
+        }
+        let depth = Self::deeper("log1p", self.depth)?;
+        Ok(Self::with_depth(
+            ExprNode::Log1p(Arc::clone(&self.node)),
+            ExprDtype::Numeric,
+            depth,
+        ))
+    }
+
     /// This column read marked to be computed again from its lineage instead of read as
     /// stored (task 3.8): `cell_column('n_genes').recompute()`. A new expression; its
     /// dtype stays as it was (the plan resolves it from the schema). Calling it on a
@@ -803,6 +830,15 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
                     (None, _) => formatter.write_str(")"),
                 }
             }
+            ExprNode::Source(Source::GeneQc { layer, metric }) => match layer {
+                Some(layer) => write!(
+                    formatter,
+                    "{}(layer={})",
+                    metric.function(),
+                    python_string(layer)
+                ),
+                None => write!(formatter, "{}()", metric.function()),
+            },
             ExprNode::Source(Source::Recompute { name }) => {
                 write!(
                     formatter,
@@ -854,6 +890,14 @@ impl<A: ExprAxis> fmt::Display for Code<'_, A> {
                     Self::child(input, nested),
                     test.name()
                 )
+            }
+            ExprNode::Log1p(input) => {
+                // A method, as the null tests above.
+                let nested = matches!(
+                    **input,
+                    ExprNode::Binary { .. } | ExprNode::Not(_) | ExprNode::Literal(_)
+                );
+                write!(formatter, "{}.log1p()", Self::child(input, nested))
             }
         }
     }

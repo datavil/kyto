@@ -289,6 +289,9 @@ fn expr_reads<A: ExprAxis>(expr: &Expr<A>, input: &PlanSchema, reads: &mut Membe
         }
         | Source::Profile {
             layer: Some(layer), ..
+        }
+        | Source::GeneQc {
+            layer: Some(layer), ..
         } => {
             reads.insert(Member::Layer(layer.clone()));
         }
@@ -318,6 +321,7 @@ fn expr_reads<A: ExprAxis>(expr: &Expr<A>, input: &PlanSchema, reads: &mut Membe
         // (R6); nothing else to read.
         Source::Expression { layer: None, .. }
         | Source::Profile { layer: None, .. }
+        | Source::GeneQc { layer: None, .. }
         | Source::GeneSymbol { .. }
         | Source::Feature { .. } => {}
     });
@@ -339,7 +343,10 @@ pub(crate) fn for_each_leaf(root: &ExprNode, visit: &mut dyn FnMut(&Source)) {
                 stack.push(left);
                 stack.push(right);
             }
-            ExprNode::Not(input) | ExprNode::Str { input, .. } | ExprNode::Null { input, .. } => {
+            ExprNode::Not(input)
+            | ExprNode::Str { input, .. }
+            | ExprNode::Null { input, .. }
+            | ExprNode::Log1p(input) => {
                 stack.push(input);
             }
         }

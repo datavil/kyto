@@ -310,6 +310,9 @@ fn single_layer(expression: &Arc<ExprNode>) -> Option<String> {
             }
             | Source::Profile {
                 layer: Some(layer), ..
+            }
+            | Source::GeneQc {
+                layer: Some(layer), ..
             } => layer,
             _ => return None,
         };

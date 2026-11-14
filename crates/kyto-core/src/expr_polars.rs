@@ -17,7 +17,7 @@ impl<A: ExprAxis> Expr<A> {
     /// Columns lower to `col(name)` with the name as written; `/` is true division; the
     /// input of a `str` function is cast to String first, so `Enum` columns work. Missing
     /// values are Polars nulls (R9, format.md §5.5) and follow Polars: a comparison or
-    /// arithmetic with a null is null, `&` and `|` are three-valued (`null | true` is
+    /// arithmetic with a null is null, `log1p` of a null is null, `&` and `|` are three-valued (`null | true` is
     /// true), and a filter keeps only rows where the condition is true.
     pub fn to_polars(&self) -> Option<PolarsExpr> {
         lower(self.node(), &column_leaf)
@@ -82,5 +82,7 @@ fn lower(node: &ExprNode, leaf: &dyn Fn(&Source) -> Option<PolarsExpr>) -> Optio
             NullTest::IsNull => lower(input, leaf)?.is_null(),
             NullTest::IsNotNull => lower(input, leaf)?.is_not_null(),
         },
+        // Polars: `Float32` stays `Float32`, every other number becomes `Float64`.
+        ExprNode::Log1p(input) => lower(input, leaf)?.log1p(),
     })
 }

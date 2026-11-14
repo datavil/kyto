@@ -16,7 +16,8 @@
 use std::sync::Arc;
 
 use kyto_core::{
-    BinaryOp, CellExpr, Expr, ExprAxis, GeneExpr, GeneIds, Literal, NullTest, StrFunction,
+    BinaryOp, CellExpr, Expr, ExprAxis, GeneExpr, GeneIds, GeneQcMetric, Literal, NullTest,
+    StrFunction,
 };
 use kyto_error::KytoError;
 use kyto_plan::{
@@ -282,6 +283,28 @@ fn gene_predicates() -> Vec<GeneExpr> {
             Literal::Float(0.0),
         ),
         gene("mean").null_test(NullTest::IsNull).unwrap(),
+        // Task 6.13: per-gene QC metrics and `log1p`.
+        bin(
+            GeneExpr::qc(None, GeneQcMetric::CellsDetected),
+            BinaryOp::GtEq,
+            Literal::Int(3),
+        ),
+        bin(
+            GeneExpr::qc(Some("counts".to_owned()), GeneQcMetric::TotalCounts)
+                .log1p()
+                .unwrap(),
+            BinaryOp::Gt,
+            bin(
+                GeneExpr::qc(Some("counts".to_owned()), GeneQcMetric::MeanCounts),
+                BinaryOp::Add,
+                GeneExpr::qc(Some("counts".to_owned()), GeneQcMetric::PercentDropout),
+            ),
+        ),
+        bin(
+            gene("mean").log1p().unwrap(),
+            BinaryOp::Lt,
+            Literal::Float(1.0),
+        ),
     ]
 }
 

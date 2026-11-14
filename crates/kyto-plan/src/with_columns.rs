@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use kyto_core::{
     Axis, CellExpr, ColumnDtype, ColumnSchema, Expr, ExprAxis, ExprNode, FloatDtype, GeneExpr,
-    LayerDtype, QcMetric, Source,
+    GeneQcMetric, LayerDtype, QcMetric, Source,
 };
 use kyto_error::KytoError;
 use polars::prelude::{DataFrame, DataType, IntoLazy, Series, col};
@@ -132,7 +132,7 @@ impl Transform for WithColumns {
 /// layer's (`float32` is `Float32`, `uint32` is `UInt32`), an embedding component its
 /// dtype. Any other expression gets the dtype Polars infers for it, asked of Polars
 /// itself with one empty stand-in column per leaf (`Enum` and `String` leaves stand in
-/// as `String`; `uint32` matrix reads and detected genes as `Float64`, so arithmetic
+/// as `String`; `uint32` matrix reads, detected genes and detected cells as `Float64`, so arithmetic
 /// on counts does not wrap, task 5.8), so supertypes, literals that adapt or widen, and true division follow
 /// Polars exactly (`tests/it/column_dtype_polars.rs`). The executor casts each result to
 /// the declared dtype. `Float64` if Polars cannot say (resolution refuses such
@@ -181,7 +181,10 @@ fn inferred_dtype(schema: &PlanSchema, axis: Axis, node: &ExprNode) -> Option<Co
 fn arithmetic_dtype(source: &Source, dtype: ColumnDtype) -> ColumnDtype {
     match (source, dtype) {
         (
-            Source::Expression { .. } | Source::Profile { .. } | Source::Qc { .. },
+            Source::Expression { .. }
+            | Source::Profile { .. }
+            | Source::Qc { .. }
+            | Source::GeneQc { .. },
             ColumnDtype::UInt32,
         ) => ColumnDtype::Float64,
         _ => dtype,
@@ -248,6 +251,14 @@ fn source_dtype(schema: &PlanSchema, axis: Axis, source: &Source) -> ColumnDtype
             QcMetric::TotalCounts
             | QcMetric::TotalCountsIn { .. }
             | QcMetric::PercentCountsIn { .. } => ColumnDtype::Float64,
+        },
+        // As the per-cell metrics: detected cells as `UInt32` (scanpy: `int64`), sums,
+        // means and percentages in `f64`; deviations.md, task 6.13.
+        Source::GeneQc { metric, .. } => match metric {
+            GeneQcMetric::CellsDetected => ColumnDtype::UInt32,
+            GeneQcMetric::TotalCounts | GeneQcMetric::MeanCounts | GeneQcMetric::PercentDropout => {
+                ColumnDtype::Float64
+            }
         },
         // Resolved expressions hold neither; a gene symbol reads a layer like a gene ID.
         Source::GeneSymbol { .. } | Source::Feature { .. } => ColumnDtype::Float32,

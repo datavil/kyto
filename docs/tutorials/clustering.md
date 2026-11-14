@@ -27,15 +27,16 @@ genes plus 140 antibody features that kyto imports and the plan filters out.
 ## Results against scanpy
 
 Measured Nov 14, 2026, macOS 27 arm64 (Apple M4, 10 cores, 16 GB), scanpy 1.12.5,
-anndata 0.13.4, umap-learn 0.5.12, pynndescent 0.7.0, igraph 0.11.9; kyto at the 10.7
-commit. Same seeds as the tutorial (scanpy's defaults, kyto `seed=0`).
+anndata 0.13.4, umap-learn 0.5.12, pynndescent 0.7.0, igraph 0.11.9; kyto's column
+measured again Nov 15, 2026 at the 6.13 commit (the gene filter as a plan step), with
+the same agreement. Same seeds as the tutorial (scanpy's defaults, kyto `seed=0`).
 
 | Check | kyto | scanpy | Agreement |
 |---|---|---|---|
 | Cells kept by `n_genes_by_counts >= 100` | 17 041 | 17 041 | same IDs, same samples |
 | `n_genes_by_counts`, `total_counts`, `total_counts_mt`/`_ribo`/`_hb` | | | equal on every cell |
 | `pct_counts_mt`, `pct_counts_ribo`, `pct_counts_hb` | `Float64` | `float32` | largest relative difference 1.0e-7 (scanpy's `float32` rounding) |
-| Genes kept by `min_cells=3` | 23 427 | 23 427 | same IDs |
+| Genes kept by `min_cells=3` (`filter(qc.cells_detected() >= 3)`, a plan step) | 23 427 | 23 427 | same IDs |
 | Highly variable genes (`batch_key="sample"`) | 2000 | 2000 | 2000 in common |
 | PCA variances (50 components) | | | largest relative difference 1.6e-6 |
 | `leiden` (resolution 1) | 27 clusters | 24 clusters | ARI 0.819 |
@@ -67,18 +68,19 @@ scanpy's numba and BLAS threads), each run twice, the second given:
 
 | | kyto | scanpy (first run) | scanpy (second run) |
 |---|---|---|---|
-| Read, combine, QC | 3.1 s | 6.7 s | 1.5 s |
-| Filters | 1.4 s | 0.3 s | 0.2 s |
-| Scrublet, normalize, log1p, HVG | 30.0 s | 69.1 s | 32.7 s |
-| PCA, neighbours, UMAP, 4 Leiden | 11.1 s | 9.3 s | 8.2 s |
+| Read, combine, QC | 3.0 s | 6.7 s | 1.5 s |
+| Filters | 0.0 s (plan steps: they run with the next stage) | 0.3 s | 0.2 s |
+| Scrublet, normalize, log1p, HVG | 25.9 s | 69.1 s | 32.7 s |
+| PCA, neighbours, UMAP, 4 Leiden | 13.2 s | 9.3 s | 8.2 s |
 | Wilcoxon ranking | 0.1 s (2000 HVGs) | 10.1 s (23 427 genes) | 8.5 s |
-| Hand-off to `AnnData`, plots | 2.8 s | (not plotted) | |
-| **Total** | **48.5 s** | **95.5 s** | **51.0 s** |
-| **Peak RSS** | **4.4 GB** | **6.2 GB** | **5.9 GB** |
+| Hand-off to `AnnData`, plots | 6.6 s | (not plotted) | |
+| **Total** | **48.8 s** | **95.5 s** | **51.0 s** |
+| **Peak RSS** | **4.5 GB** | **6.2 GB** | **5.9 GB** |
 
 scanpy's first run includes numba compiling (scrublet's and UMAP's kernels); its second
-reuses numba's cache. kyto's peak comes from the Scrublet stage (the process held 2.0 GB
-before it: the QC `AnnData` of every gene and the counts read for the gene filter);
+reuses numba's cache. kyto's peak comes from the Scrublet stage (the process held 1.3 GB
+before it: the QC `AnnData` of every gene; the gene filter is one more pass over the
+kept cells inside that stage, 6.13);
 Scrublet holds the layer of each batch and its simulated doublets in memory, as scanpy's
 does (6.12 Open). kyto's Wilcoxon ranking is far cheaper only because it tests 2000 genes
 instead of 23 427 (no gene mask for `pca` yet, below). kyto is the gate's build (maturin builds
@@ -89,20 +91,18 @@ the extension in release for `uv sync`).
 Each is in `Implementation Plan - Done.md` under 10.7 Open, with a proposed task where
 it is real work:
 
-1. **`filter_genes(min_cells=3)`** cannot be written as a plan: kyto has no per-gene
-   count of detected cells (nor the other per-gene QC columns of
-   `calculate_qc_metrics`). The notebook reads the kept cells' counts once
-   (`to_scipy`), counts cells per gene in NumPy and keeps the genes with
-   `select_genes`. Proposed task 6.13.
+1. **`filter_genes(min_cells=3)`**: closed by task 6.13. It is
+   `filter(qc.cells_detected() >= 3)`, a plan step computed over the cells the plan
+   kept (the notebook used to count cells per gene in NumPy outside the plan).
 2. **PCA on the highly variable genes keeps only those genes.** scanpy's `pca` masks
    genes (`mask_var`) and keeps the rest; kyto's reads every gene of the plan, so the
    clustering runs on a branch filtered to the HVGs, and the Wilcoxon ranking tests the
    HVGs only. The marker dotplots read every gene from the unfiltered plan, with the
    Leiden columns copied into its `AnnData` (kyto cannot add another plan's cell
    column). Proposed task 6.14.
-3. **No `log1p_` QC columns** (`log1p_total_counts`, `log1p_n_genes_by_counts`): kyto's
-   expressions have no `log1p`. The UMAP QC panels show the counts as they are
-   (part of 6.13).
+3. **`log1p_` QC columns** (`log1p_total_counts`, `log1p_n_genes_by_counts`): closed by
+   task 6.13. They are `.log1p()` on the QC expressions, and the UMAP QC panels show
+   them as the tutorial does.
 4. **No `pca_variance_ratio` plot**: PCA's variances do not reach Python (`uns` is
    empty, 7.8 Open (2)).
 5. **Leiden's `n_iterations`** is not provided (deviations.md).

@@ -2887,6 +2887,21 @@ class CellExpr(Generic[_D_co]):
     def is_not_null(self) -> CellExpr[Boolean]:
         """Whether each value is present (not null); the negation of ``is_null()``."""
 
+    def log1p(self: _CellExprNumeric) -> CellExpr[Numeric]:
+        """The natural logarithm of one plus each value: a float expression.
+
+        ``numpy.log1p``: ``-1`` gives ``-inf``, a value below ``-1`` gives ``NaN``, a
+        missing value stays missing. scanpy's ``log1p_`` QC columns are
+        ``qc.total_counts().log1p()`` and the like. A ``Float32`` input gives
+        ``Float32``, every other number ``Float64``. Nothing is read.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E205``: the expression is not numeric. ``KY-E207``: the expression
+            would be too deep.
+        """
+
     def recompute(self) -> CellExpr[_D_co]:
         """This column, computed again from its lineage instead of read as stored.
 
@@ -3144,6 +3159,21 @@ class GeneExpr(Generic[_D_co]):
 
     def is_not_null(self) -> GeneExpr[Boolean]:
         """Whether each value is present (not null); the negation of ``is_null()``."""
+
+    def log1p(self: _GeneExprNumeric) -> GeneExpr[Numeric]:
+        """The natural logarithm of one plus each value: a float expression.
+
+        ``numpy.log1p``: ``-1`` gives ``-inf``, a value below ``-1`` gives ``NaN``, a
+        missing value stays missing. scanpy's ``log1p_`` QC columns are
+        ``qc.total_counts().log1p()`` and the like. A ``Float32`` input gives
+        ``Float32``, every other number ``Float64``. Nothing is read.
+
+        Raises
+        ------
+        ExpressionError
+            ``KY-E205``: the expression is not numeric. ``KY-E207``: the expression
+            would be too deep.
+        """
 
     def recompute(self) -> GeneExpr[_D_co]:
         """This column, computed again from its lineage instead of read as stored.
@@ -3539,6 +3569,107 @@ def percent_counts_in(
     >>> mitochondrial = gene_column("symbol").str.starts_with("MT-")
     >>> percent_counts_in(mitochondrial, layer="counts") < 5
     percent_counts_in(gene_column('symbol').str.starts_with('MT-'), layer='counts') < 5
+    """
+
+def cells_detected(*, layer: builtins.str | None = None) -> GeneExpr[Numeric]:
+    """Each gene's number of cells with a non-zero value, as a ``GeneExpr``.
+
+    scanpy's ``n_cells_by_counts`` (``scanpy.pp.calculate_qc_metrics``), computed when
+    a plan reads it, over the cells present then (one pass over them), so it never goes
+    stale. ``atlas.filter(cells_detected() >= 3)`` is scanpy's
+    ``filter_genes(min_cells=3)``.
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to count in. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric (``UInt32``) expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> cells_detected(layer="counts") >= 3
+    cells_detected(layer='counts') >= 3
+    """
+
+def gene_total_counts(*, layer: builtins.str | None = None) -> GeneExpr[Numeric]:
+    """Each gene's total count: the sum of its values over every cell, as a ``GeneExpr``.
+
+    scanpy's per-gene ``total_counts`` (``scanpy.pp.calculate_qc_metrics``), computed
+    when a plan reads it, over the cells present then (one pass over them), so it never
+    goes stale. Summed in ``float64`` (scanpy: ``float32``). scanpy's
+    ``log1p_total_counts`` is ``gene_total_counts().log1p()``.
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to sum. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> gene_total_counts(layer="counts").log1p()
+    gene_total_counts(layer='counts').log1p()
+    """
+
+def gene_mean_counts(*, layer: builtins.str | None = None) -> GeneExpr[Numeric]:
+    """Each gene's mean value over every cell, as a ``GeneExpr``.
+
+    scanpy's ``mean_counts`` (``scanpy.pp.calculate_qc_metrics``):
+    ``gene_total_counts() / <number of cells>``, zeros included, ``NaN`` without
+    cells. Computed when a plan reads it, over the cells present then (one pass over
+    them), so it never goes stale; in ``float64`` (scanpy: ``float32``). scanpy's
+    ``log1p_mean_counts`` is ``gene_mean_counts().log1p()``.
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to average. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> gene_mean_counts(layer="counts") > 0.1
+    gene_mean_counts(layer='counts') > 0.1
+    """
+
+def percent_dropout(*, layer: builtins.str | None = None) -> GeneExpr[Numeric]:
+    """Each gene's percentage of cells without a value, as a ``GeneExpr``.
+
+    scanpy's ``pct_dropout_by_counts`` (``scanpy.pp.calculate_qc_metrics``):
+    ``(1 - cells_detected() / <number of cells>) * 100``, ``NaN`` without cells.
+    Computed when a plan reads it, over the cells present then (one pass over them),
+    so it never goes stale.
+
+    Parameters
+    ----------
+    layer : str or None, default=None
+        The layer to count in. ``None`` reads the plan's default layer
+        (``Atlas.with_default_layer``).
+
+    Returns
+    -------
+    GeneExpr[Numeric]
+        A numeric expression that reads nothing until a plan using it runs.
+
+    Examples
+    --------
+    >>> percent_dropout(layer="counts") < 99
+    percent_dropout(layer='counts') < 99
     """
 
 def from_json(text: builtins.str, /) -> Atlas:

@@ -96,78 +96,114 @@ where
     S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
 {
     thread_pool.install(|| {
-        // As the output's stream (BlockStream::start): the window's blocks and one.
-        let layers_per_block = source.layers.len() + source.operators.len();
-        let pool = CellBlockPool::new(
-            (source.window.get().saturating_add(1)).saturating_mul(layers_per_block),
-        );
-        let mut windows = Windows::open(source, &pool)?;
-        let sequential = accumulator.sequential(pass);
-        let mut tree = BlockOrderTree::new(Partial::combine);
-        // The last leaf of the window before, with its cell block: it goes on if the
-        // next window starts with the same cell block (a split cell block).
-        let mut open_leaf: Option<(u64, Partial)> = None;
-        while let Some(items) = windows.next_window() {
-            let blocks = items.into_iter().collect::<Result<Vec<_>, _>>()?;
-            let mut groups: Vec<(u64, Vec<PipelineBlock>)> = Vec::new();
-            for block in blocks {
-                // An order-dependent fold (Welford's moments, task 6.3) is one leaf: every
-                // block continues it, in cell order, as the parts of one cell block.
-                let leaf_key = if sequential { 0 } else { block.cell_block };
-                match groups.last_mut() {
-                    Some((key, group)) if *key == leaf_key => {
-                        group.push(block);
-                    }
-                    _ => groups.push((leaf_key, vec![block])),
-                }
-            }
-            let mut starts = Vec::with_capacity(groups.len());
-            if let Some((cell_block, leaf)) = open_leaf.take() {
-                if groups
-                    .first()
-                    .is_some_and(|(first, _)| *first == cell_block)
-                {
-                    starts.push(leaf);
-                } else {
-                    tree.push(leaf);
-                }
-            }
-            while starts.len() < groups.len() {
-                starts.push(accumulator.leaf(pass));
-            }
-            let leaves = groups
-                .into_par_iter()
-                .zip(starts)
-                .map(|((cell_block, blocks), mut leaf)| {
-                    for block in blocks {
-                        let layer = block.layers.get(input_layer).ok_or_else(|| {
-                            KytoError::MissingMember {
-                                kind: "layer".to_owned(),
-                                name: input_layer.to_owned(),
-                                store: source.store.clone(),
-                                suggestions: Box::default(),
-                            }
+        reduce_blocks(
+            source,
+            accumulator.sequential(pass),
+            || accumulator.leaf(pass),
+            |leaf, block| {
+                let layer =
+                    block
+                        .layers
+                        .get(input_layer)
+                        .ok_or_else(|| KytoError::MissingMember {
+                            kind: "layer".to_owned(),
+                            name: input_layer.to_owned(),
+                            store: source.store.clone(),
+                            suggestions: Box::default(),
                         })?;
-                        accumulator.fold(pass, &mut leaf, layer, &block)?;
-                        for (_, layer) in block.layers {
-                            pool.recycle(layer);
-                        }
-                    }
-                    Ok((cell_block, leaf))
-                })
-                .collect::<Result<Vec<_>, KytoError>>()?;
-            // Every leaf but the last ended in this window; the last may go on.
-            let mut leaves = leaves.into_iter();
-            open_leaf = leaves.next_back();
-            for (_, leaf) in leaves {
+                accumulator.fold(pass, leaf, layer, block)
+            },
+            Partial::combine,
+        )
+    })
+}
+
+/// One pass over `source`'s stream folded into leaves of `T` (call it inside the
+/// run's thread pool): windows read and computed in parallel, each store cell block's
+/// blocks folded by `fold` one after another in cell order into a leaf started by
+/// `new_leaf` (in parallel over cell blocks; one leaf for the whole stream if
+/// `sequential`), the leaves combined by `combine` in a [`BlockOrderTree`]. `None` for
+/// a stream without blocks. The same bits on any thread count and block size (module
+/// doc). What [`reduce_pass`] runs for a cross-cell node, and a gene step for its
+/// per-gene QC metrics and cell profiles (task 6.13).
+///
+/// # Errors
+/// The stream's errors (opening, reading, the operators) and `fold`'s.
+pub(crate) fn reduce_blocks<S, T, L, F>(
+    source: &StreamSource<S>,
+    sequential: bool,
+    new_leaf: L,
+    fold: F,
+    combine: fn(T, T) -> T,
+) -> Result<Option<T>, KytoError>
+where
+    S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
+    T: Send,
+    L: Fn() -> T,
+    F: Fn(&mut T, &PipelineBlock) -> Result<(), KytoError> + Sync,
+{
+    // As the output's stream (BlockStream::start): the window's blocks and one.
+    let layers_per_block = source.layers.len() + source.operators.len();
+    let pool = CellBlockPool::new(
+        (source.window.get().saturating_add(1)).saturating_mul(layers_per_block),
+    );
+    let mut windows = Windows::open(source, &pool)?;
+    let mut tree = BlockOrderTree::new(combine);
+    // The last leaf of the window before, with its cell block: it goes on if the
+    // next window starts with the same cell block (a split cell block).
+    let mut open_leaf: Option<(u64, T)> = None;
+    while let Some(items) = windows.next_window() {
+        let blocks = items.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let mut groups: Vec<(u64, Vec<PipelineBlock>)> = Vec::new();
+        for block in blocks {
+            // An order-dependent fold (Welford's moments, task 6.3) is one leaf: every
+            // block continues it, in cell order, as the parts of one cell block.
+            let leaf_key = if sequential { 0 } else { block.cell_block };
+            match groups.last_mut() {
+                Some((key, group)) if *key == leaf_key => {
+                    group.push(block);
+                }
+                _ => groups.push((leaf_key, vec![block])),
+            }
+        }
+        let mut starts = Vec::with_capacity(groups.len());
+        if let Some((cell_block, leaf)) = open_leaf.take() {
+            if groups
+                .first()
+                .is_some_and(|(first, _)| *first == cell_block)
+            {
+                starts.push(leaf);
+            } else {
                 tree.push(leaf);
             }
         }
-        if let Some((_, leaf)) = open_leaf {
+        while starts.len() < groups.len() {
+            starts.push(new_leaf());
+        }
+        let leaves = groups
+            .into_par_iter()
+            .zip(starts)
+            .map(|((cell_block, blocks), mut leaf)| {
+                for block in blocks {
+                    fold(&mut leaf, &block)?;
+                    for (_, layer) in block.layers {
+                        pool.recycle(layer);
+                    }
+                }
+                Ok((cell_block, leaf))
+            })
+            .collect::<Result<Vec<_>, KytoError>>()?;
+        // Every leaf but the last ended in this window; the last may go on.
+        let mut leaves = leaves.into_iter();
+        open_leaf = leaves.next_back();
+        for (_, leaf) in leaves {
             tree.push(leaf);
         }
-        Ok(tree.finish())
-    })
+    }
+    if let Some((_, leaf)) = open_leaf {
+        tree.push(leaf);
+    }
+    Ok(tree.finish())
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ mod deterministic_reductions;
 mod embeddings_graphs;
 mod filter_qc_parity;
 mod filters_columns;
+mod gene_qc_parity;
 mod hvg_parity;
 mod kernels;
 mod loess_parity;
