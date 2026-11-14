@@ -15,6 +15,14 @@ classifiers = [
 # The version comes from the workspace Cargo.toml (single source).
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# Plotting (task 7.8): kyto draws no plots; `Atlas.to_anndata` hands results to
+# cellestial (decided by the user, Nov 13, 2026). Not needed by anything else in kyto.
+plot = [
+    "anndata>=0.12.19; python_version >= '3.11'",
+    "cellestial>=0.62.1; python_version >= '3.11'",
+]
+
 [dependency-groups]
 dev = [
     # Builds the bundled static HDF5 (hdf5-metno `static`, task 2.6) for `uv run cargo`.
@@ -43,6 +51,8 @@ dev = [
     # Scrublet reference (task 6.12): scanpy's pp.scrublet finds its automatic
     # threshold with scikit-image's threshold_minimum.
     "scikit-image>=0.25; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # Plotting examples of docs/plotting.md (task 7.8), run as tests.
+    "cellestial>=0.62.1; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
 ]
 
 [tool.maturin]
@@ -52,6 +62,10 @@ module-name = "kyto._kyto"
 features = ["extension-module"]
 
 [tool.uv]
+# cellestial 0.62.1 caps polars < 2 and pandas < 3; the dev env runs polars 2 and pandas 3,
+# with which its plots build (task 7.8, checked on cellestial 0.62.1). Lifts the caps for
+# the dev env only: users of `kyto[plot]` get cellestial's own pins.
+override-dependencies = ["polars[pyarrow]>=1.34", "pandas>=2.2.3"]
 # Rebuild the extension whenever Rust sources or manifests change (memory/build_single_path.md).
 cache-keys = [
     { file = "pyproject.toml" },

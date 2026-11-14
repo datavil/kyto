@@ -1527,6 +1527,91 @@ impl Atlas {
         )
     }
 
+    /// Run the plan and return its output as an ``anndata.AnnData``, for scanpy and
+    /// for plotting with cellestial (kyto draws no plots).
+    ///
+    /// The ``AnnData`` holds what ``sink_h5ad`` writes, with scanpy's names: the
+    /// default layer as ``X`` (no ``X`` without one) and the other layers under
+    /// ``layers``, all CSR (nothing is densified, R8); the cell and gene tables with
+    /// the computed columns as ``obs`` and ``var`` (``Enum`` columns, such as
+    /// ``leiden`` labels or ``concat``'s ``sample``, as categoricals in their category
+    /// order); every cell embedding in ``obsm`` as ``X_<name>`` (``pca`` becomes
+    /// ``X_pca``, a name already starting with ``X_`` is kept); gene embeddings in
+    /// ``varm`` and cell graphs in ``obsp`` under their own names. ``uns`` is empty.
+    /// The plan runs once, into a temporary ``.h5ad`` deleted before returning. The
+    /// GIL is released while the plan computes; Ctrl-C cancels the run cleanly.
+    ///
+    /// Parameters
+    /// ----------
+    /// var_names : str or None, default=None
+    ///     A text gene column (``String`` or ``Enum``) whose values become
+    ///     ``var_names``, such as ``"symbol"`` to name genes by symbol as scanpy's
+    ///     ``read_10x_h5`` does. Repeated values are made unique as
+    ///     ``AnnData.var_names_make_unique`` does (a numbered suffix such as ``-1``
+    ///     on later occurrences, skipping one a gene already has) and a gene with no value keeps its gene ID; the gene IDs move
+    ///     to the ``var`` column ``gene_id``. ``None`` keeps the gene IDs.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory the run may use, such as ``"4GB"``, ``"512MiB"`` or a number
+    ///     of bytes: blocks shrink to fit, and a plan that cannot fit raises before
+    ///     anything is read. ``None`` runs with the default blocks. The returned
+    ///     ``AnnData`` itself is held in memory whole.
+    /// threads : int or None, default=None
+    ///     Threads that read and compute blocks; ``None`` for one per CPU core. The
+    ///     result does not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread whenever the run
+    ///     moved (cell rows, summed over the passes).
+    ///
+    /// Returns
+    /// -------
+    /// anndata.AnnData
+    ///     A new object the caller owns (R2): anndata reads every array from the
+    ///     temporary file into new memory. This plan is unchanged.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``var_names`` is not a text gene column of the plan, or a
+    ///     ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+    ///     ``KY-E216``: the plan already ends in a sink.
+    /// StoreInputError
+    ///     ``KY-E103``: two cell embeddings would get the same ``obsm`` key (``pca``
+    ///     and ``X_pca``). ``KY-E124``: a name ``.h5ad`` cannot hold.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// DeviceError
+    ///     ``KY-E502``: the system cannot start ``threads`` threads.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    /// ModuleNotFoundError
+    ///     anndata is not installed (``pip install "kyto[plot]"``); checked before
+    ///     anything is read.
+    /// KeyboardInterrupt
+    ///     Ctrl-C while the plan computes; the run has stopped and nothing is left.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).with_default_layer("counts")
+    /// >>> adata = atlas.to_anndata(var_names="symbol")
+    /// >>> adata.shape
+    /// (2, 3)
+    /// >>> list(adata.var_names), list(adata.var["gene_id"])
+    /// (['CD3E', 'CD4', 'MS4A1'], ['ENSG01', 'ENSG02', 'ENSG03'])
+    /// >>> pca = atlas.pca(into="pca", n_components=1, seed=0)
+    /// >>> list(pca.to_anndata().obsm)
+    /// ['X_pca']
+    #[pyo3(signature = (*, var_names = None, memory_limit = None, threads = None, progress = None))]
+    fn to_anndata<'py>(
+        &self,
+        py: Python<'py>,
+        var_names: Option<&str>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::to_anndata::to_anndata(py, &self.plan, var_names, memory_limit, threads, progress)
+    }
+
     /// The cell table: a read-only, lazy handle (nothing is read).
     ///
     /// Returns

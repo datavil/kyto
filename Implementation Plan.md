@@ -94,7 +94,7 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12): see [Implementat
 
 Goal: a small, chainable surface where every method has one return type and a typed stub.
 
-Done (7.1, 7.2, 7.3, 7.4, 7.5): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
+Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
 
 - [ ] **7.6 Stubs.** `.pyi` files generated with `pyo3-stub-gen`, NumPy docstrings, `@overload` on `filter` for `CellExpr` and `GeneExpr`.
   - Depends: 7.2, 7.3
@@ -102,10 +102,6 @@ Done (7.1, 7.2, 7.3, 7.4, 7.5): see [Implementation Plan - Done.md](Implementati
 - [ ] **7.7 Repr.** One line, never triggers compute: `<Atlas plan: 7 nodes · cells: ? · genes: 2000 · layers: counts, log1p>`.
   - Depends: 4.6
   - Done when: a test asserts `repr()` performs zero I/O.
-- [ ] **7.8 Plotting through cellestial.** kyto draws no plots; results go to cellestial (decided by the user, Nov 13, 2026). Check what cellestial reads (AnnData, Polars frames or both) and give kyto the hand-off it needs, through 2.7's `.h5ad` export or 7.3/7.5's terminals, without adding `obs`/`var`-style access to kyto (R4). Document one example per plot the clustering tutorial uses (QC violins and scatter, UMAP coloured by sample, cluster and gene, marker dotplot). (added Nov 13, 2026, at the user's request: needed to run scanpy's clustering tutorial)
-  - Depends: 7.3, 7.5
-  - Done when: the documented examples run in the doctests and produce each plot from a kyto result.
-  - Open: (1) cellestial's input format is to be confirmed when the task starts.
 
 ## 8. Agent-friendliness
 

@@ -101,6 +101,8 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "collect",
         "sink_zarr",
         "sink_h5ad",
+        # Plotting hand-off (task 7.8).
+        "to_anndata",
         "cells",
         "genes",
         "layer",

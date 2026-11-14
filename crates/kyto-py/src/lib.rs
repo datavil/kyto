@@ -22,6 +22,7 @@ pub mod rank_genes;
 pub mod run;
 pub mod sink_h5ad;
 pub mod terminal;
+pub mod to_anndata;
 
 /// The package version, taken from the workspace `Cargo.toml` (the single source).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
