@@ -66,9 +66,4 @@ where kyto loses time.
 
 ## Reproducing
 
-The scripts lived outside the repo; in short: generate counts with
-`numpy.random.default_rng(0)` as above and write `.h5ad` (no `obs`/`var` columns that repeat
-the index name, or `ky.convert` raises `KY-E121`), then run the chain from the README
-extended with `.pca(layer="log1p", into="X_pca", n_components=50, seed=0)`,
-`.neighbors("X_pca", n_neighbors=15, seed=0)`, `.leiden(seed=0, into="leiden")`,
-`.umap(into="X_umap", seed=0)` and `sink_zarr`.
+Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).
