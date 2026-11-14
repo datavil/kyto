@@ -44,8 +44,10 @@ decision recorded in the plan.
 ## Task protocol
 
 - An agent takes **one unblocked task**, finishes it until its **Done when** check
-  passes, then ticks it in the plan.
-- Start a task only when every task under its **Depends** is ticked.
+  passes, then ticks it and moves it, with its notes, to
+  [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md) (under its
+  workstream, in ID order), adding its ID to that workstream's "Done" line in the plan.
+- Start a task only when every task under its **Depends** is ticked (in the Done file).
 - Task IDs such as `3.4` never change. New tasks take the next free number; dropped
   tasks stay, struck through.
 - **One task = one commit on `main`.** No task branches or PRs. Commit messages
@@ -252,7 +254,7 @@ Tokens are a budget. Spend them on design and verification, not on re-reading or
    reference looks wrong, follow "Parity with scanpy" above (note, check, ask).
 5. Spin bug-hunting sub agents. Fix confirmed bugs surgically.
 6. Benchmark if the task touches a hot path (time and peak memory).
-7. Format, run all checks, tick the task in the plan, commit to `main` with the
+7. Format, run all checks, tick the task and move it to the Done file, commit to `main` with the
    task ID, and push (`git push origin main`).
 
 ## Commands
