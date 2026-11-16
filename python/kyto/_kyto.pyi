@@ -42,6 +42,8 @@ class Atlas:
     >>> counts = atlas.with_default_layer("counts")
     >>> print(atlas)
     SCAN "..." (2 cells x 3 genes)
+    >>> atlas
+    <Atlas plan: 1 node · cells: 2 · genes: 3 · layers: counts>
     """
 
     def with_default_layer(self, layer: str) -> Atlas:

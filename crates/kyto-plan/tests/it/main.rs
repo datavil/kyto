@@ -18,3 +18,4 @@ mod plan_chain;
 mod plan_json;
 mod plan_validate;
 mod resolve_in_plan;
+mod summary;

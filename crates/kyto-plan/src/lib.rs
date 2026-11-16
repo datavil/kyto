@@ -26,7 +26,8 @@
 //! Explain (task 4.7): [`Explain`] ([`Plan::explanation`], [`Plan::explain`], [`Plan::explain_json`]) shows
 //! the logical and optimized trees with resolved names, as text or JSON. The memory
 //! limit (task 5.5): [`MemoryLimit`] and [`PhysicalPlan::within_memory_limit`] shrink
-//! the streamed blocks until the estimate fits, or give `KY-E401`.
+//! the streamed blocks until the estimate fits, or give `KY-E401`. The one-line summary
+//! (task 7.7): [`Plan::summary`], node count, sizes and layers for `repr()`.
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -57,6 +58,7 @@ mod scan;
 mod scrublet;
 mod select_genes;
 mod sink;
+mod summary;
 mod take_cells;
 mod umap;
 mod with_columns;

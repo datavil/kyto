@@ -45,6 +45,8 @@ use crate::{chain, handoff, rank_genes, terminal};
 /// >>> counts = atlas.with_default_layer("counts")
 /// >>> print(atlas)
 /// SCAN "..." (2 cells x 3 genes)
+/// >>> atlas
+/// <Atlas plan: 1 node · cells: 2 · genes: 3 · layers: counts>
 #[pyclass(frozen, module = "kyto", name = "Atlas")]
 pub struct Atlas {
     plan: Arc<Plan>,
@@ -2524,9 +2526,11 @@ impl Atlas {
         self.plan.to_string()
     }
 
-    /// The plan, one node per line, inside ``<Atlas ...>``.
+    /// The plan in one line: ``<Atlas plan: 7 nodes · cells: ? · genes: 2000 · layers:
+    /// counts, log1p>``. A size only the data can tell (after a filter) is ``?``.
+    /// Nothing is read or computed.
     fn __repr__(&self) -> String {
-        format!("<Atlas\n{}\n>", self.plan)
+        format!("<Atlas {}>", self.plan.summary())
     }
 }
 

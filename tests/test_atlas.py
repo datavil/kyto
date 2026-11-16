@@ -166,4 +166,4 @@ def test_docstring_examples_run(store: Path) -> None:
         }
         runner.run(parser.get_doctest(docstring, globs, name, None, 0))
     assert runner.failures == 0
-    assert runner.tries == 22
+    assert runner.tries == 23
