@@ -117,11 +117,8 @@ Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.7, 7.8): see [Implementation Plan - Done.md](Im
 
 Goal: an agent can inspect data, write a pipeline, check it and fix its own mistakes without reading the matrix or the source code.
 
-Done (8.1, 8.2, 8.4): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
+Done (8.1, 8.2, 8.3, 8.4): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
 
-- [ ] **8.3 Inspection without reading.** `schema()`, `peek(n)`, `features()`, `estimate()`, `explain()` all read metadata only.
-  - Depends: 4.6, 4.7
-  - Done when: the I/O counter shows zero matrix-tile reads for each call.
 - [ ] **8.5 Provenance.** Every store written by kyto holds the plan JSON, kyto and dependency versions, seeds, device and timings.
   - Depends: 2.5, 4.3
   - Done when: `ky.scan(path).provenance()` rebuilds a plan that reproduces the store.

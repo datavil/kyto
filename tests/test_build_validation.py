@@ -103,6 +103,10 @@ def test_every_ky_e2xx_code_fires_without_reading_the_store(tmp_path: Path) -> N
         "KY-E218": lambda: kyto.from_json(
             atlas.to_json().replace('"version":1', '"version":2', 1)
         ),
+        # `peek` refuses before it reads (task 8.3).
+        "KY-E219": lambda: atlas.with_cells(
+            total=kyto.qc.total_counts(layer="counts")
+        ).peek(),
     }
     for code, build in cases.items():
         with pytest.raises(kyto.KytoError) as raised:

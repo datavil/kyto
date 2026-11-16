@@ -151,6 +151,45 @@ fn modality_dict<'py>(py: Python<'py>, modality: &ModalitySchema) -> PyResult<Bo
     Ok(dict)
 }
 
+/// The output schema of `plan` as a new dict shaped like `schema.json` (format.md §8),
+/// for `Atlas.schema()` (task 8.3): `n_cells` and `n_genes` are `None` when only
+/// running the plan can tell them (after a filter on that axis); the members are as
+/// the handles' `schema()` gives them (an `nnz` is then an upper bound).
+pub fn atlas_schema_dict<'py>(py: Python<'py>, plan: &Plan) -> PyResult<Bound<'py, PyDict>> {
+    let output = plan.output_schema();
+    let schema = output.atlas();
+    let tiling = PyDict::new(py);
+    tiling.set_item("cell_block_size", schema.tiling.cell_block_size)?;
+    tiling.set_item("gene_block_size", schema.tiling.gene_block_size)?;
+    let layers = PyList::empty(py);
+    for layer in &schema.layers {
+        layers.append(layer_dict(py, layer)?)?;
+    }
+    let embeddings = PyList::empty(py);
+    for embedding in &schema.embeddings {
+        embeddings.append(embedding_dict(py, embedding)?)?;
+    }
+    let graphs = PyList::empty(py);
+    for graph in &schema.graphs {
+        graphs.append(graph_dict(py, graph)?)?;
+    }
+    let modalities = PyList::empty(py);
+    for modality in &schema.modalities {
+        modalities.append(modality_dict(py, modality)?)?;
+    }
+    let dict = PyDict::new(py);
+    dict.set_item("n_cells", output.n_cells())?;
+    dict.set_item("n_genes", output.n_genes())?;
+    dict.set_item("tiling", tiling)?;
+    dict.set_item("cells", table_dict(py, &schema.cells)?)?;
+    dict.set_item("genes", table_dict(py, &schema.genes)?)?;
+    dict.set_item("layers", layers)?;
+    dict.set_item("embeddings", embeddings)?;
+    dict.set_item("graphs", graphs)?;
+    dict.set_item("modalities", modalities)?;
+    Ok(dict)
+}
+
 /// An [`Estimate`] as a new dict (`None` for what is not known).
 fn estimate_dict<'py>(py: Python<'py>, estimate: Estimate) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);

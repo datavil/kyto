@@ -2116,6 +2116,99 @@ impl Atlas {
         handoff::to_polars(py, frame)
     }
 
+    /// The schema of the plan's output, as a ``dict``; reads no data.
+    ///
+    /// What the plan knows of its output without running: its sizes, the columns of
+    /// both tables and every layer, embedding and graph, steps of the plan included (a
+    /// column added by ``with_cells``, a layer written by ``log1p``). It has the keys
+    /// of the store's ``schema.json`` (format.md section 8) and is built from the
+    /// schema read when the plan was built.
+    ///
+    /// Returns
+    /// -------
+    /// AtlasSchema
+    ///     A new dict the caller owns: ``n_cells`` and ``n_genes`` (``None`` when only
+    ///     running the plan can tell, after a filter on that axis), ``tiling``
+    ///     (``cell_block_size``, ``gene_block_size``), ``cells`` and ``genes`` (as
+    ///     ``Table.schema()``), and the lists ``layers``, ``embeddings``, ``graphs``
+    ///     and ``modalities`` (as the handles' ``schema()``), stored members first,
+    ///     then those the plan adds in plan order (a written store sorts them by
+    ///     name). As for the handles, an ``nnz`` is an upper bound once a step changes
+    ///     the cells or genes or builds the member (``estimate()`` of the handle then
+    ///     says ``None``), a stored column that a step made stale is still listed (a
+    ///     run drops it), and a column the plan computes has no ``lineage`` yet.
+    ///     Nothing is read from the store.
+    ///
+    /// Examples
+    /// --------
+    /// >>> schema = scan(store).schema()
+    /// >>> schema["n_cells"], schema["n_genes"]
+    /// (2, 3)
+    /// >>> schema["layers"]
+    /// [{'name': 'counts', 'dtype': 'uint32', 'nnz': 3}]
+    /// >>> [column["name"] for column in schema["genes"]["columns"]]
+    /// ['gene_id', 'symbol', 'feature_type']
+    /// >>> kept = scan(store).filter(cell_column("cell_id") != "AAAC-1")
+    /// >>> kept.schema()["n_cells"] is None
+    /// True
+    fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        crate::handles::atlas_schema_dict(py, &self.plan)
+    }
+
+    /// The first ``n`` rows of the plan's cell table, from metadata alone.
+    ///
+    /// A look at the cells the plan gives without running it over the matrix: only the
+    /// store's cell and gene tables are read, never a layer, an embedding or a graph.
+    /// Steps on metadata are applied (a ``filter`` or ``with_cells`` on stored
+    /// columns, ``take_cells``), and steps the cell table does not depend on are left
+    /// out (``log1p``, ``pca``). A plan whose cell table needs the data (a QC column,
+    /// a filter of cells or genes on expression values, a clustering) is refused: run
+    /// it with ``cells.to_polars()`` or ``select``.
+    ///
+    /// Parameters
+    /// ----------
+    /// n : int, default=5
+    ///     The most rows to return, 0 or more.
+    ///
+    /// Returns
+    /// -------
+    /// polars.DataFrame
+    ///     A new frame the caller owns (R2): ``cell_id``, then the columns
+    ///     ``cells.to_polars()`` gives (a stored column that a step made stale is
+    ///     left out, as there), for the first ``n`` cells of the plan's output in
+    ///     store order (fewer when the plan keeps fewer), with the dtypes ``select``
+    ///     gives.
+    ///     Handed to Polars without a copy (the Arrow C stream interface).
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E219``: the plan's cell table depends on a step that reads a layer, an
+    ///     embedding or a graph (the message names the step and what it reads);
+    ///     ``KY-E215``: ``n`` is not an int of 0 or more.
+    /// CorruptStoreError
+    ///     ``KY-E127``: the store changed since it was scanned.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).peek(1).rows()
+    /// [('AAAC-1',)]
+    /// >>> scan(store).filter(cell_column("cell_id") != "AAAC-1").peek().rows()
+    /// [('AAAG-1',)]
+    /// >>> scan(store).with_cells(total=total_counts(layer="counts")).peek()
+    /// Traceback (most recent call last):
+    /// ...
+    /// kyto.errors.PlanError: KY-E219: peek() reads metadata only, but this plan's cell table needs 'layer:counts', which 'with_cells' reads...
+    #[pyo3(signature = (n = None, /))]
+    fn peek<'py>(
+        &self,
+        py: Python<'py>,
+        n: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let n = chain::optional_integer(py, "peek", "n", n, 0)?.unwrap_or(5);
+        feature_access::peek(py, &self.plan, usize::try_from(n).unwrap_or(usize::MAX))
+    }
+
     /// The cell IDs of the plan's output, in order, as a Polars ``Series``.
     ///
     /// Reads the store's cell IDs in place when no step changes the cells; runs the plan

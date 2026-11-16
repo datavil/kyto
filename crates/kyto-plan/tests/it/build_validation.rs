@@ -151,6 +151,15 @@ fn plan_build_errors() -> Vec<KytoError> {
         error(Plan::from_json(
             r#"{"format":"kyto-plan","version":2,"nodes":[]}"#,
         )),
+        // A peek at a cell table that needs a layer (task 8.3): refused before a read.
+        error(
+            scan()
+                .with_cells([(
+                    "x".to_owned(),
+                    CellExpr::expression(Some("counts".to_owned()), "G1"),
+                )])
+                .and_then(|plan| plan.peek_output()),
+        ),
     ]
 }
 

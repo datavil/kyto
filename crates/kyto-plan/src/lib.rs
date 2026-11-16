@@ -28,6 +28,8 @@
 //! limit (task 5.5): [`MemoryLimit`] and [`PhysicalPlan::within_memory_limit`] shrink
 //! the streamed blocks until the estimate fits, or give `KY-E401`. The one-line summary
 //! (task 7.7): [`Plan::summary`], node count, sizes and layers for `repr()`.
+//! Peek (task 8.3): [`Plan::peek_output`], the cell table as an output that the store's
+//! tables alone answer (`KY-E219` when it needs a layer, an embedding or a graph).
 #![forbid(unsafe_code)]
 
 mod cluster;
@@ -49,6 +51,7 @@ mod optimize_predicate;
 mod optimize_projection;
 mod optimize_reuse;
 mod optimized_plan;
+mod peek;
 mod physical_plan;
 mod plan;
 mod plan_json;

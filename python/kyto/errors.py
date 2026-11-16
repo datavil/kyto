@@ -524,6 +524,7 @@ class PlanError(KytoError, ValueError):
     - ``KY-E216``: A plan that ends in a sink is extended with another step.
     - ``KY-E217``: Text given to from_json is not a plan JSON, or breaks its format.
     - ``KY-E218``: A plan JSON has a version this kyto does not read.
+    - ``KY-E219``: peek() is called on a plan whose cell table cannot be read from metadata alone.
 
     See `KytoError` for the parameters and attributes.
 
@@ -1060,6 +1061,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("found", "int"),
             _Field("supported", "int"),
+        ),
+    ),
+    "KY-E219": _Entry(
+        class_name="PlanError",
+        message="peek() reads metadata only, but this plan's cell table needs '{member}', which '{step}' reads",
+        hint="run the plan for its cell table with cells.to_polars() or select(...), or call peek() on the plan before '{step}'",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e219",
+        fields=(
+            _Field("step", "str"),
+            _Field("member", "str"),
         ),
     ),
     "KY-E301": _Entry(

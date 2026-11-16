@@ -14,6 +14,7 @@ mod filter_qc_parity;
 mod filters_columns;
 mod gene_qc_parity;
 mod hvg_parity;
+mod inspection;
 mod kernels;
 mod loess_parity;
 mod multi_pass;

@@ -8,8 +8,9 @@
 //! the stream yields; pair them with the store's cell IDs (`select`, `pull_genes`); give
 //! the cell and gene IDs and counts of the plan's output from the plan when it knows
 //! them (no filter on data), and by running the plan otherwise; list the feature names
-//! the plan resolves (`features`, metadata only); read the scanned store's
-//! `provenance.json` (`metadata`).
+//! the plan resolves (`features`, metadata only); show the first rows of the plan's
+//! cell table from the store's tables alone (`peek`, task 8.3); read the scanned
+//! store's `provenance.json` (`metadata`).
 //! Does not: write anything (no temporary store), read a layer outside the features'
 //! leaves, or decide how a name resolves (`kyto_core::Resolver` does).
 
@@ -191,7 +192,7 @@ pub fn select_cells<'py>(
     named: Vec<(String, CellExpr)>,
     args: RunArgs<'_, 'py>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let frame = cell_frame(py, function, plan, parameter, named, args)?;
+    let frame = cell_frame(py, function, plan, parameter, named, args, None)?;
     handoff::to_polars(py, frame)
 }
 
@@ -212,6 +213,7 @@ pub fn pull_cells<'py>(
         "feature",
         vec![("value".to_owned(), expression)],
         args,
+        None,
     )?;
     let values = frame
         .column("value")
@@ -266,7 +268,9 @@ pub fn pull_genes_column<'py>(
     handoff::to_polars(py, frame)?.call_method1("to_series", (0,))
 }
 
-/// `cell_id` and the `named` cell features of `plan`'s output, as a Rust frame.
+/// `cell_id` and the `named` cell features of `plan`'s output, as a Rust frame: every
+/// cell, or with a `limit` the first `limit` cells. The run is whole either way: a check
+/// made at its end (`take_cells` of a cell that a filter removed) still fires.
 fn cell_frame(
     py: Python<'_>,
     function: &str,
@@ -274,6 +278,7 @@ fn cell_frame(
     parameter: &str,
     named: Vec<(String, CellExpr)>,
     args: RunArgs<'_, '_>,
+    limit: Option<usize>,
 ) -> PyResult<DataFrame> {
     if named.is_empty() {
         return Err(refuse(
@@ -322,11 +327,19 @@ fn cell_frame(
         .map(|name| Member::CellColumn(name.clone()))
         .collect();
     let streamed = stream(py, function, &computed, reads, args)?;
-    let ids = cell_ids_at(py, plan, &streamed.cells)?;
+    let kept = limit.map_or(streamed.cells.len(), |limit| {
+        streamed.cells.len().min(limit)
+    });
+    let ids = cell_ids_at(py, plan, &streamed.cells[..kept])?;
     let mut frame_columns: Vec<Column> = Vec::with_capacity(names.len() + 1);
     frame_columns.push(Series::new("cell_id".into(), ids).into_column());
     for (hidden_name, name) in hidden_names.iter().zip(&names) {
         let values = column_values(py, &computed, &streamed.columns, hidden_name)?;
+        let values = if kept < values.len() {
+            values.head(Some(kept))
+        } else {
+            values
+        };
         frame_columns.push(values.with_name(name.as_str().into()).into_column());
     }
     DataFrame::new_infer_height(frame_columns).map_err(|error| polars_error(py, plan, &error))
@@ -393,6 +406,45 @@ fn polars_error(py: Python<'_>, plan: &Plan, error: &polars::prelude::PolarsErro
         problem: format!("assembling a feature-access result failed: {error}"),
     };
     to_py_err(py, &error)
+}
+
+/// The first `n` rows of `plan`'s cell table (`cell_id`, then every cell column in
+/// table order that is not stale), read from the store's tables alone (task 8.3): `Plan::peek_output`
+/// refuses a plan whose cell table needs a layer, an embedding or a graph (`KY-E219`),
+/// and the whole (tables-only) run is cut to `n` cells.
+pub fn peek<'py>(py: Python<'py>, plan: &Arc<Plan>, n: usize) -> PyResult<Bound<'py, PyAny>> {
+    plan.peek_output().map_err(|error| to_py_err(py, &error))?;
+    // Before the tables are read: a replaced store is `KY-E127`, not a corrupt table.
+    checked_store(py, plan)?;
+    let args = RunArgs {
+        memory_limit: None,
+        threads: None,
+        progress: None,
+    };
+    // Each column is read as `select` reads a stored or computed cell column. A stored
+    // column a step made stale is left out, as the sinks and `cells.to_polars()` do.
+    let mut named: Vec<(String, CellExpr)> = Vec::new();
+    for column in &plan.schema().cells.columns {
+        if column.name == "cell_id" {
+            continue;
+        }
+        let expression = CellExpr::column(column.name.clone());
+        match plan.resolve(&expression) {
+            Ok(_) => named.push((column.name.clone(), expression)),
+            Err(KytoError::StaleColumn { .. }) => {}
+            Err(error) => return Err(to_py_err(py, &error)),
+        }
+    }
+    let frame = if named.is_empty() {
+        let streamed = stream(py, "peek", plan, Vec::new(), args)?;
+        let kept = streamed.cells.len().min(n);
+        let ids = cell_ids_at(py, plan, &streamed.cells[..kept])?;
+        DataFrame::new_infer_height(vec![Series::new("cell_id".into(), ids).into_column()])
+            .map_err(|error| polars_error(py, plan, &error))?
+    } else {
+        cell_frame(py, "peek", plan, "n", named, args, Some(n))?
+    };
+    handoff::to_polars(py, frame)
 }
 
 /// The cell IDs of `plan`'s output, in order: the store's when no step changes the

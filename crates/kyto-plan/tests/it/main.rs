@@ -13,6 +13,7 @@ mod lineage;
 mod logical_nodes;
 mod normalize_log1p_explain;
 mod optimizer;
+mod peek;
 mod physical_plan;
 mod plan_chain;
 mod plan_json;

@@ -683,6 +683,18 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E219"
+variant = "PeekNeedsData"
+class = "PlanError"
+summary = "peek() is called on a plan whose cell table cannot be read from metadata alone."
+message = "peek() reads metadata only, but this plan's cell table needs '{member}', which '{step}' reads"
+hint = "run the plan for its cell table with cells.to_polars() or select(...), or call peek() on the plan before '{step}'"
+fields = [
+    { name = "step", type = "str", doc = "The plan method whose step reads data.", example = "with_cells" },
+    { name = "member", type = "str", doc = "What it reads, as kind:name.", example = "layer:counts" },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"
