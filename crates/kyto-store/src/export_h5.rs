@@ -24,15 +24,25 @@ pub(crate) struct H5Out {
 impl H5Out {
     /// Create (truncate) the HDF5 file at `path`; messages name `target`.
     ///
+    /// The file is written without HDF5 file locking. HDF5 opens files without
+    /// close-on-exec and `flock`s them, so a child process the host starts while the
+    /// file is open inherits the descriptor and, with it, the writer's exclusive lock:
+    /// the lock then outlives the writer, and opening the renamed target fails with
+    /// `errno 35` (EAGAIN) until the child exits. `path` is a temporary file with a
+    /// random name that only this writer opens, so the lock guards nothing.
+    ///
     /// # Errors
     /// `KY-E110` if it cannot be created.
     pub(crate) fn create(path: &Path, target: &Path) -> Result<Self, KytoError> {
         let target = target.display().to_string();
-        let file = File::create(path).map_err(|error| KytoError::StoreIo {
-            operation: "create".to_owned(),
-            path: target.clone(),
-            detail: error.to_string(),
-        })?;
+        let file = File::with_options()
+            .with_fapl(|fapl| fapl.file_locking(false))
+            .create(path)
+            .map_err(|error| KytoError::StoreIo {
+                operation: "create".to_owned(),
+                path: target.clone(),
+                detail: error.to_string(),
+            })?;
         Ok(Self { file, target })
     }
 

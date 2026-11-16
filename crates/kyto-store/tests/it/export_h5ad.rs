@@ -642,3 +642,56 @@ fn names_and_strings_h5ad_cannot_hold_are_e124() {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "{error}");
     }
 }
+
+/// A child process started by another thread while `sink_h5ad` writes does not keep
+/// the new file locked. HDF5 opens files without close-on-exec and `flock`s them, so a
+/// child forked during the write inherits the descriptor, and with it the writer's
+/// exclusive lock, which then outlives the writer and makes the next open of the
+/// target fail with `errno 35` (EAGAIN) until the child exits. The export writes its
+/// temporary file without HDF5 file locking, so there is no lock to inherit.
+#[cfg(unix)]
+#[test]
+fn a_child_started_during_the_write_does_not_lock_the_output() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("in.kyto");
+    write_store(&store, &cell_table(None));
+    let writing = AtomicBool::new(true);
+    let mut children = Vec::new();
+    std::thread::scope(|scope| {
+        let spawner = scope.spawn(|| {
+            let mut children = Vec::new();
+            while writing.load(Ordering::Relaxed) {
+                children.push(
+                    std::process::Command::new("sleep")
+                        .arg("30")
+                        .spawn()
+                        .unwrap(),
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            children
+        });
+        for round in 0..5 {
+            let h5ad = dir.path().join(format!("out-{round}.h5ad"));
+            sink_h5ad(&store, &h5ad, &options(Some("counts"))).unwrap();
+            let opened = File::open(&h5ad);
+            if let Err(error) = &opened {
+                // Who holds the file, for the failure message (the leaked children).
+                if let Ok(holders) = std::process::Command::new("lsof").arg(&h5ad).output() {
+                    eprintln!("{}", String::from_utf8_lossy(&holders.stdout));
+                }
+                writing.store(false, Ordering::Relaxed);
+                panic!("round {round}: {error}");
+            }
+        }
+        writing.store(false, Ordering::Relaxed);
+        children = spawner.join().unwrap();
+    });
+    assert!(!children.is_empty());
+    for mut child in children {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+}

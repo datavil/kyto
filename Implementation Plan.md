@@ -80,6 +80,15 @@ Goal: any plan runs within a memory limit, uses every core, and gives the same a
 
 Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
+- [ ] **5.12 Materialize multi-pass inputs.** When a node that needs several passes (PCA, `scale`, differential expression, doublet detection) has an input that fits the memory limit, hold that input once in memory as CSR and iterate there instead of re-reading the store on every pass; otherwise stream as today. The physical plan chooses, `explain()` shows the choice, and `estimate()` counts the held bytes and the passes saved. Results keep their bits (R11). (added Nov 14, 2026, at the user's request: a profile at 50k cells × 2,000 HVGs on a 10-core Mac put PCA at 17.6 s on one thread, about 1 s of it PCA arithmetic and the rest zstd decoding, the gene subset, `log1p` and tile checks repeated on each of 11 passes; scanpy 2.5 s, kyto 7 to 9 s on 10 threads)
+  - Depends: 5.5, 5.6, 6.5
+  - Done when: on the `benchmarks/scanpy_workflow` 50k data PCA takes at most 1.5× scanpy's time on the same machine, with the embedding bit-identical to the streamed path's at 1, 4 and all threads; a memory limit below the input's size still streams (test).
+  - Open: (1) whether a one-pass covariance path for few genes (gene × gene matrix, exact solve, one projection pass) is still worth building; measure again after this task.
+- [ ] **5.13 Default blocks in flight.** With no memory limit, `blocks_in_flight` defaults to the thread count instead of 2; with a limit, 5.5's fit chooses. (added Nov 14, 2026, at the user's request: the same profile showed 10 threads giving 2.4× over one thread on PCA's passes)
+  - Depends: 5.2, 5.5
+  - Done when: the benchmark's preprocessing and PCA passes scale at least 5× from 1 to 10 threads on the 50k data, and outputs are bit-identical at 1, 4 and all threads.
+  - Open: (1) that the default of 2 is the cap is inferred from the idle cores, not yet tested; confirm by setting it before changing the default.
+
 ## 6. Algorithms (`kyto-algo`)
 
 Goal: the standard scanpy workflow, streamed, with each step checked against scanpy on the 1.5 fixtures.
@@ -92,6 +101,10 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13): see [Imple
 - [ ] **6.14 PCA on a gene subset.** `pca(..., genes=<GeneExpr>)`, scanpy's `mask_var`: the components are computed over the genes where the predicate holds (`gene_column("highly_variable")`) while the plan keeps every gene, so marker plots and `rank_genes_groups` after clustering see all genes in one plan. (proposed by the agent in 10.7, Nov 14, 2026: the clustering tutorial clusters on a branch filtered to the HVGs and ranks only those genes)
   - Depends: 6.5, 7.2
   - Done when: `pca(genes=gene_column("highly_variable"))` gives the same embedding as `filter(gene_column("highly_variable")).pca(...)` bit for bit, and the clustering tutorial runs as one plan with its Wilcoxon ranking over every kept gene compared with scanpy's.
+- [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
+  - Depends: 6.9, 5.3
+  - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.
+  - Open: (1) profile the SGD on Linux x86 first, to confirm `pow` is the cause of the gap there.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -122,7 +135,7 @@ Done (8.1, 8.2, 8.4): see [Implementation Plan - Done.md](Implementation%20Plan%
   - Depends: 7.6
   - Done when: every public method appears in `llms.txt` and its example passes.
 - [ ] **8.7 Reproducibility test.** Same input, plan and seed give a byte-identical store (R11).
-  - Depends: 8.5, 5.6
+  - Depends: 8.5, 5.6, 5.12
   - Done when: CI writes a reference pipeline twice and compares checksums.
 
 ## 9. GPU backend (`kyto-gpu`)
@@ -136,7 +149,7 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
   - Depends: 9.1, 5.3
   - Done when: each kernel matches CPU output to 1e-6 relative.
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
-  - Depends: 9.1, 6.5
+  - Depends: 9.1, 6.5, 5.12
   - Done when: GPU PCA matches CPU PCA within the 6.5 tolerances.
 - [ ] **9.4 GPU neighbours.** Tiled brute-force distance via GEMM plus top-k selection.
   - Depends: 9.3, 6.6
@@ -171,7 +184,7 @@ Done (10.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Don
   - Depends: 5.2
   - Done when: CI posts a benchmark table on PRs and flags regressions.
 - [ ] **10.4 Tile size study.** Benchmark cell-block × gene-block sizes for cell scans, gene lookups and PCA; set the 2.2 defaults from the results.
-  - Depends: 2.4, 10.3
+  - Depends: 2.4, 10.3, 5.12, 5.13
   - Done when: the chosen defaults and the benchmark table are in `docs/format.md`.
 - [ ] **10.5 Docs site.** mkdocs-material with mkdocstrings (NumPy style), a design-rules page (R1–R12), an error-code page from 8.1, and the AnnData → kyto migration table.
   - Depends: 7.6, 8.1
@@ -193,6 +206,6 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M0 Skeleton | 1.1–1.6, 8.1 |
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
-| M3 Full analysis | 2.9, 6.4–6.10, 6.12, 7.8, 8.4–8.7, 10.4, 10.7 |
+| M3 Full analysis | 2.9, 5.12–5.13, 6.4–6.10, 6.12, 6.15, 7.8, 8.4–8.7, 10.4, 10.7 |
 | M4 GPU backend | 9.1–9.8 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
