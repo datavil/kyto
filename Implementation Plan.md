@@ -102,6 +102,10 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see 
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.
   - Open: (1) profile the SGD on Linux x86 first, to confirm `pow` is the cause of the gap there.
+- [ ] **6.16 Metacells by e-means (opt-in).** A `metacells(n_metacells=, n_components=, epochs=, seed=, into=)` method that groups cells into many small groups (about n/50 to n/500) with e-means, the mini-batch k-means of Bessa et al., "e-means: outperforming k-means (in one-tenth the epochs)", arXiv 2611.09501 (Nov 2026). The algorithm works in mini-batches. Each centroid is a running sum divided by a running count, both updated by EMA. The step size follows a cosine schedule, and clusters that end up nearly empty are re-seeded. Initialization takes k random cells (not k-means++), and the final centroids are the mean of the cells assigned to each in the last epoch. Input is a `pca` embedding; output is a `String` metacell label per cell plus a centroid embedding. **Opt-in only** (decided by the user, Nov 19, 2026): it runs only when the user calls `metacells`. No other method, default or `device="auto"` rule ever inserts it, and Leiden/Louvain stay the clustering. The method is written in Rust from the paper, with no Faiss dependency. Batches are shuffled with `seed` (R7), and assignments and sums use a fixed reduction order (R11). (added Nov 19, 2026, at the user's request: the paper reports beating Lloyd at 25 epochs in 1.4 to 2.6 epochs, at k from 256 to 16M on 96- to 1024-d embeddings; it was not tested on single-cell data)
+  - Depends: 6.5, 7.2, 5.3
+  - Done when: on pbmc3k and the `benchmarks/scanpy_workflow` 50k data (PCA, 50 components), e-means at 3 epochs or fewer reaches a training MSE at most that of Lloyd with 25 iterations (scikit-learn `KMeans`, same k and random init) at k = n/50 and n/200; labels and centroids are bit-identical at 1, 4 and all threads; a plan without `metacells` gives the same `explain()`, `estimate()` and output as before the task (test); `explain()` shows the node when it is called.
+  - Open: (1) the paper's step-size and batch-size laws (its Eq. 6 and 7) were fitted on DEEP (d = 96, k ≥ 256); refit or replace them for 50-component PCA and k ≈ n/50 before using their constants. (2) Which downstream steps take metacells as input (pseudobulk aggregation of counts, `neighbors`/`leiden` on centroids), and how the sinks store them, is undecided. (3) An IVF index trained by e-means for approximate `neighbors` on very large atlases (next to HNSW, 6.6; GPU, 9.4) is not part of this task; it would be a separate opt-in task if wanted.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -197,6 +201,6 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M0 Skeleton | 1.1–1.6, 8.1 |
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
-| M3 Full analysis | 2.9, 5.12–5.13, 6.4–6.10, 6.12, 6.15, 7.8, 8.4–8.7, 10.4, 10.7 |
+| M3 Full analysis | 2.9, 5.12–5.13, 6.4–6.10, 6.12, 6.15–6.16, 7.8, 8.4–8.7, 10.4, 10.7 |
 | M4 GPU backend | 9.1–9.8 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
