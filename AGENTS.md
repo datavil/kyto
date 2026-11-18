@@ -50,7 +50,9 @@ decision recorded in the plan.
 - Start a task only when every task under its **Depends** is ticked (in the Done file).
 - Task IDs such as `3.4` never change. New tasks take the next free number; dropped
   tasks stay, struck through.
-- **One task = one commit on `main`.** No task branches or PRs. Commit messages
+- **One task = one commit on `main`.** No PRs. A task may be built on a worktree
+  branch (see Orchestration), but it lands on `main` as one fast-forwarded commit and
+  the branch is then deleted. Commit messages
   start with the ID: `[3.4] feature resolver`.
 - **Push after every commit.** As soon as a task commit (or a maintenance or decision
   commit) is on `main`, run `git push origin main`, so no finished work sits only on
@@ -62,6 +64,25 @@ decision recorded in the plan.
   the user, Nov 7, 2026). Where a **Done when** says "CI fails if ...", the check must
   be a command in `Run by CI`, so the local gate enforces it too.
 - If a task is unclear, add an open question under it in the plan instead of guessing.
+
+## Orchestration (decided by the user, Nov 19, 2026)
+
+- **Maestro.** When the user asks to work through the remaining plan items, the main
+  session is the maestro and does not implement tasks itself. It starts one sub-session
+  per plan item, **one at a time**: it waits until that session has fully finished
+  (Done-when check, local gate, bug hunt, commit) before starting the next one.
+- **Version control.** Each sub-session works in its own git worktree on its own
+  branch. When it is done, the maestro checks the result and merges it into `main`
+  (rebase onto `main`, fast-forward, `git push origin main`), then removes the worktree
+  and deletes the branch, local and remote. No stale worktrees or branches stay behind.
+- **Performance.** Work that is critical for speed or memory is benchmarked against
+  scanpy or Seurat (time and peak memory, under golden rule 8). The numbers go in
+  [performance.md](performance.md) in the same commit, including the cases where kyto
+  loses.
+- **Parity.** The results of workflows and functions are compared with scanpy or Seurat
+  to check correctness. They are references, not ground truth. If you are confident in
+  kyto's approach and the results still differ, ask the user, or start another agent to
+  argue it out, before deciding. Record the outcome in [deviations.md](deviations.md).
 
 ## Parity with scanpy (and when not to copy it)
 
