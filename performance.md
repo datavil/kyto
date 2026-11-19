@@ -305,6 +305,65 @@ At 1 thread the stage peaks at 274 MB (base 276 MB).
   stay serial, and the folds are bound by L2 bandwidth (each stored value reads a 480-byte
   row of the basis).
 
+## Free a block's layers once nothing reads them (task 5.16)
+
+Measured Nov 20, 2026, on the task 5.16 tree (base `4d512d6`, 5.15; release extensions built
+by `uv sync`), same machine, data and scripts as 5.12 to 5.15 above. **Not a quiet machine:**
+a game client used 1.3 to 1.5 cores throughout, and the 1-minute load average went from 2.3
+to 7.9 during the runs (each line below states it). So the two builds ran interleaved, base
+then 5.16, twice per configuration, each a fresh process with a warm-up run and the median of
+5 (`bench.py`, equivalent to `thread_scaling.py`'s cases). **Peak memory:** `ru_maxrss` of a
+fresh process running one configuration once, 5 alternating runs per build.
+
+- **Change:** each block gives a layer back to the pool as soon as no later operator of its
+  stream and not the output reads it, instead of at the stream's end; inside a fused
+  `normalize_total` + `log1p` pass, `counts` goes back before `log1p` takes its buffers when
+  nothing later reads it. `estimate()` counts a block's largest step (the layers it carries
+  into a node plus what the node writes) and its most buffers at once.
+- **What it does not change:** this workflow's output (`embedding().to_numpy()` writes the
+  whole plan to a temporary store; `_execute` streams it) reads `counts`, `normalized` and
+  `log1p`, so the output's last stream carries all three at 20,000 genes until the HVG gene
+  filter, and nothing there is dead. The streams that gain are the HVG statistics pass (2
+  layer buffers a block instead of 3 at once) and the held PCA read (the gene filter copies
+  `log1p` only, not `counts` and `normalized` too).
+- **The Done-when's peak was already met by 5.15:** "lower than 5.14's 1,336 MB" holds for
+  5.15 too (median 1,318 MB here, 1,297 MB in 5.15's run); 5.16 itself lowers it by about 2%.
+
+| Seconds (median of 5), base 5.15 / 5.16, two interleaved rounds | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| QC through PCA (`embedding().to_numpy()`) | 6.165, 6.163 / **5.958, 5.961** | 2.605, 2.755 / **2.532, 2.638** | 2.125, 2.091 / **2.098, 2.029** |
+| preprocessing (`_execute`) | 2.870, 2.871 / 2.872, 2.873 | 1.039, 1.042 / 1.045, 1.036 | 0.812, 0.798 / 0.809, 0.800 |
+| load average during the pair | 2.3 to 2.8 | 2.3 to 4.6 | 4.5 to 7.9 |
+
+QC through PCA is 3.3% faster on 1 thread, 3 to 4% on 4 and 1 to 3% on 10 (the held read's
+gene filter no longer copies two full-width layers); preprocessing is unchanged (its stream's
+last operator is the maps, where the old code dropped the same layers).
+
+| Peak memory at 10 threads, MB (5 runs, median) | base 5.15 | 5.16 |
+|---|---|---|
+| kyto QC through PCA | 1,294 to 1,342 (**1,318**) | 1,274 to 1,310 (**1,290**) |
+| kyto preprocessing (`_execute`) | 1,082 to 1,126 (1,120) | 1,059 to 1,157 (1,131) |
+| scanpy read through PCA (5.12, not re-run) | | 2,853 |
+
+- **Where the peak is:** RSS traced by progress (QC through PCA, 10 threads): the first pass
+  (HVG statistics) climbs from about 445 MB after its first window to about 1,000 MB (5.16:
+  about 950 MB), about 100 MB every two windows, although a window's blocks and reads hold
+  about 400 MB; then the output's last stream lifts it to about 1,300 MB. That growth is task
+  5.18.
+- **Bit identity (R11):** the QC-through-PCA embedding is bit-identical between 5.15 and 5.16
+  at 1, 4 and 10 threads, and across thread counts; `thread_scaling.py` gave bit-identical HVG
+  gene tables, cell tables and embeddings at 1, 4 and 10 threads on both builds.
+- **Estimate:** on the fixtures (`estimate_fixtures.rs`) whole blocks are within -11.6% to
+  +7.7% of the measured heap (the lowest, pbmc3k `maps` at 1,024-cell blocks and 1 in flight,
+  was +0.9% before the buffer count changed: `log1p` now reuses `counts`' buffers); split and
+  cut blocks stay high, never low by more than 25%.
+- **scanpy** is not re-run (5.12's and 5.13's numbers: preprocessing 0.99 s on 1 thread and
+  0.96 s on 10, `pp.pca` 1.94 s, read through PCA peak 2,853 MB).
+- **Where kyto loses:** on 1 thread preprocessing takes 2.9x scanpy's time (scanpy has the
+  matrix in memory, kyto decodes the store); kyto is faster from about 4 threads. The peak at
+  10 threads is 45% of scanpy's, but this task did not lower it much: the first pass's RSS
+  growth and the output's three full-width layers set it.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

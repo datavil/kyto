@@ -442,6 +442,37 @@ fn nodes_writing_layers_hold_an_output_block() {
 }
 
 #[test]
+fn a_layer_no_later_step_reads_is_not_carried() {
+    // Task 5.16: `log1p` of counts, then a gene filter (it copies the layers a block
+    // carries). An output reading only `log1p` drops `counts` after the map, so the
+    // gene filter copies one layer; reading both, it copies both.
+    let plan = scan()
+        .log1p(Some("counts"), "log1p")
+        .unwrap()
+        .filter_genes(
+            &GeneExpr::column("gene_id")
+                .str(kyto_core::StrFunction::StartsWith("G1".to_owned()))
+                .unwrap(),
+        )
+        .unwrap();
+    let reading = |layers: &[&str]| {
+        let members = layers
+            .iter()
+            .map(|layer| Member::Layer((*layer).to_owned()));
+        estimate(&[Output::members(&plan, members).unwrap()]).block_memory()
+    };
+    let log1p_only = reading(&["log1p"]);
+    let both = reading(&["counts", "log1p"]);
+    assert!(log1p_only < both, "{log1p_only} vs {both}");
+    // Per block in flight, at least the copy of `counts` the gene filter does not make.
+    let filtered_entries = 819_200 * 1_111 / N_GENES;
+    assert!(
+        both - log1p_only >= 2 * filtered_entries,
+        "{log1p_only} vs {both}"
+    );
+}
+
+#[test]
 fn in_memory_members_and_statistics_are_resident() {
     let pca = scan().pca(Some("counts"), "X_pca", 50, 0, None).unwrap();
     // Streamed, so nothing is held (task 5.12: `a_held_input_is_resident_and_saves_passes`).
@@ -663,11 +694,13 @@ fn a_filter_copies_the_blocks_it_rewrites() {
     let per_block = HELD_BLOCK + 2 * copy;
     assert!(per_block > SCAN_BLOCK);
     // While the last block is computed: its work, the consumer's block of both layers
-    // and 2 pooled buffers (the first window allocated 6, the consumer holds 2, the last
-    // block takes 2 back).
+    // and 1 pooled buffer. A block holds at most 2 buffers at once (the joined block
+    // and its copy, then the copy and `log1p`, which takes the joined block's buffers
+    // back, task 5.16): the first window allocated 4, the consumer holds 2, the last
+    // block takes 1 back.
     assert_eq!(
         estimate_all(&plan).block_memory(),
-        per_block + 2 * HELD_BLOCK + 2 * HELD_BLOCK
+        per_block + 2 * HELD_BLOCK + HELD_BLOCK
     );
     // A second filter copies into the buffers the first gave back: no more memory.
     let gene_filter = GeneExpr::column("gene_id")

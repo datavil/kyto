@@ -90,6 +90,14 @@ impl Evaluation {
             .iter()
             .any(|leaf| !matches!(leaf, CellLeaf::Embedding { .. }))
     }
+
+    /// The layers its leaves read (task 5.16).
+    fn layers(&self) -> impl Iterator<Item = &str> {
+        self.leaves.iter().filter_map(|leaf| match leaf {
+            CellLeaf::Gene { layer, .. } | CellLeaf::Qc { layer, .. } => Some(layer.as_str()),
+            CellLeaf::Embedding { .. } => None,
+        })
+    }
 }
 
 impl Take {
@@ -141,6 +149,18 @@ impl CellStep {
             CellStepKind::Columns(columns) => columns
                 .iter()
                 .any(|(_, evaluation, _)| evaluation.reads_layers()),
+        }
+    }
+
+    /// The layers it reads from a block (task 5.16); none for `take_cells`.
+    pub(crate) fn layers(&self) -> Vec<&str> {
+        match &self.kind {
+            CellStepKind::Filter(predicate) => predicate.layers().collect(),
+            CellStepKind::Take(_) => Vec::new(),
+            CellStepKind::Columns(columns) => columns
+                .iter()
+                .flat_map(|(_, evaluation, _)| evaluation.layers())
+                .collect(),
         }
     }
 

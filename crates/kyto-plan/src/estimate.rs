@@ -31,11 +31,13 @@
 //! 5.5); the stream has `cell blocks x ceil(min(C, n_cells) / B)` blocks and reads
 //! `window = min(blocks_in_flight, blocks)` at once. With `e` the mean entries of a
 //! block (`nnz x rows / n_cells`), a block in flight holds the larger of reading the
-//! scan's tiles (the scan's row below) and, once they are joined, the joined layers
-//! plus every layer the streamed nodes write (the rows below the scan's), not both:
-//! the executor reads a window, then maps it. A step rewriting a block's rows (a cell
+//! scan's tiles (the scan's row below) and, once they are joined, its largest step:
+//! the layers it carries into a streamed node plus those the node writes (the rows
+//! below the scan's), not both: the executor reads a window, then maps it. A block
+//! carries a layer until no later node or output reads it (task 5.16; the executor
+//! gives it back to the pool then). A step rewriting a block's rows (a cell
 //! filter, `take_cells`) or genes (a gene filter, `select_genes`) copies the layers the
-//! block carries (`e x (4 + value bytes) + (rows + 1) x 8` each) into pooled buffers
+//! block still carries (`e x (4 + value bytes) + (rows + 1) x 8` each) into pooled buffers
 //! and gives the old ones back, which a later such step takes: one copy per block, the
 //! largest. A stream longer than its window adds, while a later window (`later =
 //! min(window, blocks - window)` blocks) is computed, the block its consumer holds
@@ -103,6 +105,7 @@
 //! output a terminal returns, or choose blocks for a memory limit (`memory_limit.rs`
 //! uses this estimate to do that).
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 use kyto_core::{ColumnDtype, ExprNode, FloatDtype, LayerDtype, LayerSchema, Source};
@@ -273,7 +276,6 @@ impl PhysicalPlan {
         // Per block in flight: the scan's reading of its tiles, then the joined
         // layers with every layer the streamed nodes write (task 5.5: not at once).
         let mut scan_reading = 0_u128;
-        let mut joined_and_written = 0_u128;
         // Blocks cut in memory from cell blocks read whole (task 5.14): what reading one
         // whole block takes, and how many are read at once.
         let mut whole_reading = 0_u128;
@@ -286,9 +288,17 @@ impl PhysicalPlan {
         let mut n_blocks = 0_u128;
         let mut pool_entries = 0_u128;
         let mut largest_layer_block = 0_u128;
-        // The layers a block carries so far, and the most a step that rewrites its
-        // rows or genes copies (task 5.10).
-        let mut carried: Vec<(u64, LayerDtype)> = Vec::new();
+        // The layers a block carries so far (name, nnz, dtype, bytes in a block), and
+        // the most a step that rewrites its rows or genes copies (task 5.10). A layer
+        // leaves once no later node or output reads it (task 5.16), and a block holds at
+        // most the largest of its steps: the layers it carries into a step plus those the
+        // step writes.
+        let mut carried: Vec<(String, u64, LayerDtype, u128)> = Vec::new();
+        let read_later = layers_read_later(self.optimized());
+        let mut step_peak = 0_u128;
+        // The most layer buffers a block holds at once (task 5.16: a written layer may
+        // take the buffers of one the block just dropped).
+        let mut step_buffers = 0_u128;
         let mut rewrite = 0_u128;
         // Buffers a block allocates (reader) or takes from the pool (writers, copies).
         let mut scanned_buffers = 0_u128;
@@ -341,45 +351,83 @@ impl PhysicalPlan {
                             scan_reading += read.block_bytes();
                         }
                         scanned_buffers += 1;
-                        joined_and_written += joined;
                         pool_entries += 1;
                         largest_layer_block = largest_layer_block.max(joined);
                         pass_bytes += read.pass_bytes();
                         resident += read.tile_offsets_bytes();
                         opening = OPEN_LAYER_BYTES;
-                        carried.push((layer.nnz, layer.dtype));
+                        carried.push((layer.name.clone(), layer.nnz, layer.dtype, joined));
                     }
+                    step_peak = step_peak.max(carried_bytes(&carried));
+                    step_buffers = step_buffers.max(carried.len() as u128);
                 }
                 _ => {
                     if rewrites_blocks(node) {
                         let copy = carried
                             .iter()
-                            .map(|(nnz, dtype)| {
+                            .map(|(_, nnz, dtype, _)| {
                                 sizes.entries(*nnz) * (4 + layer_value_bytes(*dtype))
                                     + (sizes.rows + 1) * 8
                             })
                             .sum::<u128>();
                         rewrite = rewrite.max(copy);
                         rewrite_buffers = rewrite_buffers.max(carried.len() as u128);
+                        step_buffers = step_buffers.max(2 * carried.len() as u128);
                     }
                     let written = written_layers(node, schema);
                     if !written.is_empty() || is_cell_or_gene_step(node) {
                         pool_entries += 1;
                     }
+                    let (per_block, node_once) = written_block_bytes(node, schema, input, &sizes);
+                    once += node_once;
+                    let output_block = |nnz: u64| sizes.entries(nnz) * 8 + (sizes.rows + 1) * 8;
+                    if let Operation::Fused { maps, .. } = node.operation() {
+                        // Map by map: a layer no later map reads and nothing after the
+                        // pass reads leaves before the next map writes (task 5.16).
+                        for (position, map) in maps.iter().enumerate() {
+                            let output = map.output_layer();
+                            let nnz = schema.layer(output).map_or(0, |layer| layer.nnz);
+                            step_peak = step_peak.max(carried_bytes(&carried) + output_block(nnz));
+                            step_buffers = step_buffers.max(carried.len() as u128 + 1);
+                            carried.retain(|(name, ..)| name != output);
+                            carried.push((
+                                output.to_owned(),
+                                nnz,
+                                LayerDtype::Float32,
+                                output_block(nnz),
+                            ));
+                            let later = &maps[position + 1..];
+                            carried.retain(|(name, ..)| {
+                                read_later[index].contains(name)
+                                    || later.iter().any(|map| map.layer() == name)
+                            });
+                        }
+                    } else {
+                        step_peak = step_peak.max(carried_bytes(&carried) + per_block);
+                        step_buffers = step_buffers.max((carried.len() + written.len()) as u128);
+                        for layer in &written {
+                            // A layer of the same name is replaced (buffers recycled).
+                            carried.retain(|(name, ..)| *name != layer.name);
+                            carried.push((
+                                layer.name.clone(),
+                                layer.nnz,
+                                layer.dtype,
+                                output_block(layer.nnz),
+                            ));
+                        }
+                    }
                     for layer in written {
                         taken_buffers += 1;
-                        carried.push((layer.nnz, layer.dtype));
                         largest_layer_block = largest_layer_block.max(held_block_bytes(
                             &sizes,
                             layer.nnz,
                             layer.dtype,
                         ));
                     }
-                    let (per_block, node_once) = written_block_bytes(node, schema, input, &sizes);
-                    joined_and_written += per_block;
-                    once += node_once;
                 }
             }
+            // Dropped once nothing after this node reads it (task 5.16).
+            carried.retain(|(name, ..)| read_later[index].contains(name));
             resident += node_resident(node, schema, input);
             resident += reduction_bytes(
                 node,
@@ -391,7 +439,7 @@ impl PhysicalPlan {
         // A step rewriting a block's rows or genes copies its layers into buffers from
         // the pool and gives the old ones back, which a later such step takes: one
         // copy per block, however many steps (task 5.10).
-        joined_and_written += rewrite;
+        let joined_and_written = step_peak + rewrite;
         let per_block = scan_reading.max(joined_and_written);
         // Blocks cut from whole reads (task 5.14): the reads of a window (their tiles
         // and every part joined) come before the window computes its parts.
@@ -408,8 +456,10 @@ impl PhysicalPlan {
             // The buffers the blocks before allocated: the first window every buffer
             // it holds, each later block only its reader's (the rest come from the
             // pool). Free are those the consumer does not hold and the later window
-            // does not take back (task 5.10).
-            let taken = taken_buffers + rewrite_buffers;
+            // does not take back (task 5.10). A block holds at most `step_buffers` at
+            // once (task 5.16), and never more than every buffer it writes or copies.
+            let taken =
+                (taken_buffers + rewrite_buffers).min(step_buffers.saturating_sub(scanned_buffers));
             let allocated =
                 window * (scanned_buffers + taken) + (n_blocks - later - window) * scanned_buffers;
             let recycled = allocated
@@ -471,6 +521,36 @@ impl PhysicalPlan {
         }
         (bytes, layers)
     }
+}
+
+/// Bytes of the layers a block carries.
+fn carried_bytes(carried: &[(String, u64, LayerDtype, u128)]) -> u128 {
+    carried.iter().map(|(.., bytes)| bytes).sum()
+}
+
+/// For each node of `plan`, the layers a later node or an output reads: the layers a
+/// block keeps after that node's step (kyto-exec's `kept_layers`, task 5.16).
+fn layers_read_later(plan: &crate::optimized_plan::OptimizedPlan) -> Vec<BTreeSet<String>> {
+    let layers = |members: &crate::members::Members| -> Vec<String> {
+        members
+            .iter()
+            .filter_map(|member| match member {
+                Member::Layer(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut later: BTreeSet<String> = plan
+        .outputs()
+        .iter()
+        .flat_map(|output| layers(output.reads()))
+        .collect();
+    let mut read_later = vec![BTreeSet::new(); plan.nodes().len()];
+    for (index, node) in plan.nodes().iter().enumerate().rev() {
+        read_later[index] = later.clone();
+        later.extend(layers(&node.reads()));
+    }
+    read_later
 }
 
 /// Whether a streamed node rewrites each block's rows (a cell filter, `take_cells`) or

@@ -67,7 +67,7 @@ use crate::held_input::HeldInput;
 use crate::hvg;
 use crate::leiden::{self, ClusterStatistics};
 use crate::neighbors::{self, NeighborStatistics};
-use crate::operator::Operator;
+use crate::operator::{Operator, kept_layers};
 use crate::qc::{CellQc, GeneSet};
 use crate::recipe::Recipes;
 use crate::reduction::reduce_pass;
@@ -193,7 +193,8 @@ pub struct Pipeline {
     /// The layers the scan reads.
     pub(crate) layers: Vec<String>,
     pub(crate) stages: Vec<Stage>,
-    /// The layers the output reads; the stream drops the others at its end.
+    /// The layers the output reads; the stream drops each other one as soon as no
+    /// later operator reads it (task 5.16).
     pub(crate) output_layers: BTreeSet<String>,
     pub(crate) blocks_in_flight: NonZeroUsize,
     /// Cells per streamed block: the scan's execution's (the store's `C`, or fewer
@@ -436,6 +437,7 @@ impl Pipeline {
                 layers,
                 grid: self.grid,
                 operators: operators.iter().map(Operator::fresh).collect(),
+                kept: kept_layers(operators, &output_layers),
                 output_layers,
                 window: self.blocks_in_flight,
                 block_cells: self.block_cells,

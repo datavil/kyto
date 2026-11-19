@@ -11,8 +11,13 @@ backpressure with at most `blocks_in_flight + 1` blocks held; Drop drops the rec
 before joining, so a producer blocked in `send` gets an error and returns.
 
 **Watch out:**
-- Each block carries every layer the scan read; drop what the output does not read at
-  the end of the stream, or projected-away layers ride along (a test caught it).
+- Each block carries every layer the scan read; drop what the output does not read,
+  or projected-away layers ride along (a test caught it). Since 5.16 a layer goes back
+  to the pool right after its last reader (`operator::kept_layers`, also between the maps
+  of a fused pass, so `log1p` reuses `counts`' buffers). It barely moves the workflow's
+  peak: a handle terminal's output reads every layer, and the peak is the first pass's
+  RSS growth (5.18) and the output's last stream. The estimate counts a block's largest
+  step and its most buffers at once, not the sum of every layer written.
 - Thread scaling is a timing check: keep it `#[ignore]` and run it in release
   (`uv run cargo test --release -p kyto-exec --test it -- thread_scaling::
   --ignored --nocapture`), with a warm-up run and the median of several. On this 10-core Mac

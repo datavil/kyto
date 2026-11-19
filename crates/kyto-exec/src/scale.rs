@@ -132,6 +132,11 @@ impl ScaleMap {
         }
     }
 
+    /// The layer it scales (task 5.16).
+    pub(crate) fn input_layer(&self) -> &str {
+        &self.layer
+    }
+
     /// Write the scaled layer into `block` (replacing a layer of the same name).
     ///
     /// # Errors

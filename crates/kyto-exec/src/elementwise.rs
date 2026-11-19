@@ -66,7 +66,16 @@ impl ElementwiseMaps {
         self
     }
 
-    /// Run the maps over `block`, then drop what the pass does not keep.
+    /// The layers the maps read (task 5.16), a fused pass's intermediate ones too.
+    pub(crate) fn input_layers(&self) -> impl Iterator<Item = &str> {
+        self.maps.iter().map(MapElementwise::layer)
+    }
+
+    /// Run the maps over `block`, then drop what the pass does not keep. After each
+    /// map, a layer that no later map of the pass reads and that is not in `kept` (the
+    /// layers the block keeps after the pass) goes back to the pool before the next map
+    /// takes its output's buffers (task 5.16): `counts` once `normalize_total` read it,
+    /// when nothing after the pass reads it.
     ///
     /// # Errors
     /// `KY-E109` if a map's input layer is not in the block (a plan the optimizer
@@ -76,8 +85,9 @@ impl ElementwiseMaps {
         mut block: PipelineBlock,
         pool: &CellBlockPool,
         store: &str,
+        kept: &BTreeSet<String>,
     ) -> Result<PipelineBlock, KytoError> {
-        for map in &self.maps {
+        for (position, map) in self.maps.iter().enumerate() {
             let input = block
                 .layers
                 .get(map.layer())
@@ -98,6 +108,13 @@ impl ElementwiseMaps {
             let output = map_block(op, input, pool)?;
             if let Some(replaced) = block.layers.insert(map.output_layer().to_owned(), output) {
                 pool.recycle(replaced);
+            }
+            let later = &self.maps[position + 1..];
+            let dead = block.layers.extract_if(.., |layer, _| {
+                !kept.contains(layer) && !later.iter().any(|map| map.layer() == layer)
+            });
+            for (_, dropped) in dead {
+                pool.recycle(dropped);
             }
         }
         for layer in &self.drop {
@@ -202,6 +219,59 @@ mod tests {
             CellValues::F32(values) => values.to_vec(),
             CellValues::U32(_) => panic!("expected float32"),
         }
+    }
+
+    /// `normalize_total(10)` of `counts` into `norm`, then `log1p` of `norm` into `log1p`.
+    fn normalize_then_log1p() -> Vec<MapElementwise> {
+        serde_json::from_str(
+            r#"[{"op": {"op": "normalize_total", "target_sum": 10.0}, "layer": "counts", "into": "norm"},
+                {"op": {"op": "log1p"}, "layer": "norm", "into": "log1p"}]"#,
+        )
+        .unwrap()
+    }
+
+    fn block_of_counts() -> PipelineBlock {
+        PipelineBlock {
+            cell_block: 0,
+            cells: vec![0, 1, 2],
+            layers: [("counts".to_owned(), counts())].into(),
+            columns: polars::prelude::DataFrame::empty_with_height(3),
+        }
+    }
+
+    #[test]
+    fn a_fused_pass_frees_a_layer_before_the_next_map_takes_buffers() {
+        // Task 5.16: with only log1p kept, counts goes back to the pool once
+        // normalize_total read it, and log1p takes its buffers: one block's buffers
+        // (norm's) are left free, not two.
+        let maps = normalize_then_log1p();
+        let only_log1p = BTreeSet::from(["log1p".to_owned()]);
+        let pool = CellBlockPool::new(4);
+        let fused = ElementwiseMaps::new(maps.clone(), Some(&only_log1p));
+        let block = fused
+            .apply(block_of_counts(), &pool, "store", &only_log1p)
+            .unwrap();
+        assert_eq!(block.layers.keys().collect::<Vec<_>>(), ["log1p"]);
+        assert_eq!(pool.free_blocks(), 1);
+        // Keeping every layer gives the same log1p bits.
+        let every = BTreeSet::from(["counts", "norm", "log1p"].map(str::to_owned));
+        let pool = CellBlockPool::new(4);
+        let kept = ElementwiseMaps::new(maps, Some(&every))
+            .apply(block_of_counts(), &pool, "store", &every)
+            .unwrap();
+        assert_eq!(kept.layers.len(), 3);
+        assert_eq!(pool.free_blocks(), 0);
+        let bits = |block: &PipelineBlock| {
+            values(&block.layers["log1p"])
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&block), bits(&kept));
+        assert_eq!(
+            block.layers["log1p"].indptr(),
+            kept.layers["log1p"].indptr()
+        );
     }
 
     #[test]

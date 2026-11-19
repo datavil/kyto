@@ -80,6 +80,9 @@ pub(crate) struct StreamSource<S: ?Sized> {
     pub(crate) operators: Vec<Operator>,
     /// The layers each block keeps at the stream's end.
     pub(crate) output_layers: BTreeSet<String>,
+    /// The layers a block keeps before the first operator and after each one
+    /// ([`crate::operator::kept_layers`] of `operators` and `output_layers`, task 5.16).
+    pub(crate) kept: Vec<BTreeSet<String>>,
     pub(crate) window: NonZeroUsize,
     /// Cells per block: the store's `C`, or fewer to split its cell blocks (5.5).
     pub(crate) block_cells: NonZeroU64,
@@ -335,20 +338,19 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
                 source.control.check()?;
                 // Progress counts the rows read, whatever filters keep.
                 let rows = block.cells.len() as u64;
-                let mut block = source.operators.iter().try_fold(block, |block, operator| {
-                    operator.apply(block, pool, &source.store)
-                })?;
-                // Keep only what the output reads; the rest goes back to the pool.
-                let unread: Vec<String> = block
-                    .layers
-                    .keys()
-                    .filter(|layer| !source.output_layers.contains(*layer))
-                    .cloned()
-                    .collect();
-                for layer in unread {
-                    if let Some(dropped) = block.layers.remove(&layer) {
-                        pool.recycle(dropped);
-                    }
+                // Each layer goes back to the pool as soon as no later operator reads it
+                // and the output does not (task 5.16), not at the stream's end.
+                let (first, after) = source
+                    .kept
+                    .split_first()
+                    .unwrap_or((&source.output_layers, &[]));
+                let mut block = drop_unkept(block, first, pool);
+                for (operator, kept) in source.operators.iter().zip(after) {
+                    block = drop_unkept(
+                        operator.apply(block, pool, &source.store, kept)?,
+                        kept,
+                        pool,
+                    );
                 }
                 source.control.add_done(rows);
                 Ok(block)
@@ -420,4 +422,19 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
             columns: DataFrame::empty_with_height(rows),
         }))
     }
+}
+
+/// `block` with every layer outside `kept` given back to `pool` (task 5.16).
+fn drop_unkept(
+    mut block: PipelineBlock,
+    kept: &BTreeSet<String>,
+    pool: &CellBlockPool,
+) -> PipelineBlock {
+    for (_, dropped) in block
+        .layers
+        .extract_if(.., |layer, _| !kept.contains(layer))
+    {
+        pool.recycle(dropped);
+    }
+    block
 }

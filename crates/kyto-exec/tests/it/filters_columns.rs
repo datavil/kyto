@@ -1071,3 +1071,80 @@ fn columns_hvg_writes_are_read_downstream() {
         assert_eq!(kept, expected, "{column}");
     }
 }
+
+/// Cells, computed columns and `out`'s values (as bits) of `plan`'s stream with
+/// `output`, on `threads` threads in blocks of at most 3 cells.
+fn stream_of(output: &Output, threads: usize) -> (Vec<u64>, String, Vec<u32>) {
+    let options = PhysicalOptions {
+        blocks_in_flight: NonZeroU64::new(threads as u64).unwrap(),
+        max_block_cells: NonZeroU64::new(3),
+        ..PhysicalOptions::default()
+    };
+    let physical = physical_plan(std::slice::from_ref(output), OptimizeOptions::ALL, options);
+    let pipeline = Pipeline::new(&physical, 0).unwrap();
+    let stream = pipeline
+        .run(ExecuteOptions::new(NonZeroUsize::new(threads).unwrap()))
+        .unwrap();
+    let mut cells = Vec::new();
+    let mut columns = String::new();
+    let mut bits = Vec::new();
+    for block in stream {
+        let block = block.unwrap();
+        cells.extend(&block.cells);
+        columns.push_str(&frame_text(&block.columns));
+        let CellValues::F32(values) = block.layers["out"].data() else {
+            panic!("out is float32");
+        };
+        bits.extend(values.iter().map(|value| value.to_bits()));
+        bits.extend(block.layers["out"].indptr().iter().map(|at| *at as u32));
+    }
+    (cells, columns, bits)
+}
+
+#[test]
+fn cell_steps_read_a_layer_the_output_does_not_keep() {
+    // Task 5.16: a block drops `norm` (and `counts`) once no later step reads it. A QC
+    // column and a cell filter read `norm` after the maps; an output of `out` alone
+    // must give what the run keeping every layer gives.
+    let norm = || Some("norm".to_owned());
+    let plan = scan(&fixture().path)
+        .normalize_total(Some(1e4), Some("counts"), "norm")
+        .unwrap()
+        .log1p(Some("norm"), "out")
+        .unwrap()
+        .with_cells([(
+            "norm_genes".to_owned(),
+            CellExpr::qc(norm(), QcMetric::GenesDetected).unwrap(),
+        )])
+        .unwrap()
+        .filter_cells(
+            &Expr::binary(
+                CellExpr::expression(norm(), "G0"),
+                BinaryOp::GtEq,
+                Literal::Float(0.0),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .filter_cells(&Expr::binary(cell("norm_genes"), BinaryOp::GtEq, Literal::Int(2)).unwrap())
+        .unwrap();
+    let only_out = Output::members(
+        &plan,
+        [
+            kyto_plan::Member::Layer("out".to_owned()),
+            kyto_plan::Member::CellColumn("norm_genes".to_owned()),
+        ],
+    )
+    .unwrap();
+    let every = Output::all(&plan);
+    let reference = stream_of(&every, 1);
+    assert!(!reference.0.is_empty() && reference.0.len() < fixture().data.cells.height());
+    for threads in [1, 4] {
+        assert_eq!(
+            stream_of(&only_out, threads),
+            reference,
+            "{threads} threads"
+        );
+        assert_eq!(stream_of(&every, threads), reference, "{threads} threads");
+    }
+}
