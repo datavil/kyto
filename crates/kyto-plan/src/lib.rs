@@ -70,8 +70,8 @@ mod with_default_layer;
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
 pub use estimate::{
-    ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, PCA_OVERSAMPLES,
-    SCRUBLET_ASSUMED_GENES,
+    ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, HELD_BLOCK_BYTES,
+    PCA_OVERSAMPLES, SCRUBLET_ASSUMED_GENES,
 };
 pub use estimate_tables::{ASSUMED_CATEGORY_BYTES, ASSUMED_STRING_BYTES};
 pub use explain::{Explain, LogicalEntry, OptimizedEntry, OutputEntry};

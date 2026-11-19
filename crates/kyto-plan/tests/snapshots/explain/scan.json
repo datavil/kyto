@@ -54,7 +54,8 @@
         "statistics_passes": 0,
         "apply_pass": true,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": false
       }
     ]
   }

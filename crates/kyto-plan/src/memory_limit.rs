@@ -5,7 +5,9 @@
 //! ([`PhysicalPlan::within_memory_limit`]): the options as given if they fit, else
 //! smaller blocks (each of the store's cell blocks split into blocks of fewer cells,
 //! [`PhysicalOptions::max_block_cells`]) and fewer blocks in flight, keeping the most
-//! cells in flight; when even one block of one cell does not fit, `KY-E401` with the
+//! cells in flight. Nodes with several statistics passes hold their input in memory
+//! (task 5.12) if some blocks fit with it held; only otherwise do they stream every
+//! pass from the store. When even one block of one cell does not fit, `KY-E401` with the
 //! smallest peak the plan can run in, before anything is read (R7: the limit is an
 //! argument, never a global setting).
 //! Does not: measure memory or watch the process (the estimate is the model, 4.6),
@@ -124,6 +126,10 @@ impl PhysicalPlan {
     /// flight). The estimate is the model (task 4.6): what it does not count (the
     /// process's own memory, threads' scratch) is not in the limit.
     ///
+    /// With [`PhysicalOptions::hold_inputs`], held inputs (task 5.12) come first: the
+    /// search runs with them held, and only if no combination fits does it run again
+    /// with every pass streamed (reading the store once matters more than block size).
+    ///
     /// # Errors
     /// `KY-E401` if no combination fits, with the smallest peak memory of all (one
     /// block of one cell when the blocks dominate; what does not stream otherwise).
@@ -133,6 +139,27 @@ impl PhysicalPlan {
         options: PhysicalOptions,
         limit: MemoryLimit,
     ) -> Result<Self, KytoError> {
+        match Self::fit_blocks(optimized.clone(), options, limit) {
+            Ok(plan) => Ok(plan),
+            Err(held_smallest) if options.hold_inputs => {
+                let streamed = PhysicalOptions {
+                    hold_inputs: false,
+                    ..options
+                };
+                Self::fit_blocks(optimized, streamed, limit)
+                    .map_err(|smallest| too_small(smallest.min(held_smallest), limit))
+            }
+            Err(smallest) => Err(too_small(smallest, limit)),
+        }
+    }
+
+    /// [`PhysicalPlan::within_memory_limit`]'s search for `options`' held inputs, or
+    /// the smallest peak memory it found when nothing fits.
+    fn fit_blocks(
+        optimized: OptimizedPlan,
+        options: PhysicalOptions,
+        limit: MemoryLimit,
+    ) -> Result<Self, u64> {
         let plan = Self::new(optimized, options);
         let fits = |estimate: CostEstimate| estimate.peak_memory() <= limit.bytes();
         let estimate = plan.estimate();
@@ -141,7 +168,7 @@ impl PhysicalPlan {
         }
         let Some(block_cells) = plan.largest_block() else {
             // Nothing streams: no block to shrink.
-            return Err(too_small(estimate.peak_memory(), limit));
+            return Err(estimate.peak_memory());
         };
         let optimized = plan.optimized().clone();
         let mut best: Option<(u128, u64, u64)> = None;
@@ -167,7 +194,7 @@ impl PhysicalPlan {
             }
         }
         let Some((_, cells, in_flight)) = best else {
-            return Err(too_small(smallest, limit));
+            return Err(smallest);
         };
         Ok(Self::new(
             optimized,

@@ -15,8 +15,9 @@ use std::sync::Arc;
 use kyto_core::{AtlasSchema, CellExpr, GeneExpr, GeneIds};
 use kyto_plan::{
     ASSUMED_CATEGORY_BYTES, ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, ASSUMED_STRING_BYTES,
-    CostEstimate, Device, HvgFlavor, Member, Metric, NeighborSearch, Neighbors, OptimizeOptions,
-    Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Scrublet, Sink, physical_plan,
+    CostEstimate, Device, HELD_BLOCK_BYTES, HvgFlavor, Member, Metric, NeighborSearch, Neighbors,
+    OptimizeOptions, Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Scrublet, Sink,
+    physical_plan,
 };
 
 const N_CELLS: u64 = 10_000;
@@ -56,6 +57,16 @@ fn estimate(outputs: &[Output]) -> CostEstimate {
 
 fn estimate_all(plan: &Arc<Plan>) -> CostEstimate {
     estimate(&[Output::all(plan)])
+}
+
+/// The estimate with every statistics pass streamed from the store (no held inputs,
+/// task 5.12).
+fn estimate_streamed(outputs: &[Output]) -> CostEstimate {
+    let options = PhysicalOptions {
+        hold_inputs: false,
+        ..PhysicalOptions::default()
+    };
+    physical_plan(outputs, OptimizeOptions::ALL, options).estimate()
 }
 
 /// Bytes one pass over `counts` reads: entries, the `indptr` of 6 tiles, `tile_offsets`.
@@ -167,14 +178,24 @@ fn statistics_passes_stream_again_and_a_final_pass_reads_the_layers() {
         .unwrap();
     let pca = normalized.pca(Some("log1p"), "X_pca", 50, 0, None).unwrap();
     let pca_passes = 2 + PCA_POWER_ITERATIONS;
-    // Median: 1 statistics pass; PCA's; then one pass delivers the layers.
-    let all = estimate_all(&pca);
+    // Streamed: median 1 statistics pass; PCA's; then one pass delivers the layers.
+    let all = estimate_streamed(&[Output::all(&pca)]);
     assert_eq!(all.passes(), 1 + pca_passes + 1);
+    assert_eq!(all.passes_saved(), 0);
+    assert_eq!(all.held_memory(), 0);
     assert_eq!(all.bytes_read(), u64::from(all.passes()) * PASS_BYTES);
     // Reading only the embedding needs no final pass.
-    let embedding =
-        estimate(&[Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()]);
-    assert_eq!(embedding.passes(), 1 + pca_passes);
+    let embedding_output = [Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()];
+    assert_eq!(
+        estimate_streamed(&embedding_output).passes(),
+        1 + pca_passes
+    );
+    // Held (task 5.12, the default): PCA reads its input once and saves the rest.
+    let held = estimate_all(&pca);
+    assert_eq!(held.passes(), 1 + 1 + 1);
+    assert_eq!(held.passes_saved(), pca_passes - 1);
+    assert_eq!(held.bytes_read(), 3 * PASS_BYTES);
+    assert_eq!(estimate(&embedding_output).passes(), 1 + 1);
     // The same without fusion: the passes do not depend on the rules.
     let unfused = physical_plan(
         &[Output::all(&pca)],
@@ -182,7 +203,33 @@ fn statistics_passes_stream_again_and_a_final_pass_reads_the_layers() {
         PhysicalOptions::default(),
     )
     .estimate();
-    assert_eq!(unfused.passes(), all.passes());
+    assert_eq!(unfused.passes(), held.passes());
+}
+
+#[test]
+fn a_held_input_is_resident_and_saves_passes() {
+    // PCA over `counts` (task 5.12): it holds the layer's entries (`uint32` values and
+    // `u32` indices), each cell's `indptr` entry and position, and per block (3) the
+    // held block's overhead, on top of everything streaming it holds.
+    let pca = scan().pca(Some("counts"), "X_pca", 50, 0, None).unwrap();
+    let output = [Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()];
+    let held = estimate(&output);
+    let streamed = estimate_streamed(&output);
+    let held_bytes = 2_000_000 * 8 + N_CELLS * 16 + 3 * HELD_BLOCK_BYTES;
+    assert_eq!(held.held_memory(), held_bytes);
+    assert_eq!(
+        held.resident_memory(),
+        streamed.resident_memory() + held_bytes
+    );
+    assert_eq!(held.block_memory(), streamed.block_memory());
+    assert_eq!(held.passes(), 1);
+    assert_eq!(held.passes_saved(), 1 + PCA_POWER_ITERATIONS);
+    // A node with one statistics pass has none to save and holds nothing.
+    let scaled = scan().scale(Some("counts"), "scaled", false, None).unwrap();
+    let scale = estimate_all(&scaled);
+    assert_eq!(scale.held_memory(), 0);
+    assert_eq!(scale.passes_saved(), 0);
+    assert_eq!(scale.passes(), 2);
 }
 
 #[test]
@@ -202,9 +249,13 @@ fn a_shared_sub_plan_makes_its_passes_once() {
     ];
     // Median 1 (once), seurat_v3 2, PCA 2 + its iterations; nothing read from the stream.
     assert_eq!(
-        estimate(&outputs).passes(),
+        estimate_streamed(&outputs).passes(),
         1 + 2 + 2 + PCA_POWER_ITERATIONS
     );
+    // Held (task 5.12): seurat_v3 and PCA read their input once each.
+    let held = estimate(&outputs);
+    assert_eq!(held.passes(), 1 + 1 + 1);
+    assert_eq!(held.passes_saved(), 1 + 1 + PCA_POWER_ITERATIONS);
 }
 
 #[test]
@@ -268,8 +319,9 @@ fn nodes_writing_layers_hold_an_output_block() {
 #[test]
 fn in_memory_members_and_statistics_are_resident() {
     let pca = scan().pca(Some("counts"), "X_pca", 50, 0, None).unwrap();
+    // Streamed, so nothing is held (task 5.12: `a_held_input_is_resident_and_saves_passes`).
     let pca_estimate =
-        estimate(&[Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()]);
+        estimate_streamed(&[Output::members(&pca, [Member::Embedding("X_pca".into())]).unwrap()]);
     let embeddings = N_CELLS * 50 * 4 + N_GENES * 50 * 4;
     // Its Krylov basis and products (60 columns a block) with their copies, means and
     // the embedding's rows in f64 with their cells and in f32; per leaf of a pass (2 blocks in flight and 2
@@ -296,7 +348,9 @@ fn in_memory_members_and_statistics_are_resident() {
         })
         .unwrap();
     let graphs =
-        estimate(&[Output::members(&neighbors, [Member::Graph("connectivities".into())]).unwrap()]);
+        estimate_streamed(&[
+            Output::members(&neighbors, [Member::Graph("connectivities".into())]).unwrap(),
+        ]);
     let distances = neighbors.output_schema().graph("distances").unwrap().nnz;
     let connectivities = neighbors
         .output_schema()

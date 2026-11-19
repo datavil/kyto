@@ -18,6 +18,17 @@
 //!
 //! A pass counts one read of the node's input stream for one read of its output: a
 //! node's work in its apply pass shares that pass with the per-cell nodes around it.
+//!
+//! **Held inputs (task 5.12).** A streamed node with two or more statistics passes
+//! (`pca`, `highly_variable_genes` with `seurat_v3`) holds its input in memory as CSR
+//! when [`PhysicalOptions::hold_inputs`] allows it ([`Execution::holds_input`]): the
+//! input streams from the store once, through the nodes below, and every statistics
+//! pass runs over the held blocks, with the same bits (kyto-exec's `held_input.rs`).
+//! The input is held by default; under a memory limit it is held only if the plan
+//! still fits (`memory_limit.rs`), else it streams on every pass. Nodes with one
+//! statistics pass (`scale`, a median `normalize_total`, `scrublet`, which gathers its
+//! rows in its one pass anyway) have no pass to save: their apply pass is the output's
+//! stream.
 //! Blocks hold the store's cell block size (`C`, `schema.json` `tiling`) rows, or
 //! fewer with [`PhysicalOptions::max_block_cells`] (task 5.5), and every gene read.
 //! Does not: execute (5.x), choose blocks for a memory limit (`memory_limit.rs`), count the
@@ -86,6 +97,10 @@ pub struct PhysicalOptions {
     /// blocks of `C` cells whole. Smaller blocks split each of the store's cell blocks
     /// (task 5.5: [`PhysicalPlan::within_memory_limit`] picks it for a memory limit).
     pub max_block_cells: Option<NonZeroU64>,
+    /// Whether a node with several statistics passes may hold its input in memory and
+    /// read the store once (task 5.12); `false` streams every pass from the store.
+    /// [`PhysicalPlan::within_memory_limit`] turns it off when holding does not fit.
+    pub hold_inputs: bool,
 }
 
 impl Default for PhysicalOptions {
@@ -94,6 +109,7 @@ impl Default for PhysicalOptions {
             device: Device::default(),
             blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
             max_block_cells: None,
+            hold_inputs: true,
         }
     }
 }
@@ -116,6 +132,7 @@ pub struct Execution {
     statistics_passes: u32,
     apply_pass: bool,
     blocks: Blocks,
+    holds_input: bool,
 }
 
 impl Execution {
@@ -143,9 +160,26 @@ impl Execution {
     pub fn blocks(&self) -> Blocks {
         self.blocks
     }
+
+    /// Whether it holds its input in memory (task 5.12): the input streams from the
+    /// store once and its statistics passes run over the held blocks.
+    pub fn holds_input(&self) -> bool {
+        self.holds_input
+    }
+
+    /// Passes over the store this node's statistics passes save by holding its input:
+    /// its statistics passes but one, 0 when it streams them.
+    pub fn passes_saved(&self) -> u32 {
+        if self.holds_input {
+            self.statistics_passes.saturating_sub(1)
+        } else {
+            0
+        }
+    }
 }
 
-/// `device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells`.
+/// `device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells`, then ` input held`
+/// for a node holding its input (task 5.12).
 impl fmt::Display for Execution {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "device={} passes={}", self.device, self.passes())?;
@@ -161,7 +195,11 @@ impl fmt::Display for Execution {
             Blocks::Cells(cells) => write!(formatter, " blocks={cells} cells"),
             Blocks::InMemory => formatter.write_str(" in memory"),
             Blocks::None => formatter.write_str(" no data"),
+        }?;
+        if self.holds_input {
+            formatter.write_str(" input held")?;
         }
+        Ok(())
     }
 }
 
@@ -192,7 +230,7 @@ impl PhysicalPlan {
                 (_, None) => unreachable!("optimized node without input"),
             };
             block_sizes.push(cells);
-            executions.push(execution(node, options.device, cells));
+            executions.push(execution(node, options, cells));
         }
         Self {
             optimized,
@@ -217,19 +255,23 @@ impl PhysicalPlan {
     }
 }
 
-/// How `node` runs on `device`, streamed in blocks of `cells` cells if it is.
-fn execution(node: &OptimizedNode, device: Device, cells: u64) -> Execution {
+/// How `node` runs with `options`, streamed in blocks of `cells` cells if it is.
+fn execution(node: &OptimizedNode, options: PhysicalOptions, cells: u64) -> Execution {
+    let device = options.device;
     let streamed = |statistics_passes: u32, apply_pass: bool| Execution {
         device,
         statistics_passes,
         apply_pass,
         blocks: Blocks::Cells(cells),
+        // Several statistics passes over one input: held once, if allowed (task 5.12).
+        holds_input: options.hold_inputs && statistics_passes >= 2,
     };
     let held = |blocks: Blocks| Execution {
         device,
         statistics_passes: 0,
         apply_pass: false,
         blocks,
+        holds_input: false,
     };
     // A statistics pass first when the step needs all cells, then the stream.
     let mapped = |scope: CellScope| streamed(u32::from(scope == CellScope::CrossCell), true);

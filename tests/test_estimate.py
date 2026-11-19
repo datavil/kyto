@@ -69,15 +69,51 @@ def test_estimates_read_nothing(store: Path) -> None:
             "passes": passes,
             "bytes_read": passes * _PASS_BYTES,
             "peak_memory": peak,
+            "held_memory": 0,
+            "passes_saved": 0,
             "device": "cpu",
         }
 
 
 def test_estimate_types(store: Path) -> None:
     estimate = _kyto.scan(store).estimate()
-    assert list(estimate) == ["passes", "bytes_read", "peak_memory", "device"]
+    assert list(estimate) == [
+        "passes",
+        "bytes_read",
+        "peak_memory",
+        "held_memory",
+        "passes_saved",
+        "device",
+    ]
     assert all(
-        type(estimate[key]) is int for key in ("passes", "bytes_read", "peak_memory")
+        type(estimate[key]) is int
+        for key in (
+            "passes",
+            "bytes_read",
+            "peak_memory",
+            "held_memory",
+            "passes_saved",
+        )
     )
     # A new dict each call.
     assert estimate is not _kyto.scan(store).estimate()
+
+
+def test_pca_holds_its_input(store: Path) -> None:
+    """Task 5.12: ``pca`` holds its input; ``explain()`` and ``estimate()`` say so."""
+    atlas = _kyto.scan(store).log1p(layer="counts", into="log1p")
+    plan = atlas.pca(layer="log1p", into="X_pca", n_components=2, seed=0)
+    shutil.rmtree(store)  # estimate() and explain() read nothing
+    pca_line = next(
+        line for line in plan.explain().splitlines() if line.lstrip().startswith("#")
+    )
+    assert pca_line.endswith("input held]"), pca_line
+    nodes = plan.explain(format="json")["optimized"]["nodes"]
+    assert [node["holds_input"] for node in nodes] == [True, False, False]
+    estimate = plan.estimate()
+    # The 3 `float32` entries and `u32` indices, 2 cells (16 bytes each), 1 block.
+    assert estimate["held_memory"] == 3 * 8 + 2 * 16 + 512
+    # 11 statistics passes, read once; one final pass for the layers.
+    assert estimate["passes_saved"] == 10
+    assert estimate["passes"] == 2
+    assert atlas.estimate()["held_memory"] == 0

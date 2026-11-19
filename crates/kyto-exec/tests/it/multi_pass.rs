@@ -361,19 +361,49 @@ fn hvg_on_fixtures_needs_exactly_the_passes_explain_reports() {
                 .unwrap()
                 .1;
             let explained_total: u32 = explained.iter().map(|(_, passes)| passes).sum();
+            // Passes a held input saves (task 5.12: seurat_v3 reads its input once).
+            let saved: u32 = physical
+                .executions()
+                .iter()
+                .map(|execution| execution.passes_saved())
+                .sum();
             let (blocks, statistics, reads) = run(&physical, &storage, threads(1));
             let measured = passes(&reads, &one_pass);
             report.push(format!(
                 "{name} {case}: explain() HVG statistics passes {hvg_passes}, all nodes \
-                 {explained_total}; estimate() {}; measured {measured}",
+                 {explained_total}, saved {saved}; estimate() {}; measured {measured}",
                 physical.estimate().passes()
             ));
             let expected_hvg = if flavor == HvgFlavor::SeuratV3 { 2 } else { 1 };
             assert_eq!(hvg_passes, expected_hvg, "{case}");
-            assert_eq!(measured, u64::from(explained_total), "{case}");
+            assert_eq!(saved, expected_hvg - 1, "{case}");
+            assert_eq!(measured, u64::from(explained_total - saved), "{case}");
             assert_eq!(measured, u64::from(physical.estimate().passes()), "{case}");
             if case != "seurat after a median" {
-                assert_eq!(measured, u64::from(hvg_passes), "{case}");
+                assert_eq!(measured, u64::from(hvg_passes - saved), "{case}");
+            }
+            if flavor == HvgFlavor::SeuratV3 {
+                // Streamed on both passes instead: two passes, the same statistics.
+                let streamed = PhysicalOptions {
+                    hold_inputs: false,
+                    ..options()
+                };
+                let columns = Output::members(
+                    &plan,
+                    [
+                        Member::GeneColumn("highly_variable".to_owned()),
+                        Member::GeneColumn("means".to_owned()),
+                    ],
+                )
+                .unwrap();
+                let streamed = physical_plan(&[columns], OptimizeOptions::ALL, streamed);
+                let (_, streamed_statistics, streamed_reads) = run(&streamed, &storage, threads(3));
+                assert_eq!(passes(&streamed_reads, &one_pass), 2, "{case} streamed");
+                assert_eq!(
+                    format!("{streamed_statistics:?}"),
+                    format!("{statistics:?}"),
+                    "{case}: held and streamed statistics"
+                );
             }
             // The output's stream read nothing: cells only.
             assert!(blocks.iter().all(|block| block.layers.is_empty()));
@@ -438,7 +468,7 @@ fn hvg_on_fixtures_needs_exactly_the_passes_explain_reports() {
             let (blocks, _, reads) = run(&all, &storage, threads(2));
             assert_eq!(
                 passes(&reads, &one_pass),
-                u64::from(explained_total) + 1,
+                u64::from(explained_total - saved) + 1,
                 "{case}: final pass"
             );
             assert_eq!(
@@ -624,4 +654,83 @@ fn a_median_normalize_total_runs_a_statistics_pass_then_its_apply_pass() {
         (totals - median).abs() < median * 1e-5,
         "{totals} vs {median}"
     );
+}
+
+/// Task 5.12: `pca` holds its input (after `normalize_total` and `log1p`) and reads the
+/// store once for all of its passes; under a memory limit below what holding needs it
+/// streams every pass, as before. Both give the same bits, on 1 and 3 threads.
+#[test]
+fn a_held_pca_reads_the_store_once_and_a_tight_limit_streams() {
+    use std::num::NonZeroU64 as Bytes;
+
+    use kyto_plan::{MemoryLimit, PCA_POWER_ITERATIONS};
+
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let storage = RecordingStore::new(FilesystemStore::new(&store).unwrap());
+    let base = scan(&store);
+    let (_, _, one_pass) = run(&layer_output(&base, "counts"), &storage, threads(2));
+    let plan = base
+        .normalize_total(Some(1e4), Some("counts"), "norm")
+        .unwrap()
+        .log1p(Some("norm"), "log1p")
+        .unwrap()
+        .pca(Some("log1p"), "X_pca", 10, 0, None)
+        .unwrap();
+    let output = Output::members(&plan, [Member::Embedding("X_pca".to_owned())]).unwrap();
+    let optimized = kyto_plan::optimize(std::slice::from_ref(&output), OptimizeOptions::ALL);
+    let pca_node = optimized.nodes().len() - 1;
+
+    let held = PhysicalPlan::new(optimized.clone(), options());
+    assert!(held.executions()[pca_node].holds_input());
+    let explained = Explain::new(&plan, &held).to_string();
+    assert!(explained.contains("input held"), "{explained}");
+    let estimate = held.estimate();
+    assert_eq!(estimate.passes(), 1);
+    assert_eq!(estimate.passes_saved(), 1 + PCA_POWER_ITERATIONS);
+    assert!(estimate.held_memory() > 0);
+    let (_, held_statistics, reads) = run(&held, &storage, threads(1));
+    assert_eq!(passes(&reads, &one_pass), 1, "held: one read of the store");
+    let pca_statistics = |statistics: &Statistics| match statistics.get(pca_node) {
+        Some(NodeStatistics::Pca(pca)) => (**pca).clone(),
+        _ => panic!("no pca statistics"),
+    };
+    let held_pca = pca_statistics(&held_statistics);
+
+    // A limit below the smallest plan holding the input (one block of one cell in
+    // flight), at the smallest streaming one: only streaming fits.
+    let smallest = |hold_inputs: bool| {
+        PhysicalPlan::new(
+            optimized.clone(),
+            PhysicalOptions {
+                blocks_in_flight: Bytes::MIN,
+                max_block_cells: Some(Bytes::MIN),
+                hold_inputs,
+                ..options()
+            },
+        )
+        .estimate()
+        .peak_memory()
+    };
+    let streamed_peak = smallest(false);
+    assert!(streamed_peak < smallest(true));
+    let limit = MemoryLimit::new(Bytes::new(streamed_peak).unwrap());
+    let limited = PhysicalPlan::within_memory_limit(optimized, options(), limit).unwrap();
+    assert!(!limited.executions()[pca_node].holds_input());
+    assert!(
+        !Explain::new(&plan, &limited)
+            .to_string()
+            .contains("input held")
+    );
+    assert_eq!(limited.estimate().passes(), 2 + PCA_POWER_ITERATIONS);
+    for n_threads in [1, 3] {
+        let (_, statistics, reads) = run(&limited, &storage, threads(n_threads));
+        // Every pass but those after the basis spans the 200 genes streams again.
+        assert!(passes(&reads, &one_pass) > 1, "streamed under the limit");
+        assert_eq!(pca_statistics(&statistics), held_pca, "{n_threads} threads");
+        let (_, statistics, reads) = run(&held, &storage, threads(n_threads));
+        assert_eq!(passes(&reads, &one_pass), 1);
+        assert_eq!(pca_statistics(&statistics), held_pca, "{n_threads} threads");
+    }
 }

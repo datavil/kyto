@@ -376,7 +376,7 @@ fn standard_pipeline_snapshots() {
 output #12 reads [cells:leiden]
 #12 LEIDEN "connectivities" -> "leiden" resolution=1 seed=0 <- #11 (node 8) [device=cpu passes=0 in memory]
 #11 NEIGHBORS "X_new" -> "distances", "connectivities" n_neighbors=15 metric=Euclidean search=Exact seed=0 <- #10 (node 7) [device=cpu passes=0 in memory]
-#10 PCA "scaled" -> "X_new" n_components=2 seed=0 <- #9 (node 6) [device=cpu passes=11 (statistics=11 apply=0) blocks=4096 cells]
+#10 PCA "scaled" -> "X_new" n_components=2 seed=0 <- #9 (node 6) [device=cpu passes=11 (statistics=11 apply=0) blocks=4096 cells input held]
 #9 SCALE "logn" -> "scaled" zero_center=true max_value=10 <- #8 (node 5) [device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells]
 #8 HIGHLY_VARIABLE_GENES "logn" flavor=seurat n_top_genes=3 <- #7 (node 4) [device=cpu passes=1 (statistics=1 apply=0) blocks=4096 cells]
 #7 FILTER_CELLS cell_column('score') > -2.0 <- #6 (node 3) [device=cpu passes=1 blocks=4096 cells]
@@ -442,4 +442,79 @@ fn blocks_follow_the_store_tiling() {
     for execution in physical.executions() {
         assert_eq!(execution.blocks(), Blocks::Cells(512));
     }
+}
+
+/// Task 5.12: a node with several statistics passes holds its input when the plan
+/// fits the memory limit with it held, and streams every pass when it does not.
+#[test]
+fn a_memory_limit_below_the_held_input_streams() {
+    use std::num::NonZeroU64;
+
+    use kyto_plan::MemoryLimit;
+
+    let pca = scan().pca(Some("counts"), "X_pca", 2, 0, None).unwrap();
+    let output = [Output::members(&pca, [Member::Embedding("X_pca".to_owned())]).unwrap()];
+    let optimized = kyto_plan::optimize(&output, OptimizeOptions::ALL);
+    let pca_node = optimized.nodes().len() - 1;
+    let held = PhysicalPlan::new(optimized.clone(), PhysicalOptions::default());
+    assert!(held.executions()[pca_node].holds_input());
+    assert_eq!(
+        held.executions()[pca_node].passes_saved(),
+        1 + PCA_POWER_ITERATIONS
+    );
+    // Scan and other one-pass nodes never hold.
+    assert!(!held.executions()[0].holds_input());
+    let streamed = PhysicalPlan::new(
+        optimized.clone(),
+        PhysicalOptions {
+            hold_inputs: false,
+            ..PhysicalOptions::default()
+        },
+    );
+    assert!(!streamed.executions()[pca_node].holds_input());
+    let (held_peak, streamed_peak) = (
+        held.estimate().peak_memory(),
+        streamed.estimate().peak_memory(),
+    );
+    assert!(held_peak > streamed_peak);
+    let limit = |bytes: u64| MemoryLimit::new(NonZeroU64::new(bytes).unwrap());
+    // Room for the held input: held, blocks as given.
+    let fitted = PhysicalPlan::within_memory_limit(
+        optimized.clone(),
+        PhysicalOptions::default(),
+        limit(held_peak),
+    )
+    .unwrap();
+    assert!(fitted.executions()[pca_node].holds_input());
+    assert_eq!(fitted.options(), PhysicalOptions::default());
+    // Below any held plan (the smallest: one block of one cell in flight), but enough
+    // to stream with the blocks as given: every pass streams from the store.
+    let smallest_held = PhysicalPlan::new(
+        optimized.clone(),
+        PhysicalOptions {
+            blocks_in_flight: NonZeroU64::MIN,
+            max_block_cells: Some(NonZeroU64::MIN),
+            ..PhysicalOptions::default()
+        },
+    )
+    .estimate()
+    .peak_memory();
+    assert!(
+        streamed_peak < smallest_held,
+        "{streamed_peak} {smallest_held}"
+    );
+    let below = streamed_peak;
+    let fitted = PhysicalPlan::within_memory_limit(
+        optimized.clone(),
+        PhysicalOptions::default(),
+        limit(below),
+    )
+    .unwrap();
+    assert!(!fitted.executions()[pca_node].holds_input());
+    assert!(!fitted.options().hold_inputs);
+    assert_eq!(fitted.estimate().passes(), 1 + PCA_POWER_ITERATIONS + 1);
+    // Too small for either: KY-E401 with the smallest peak of both searches.
+    let error = PhysicalPlan::within_memory_limit(optimized, PhysicalOptions::default(), limit(1))
+        .unwrap_err();
+    assert_eq!(error.code(), "KY-E401");
 }

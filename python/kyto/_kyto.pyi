@@ -506,9 +506,12 @@ class Atlas:
     ) -> Atlas:
         """Principal components of a layer (scanpy's ``pca``, implicit centring).
 
-        Streams the layer in ``2 + PCA_POWER_ITERATIONS`` passes (a randomized block
+        Makes ``2 + PCA_POWER_ITERATIONS`` passes over the layer (a randomized block
         Krylov method) and never densifies it. Adds the cell embedding ``into`` (one row
         per cell, ``n_components`` wide) and the gene embedding ``into + "_loadings"``.
+        It holds its input in memory (sparse, as stored) and reads it from the store
+        once for all of its passes, unless a ``memory_limit`` leaves no room for it; the
+        result is the same either way (``explain()`` says ``input held``, task 5.12).
 
         With ``genes`` (scanpy's ``mask_var``) the components are computed over the genes
         where the predicate is true, with the same result as ``filter(genes)`` before the
@@ -1251,8 +1254,9 @@ class Atlas:
         (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
         all cells and the ``apply`` pass when there are statistics passes), and
         ``blocks=N cells`` (streamed in blocks of the store's cell block size), ``in
-        memory`` or ``no data``. ``estimate()`` gives the cost of the whole plan. Nothing
-        is read.
+        memory`` or ``no data``, then ``input held`` for a step that holds its input in
+        memory (task 5.12: it reads the store once, and its ``passes`` run over the held
+        blocks). ``estimate()`` gives the cost of the whole plan. Nothing is read.
 
         Parameters
         ----------
@@ -1263,7 +1267,8 @@ class Atlas:
             ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
             ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
             ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
-            ``"in_memory"`` or ``"none"``) and ``block_cells``), in the text's order.
+            ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
+            text's order.
 
         Returns
         -------
@@ -1301,26 +1306,34 @@ class Atlas:
         Estimated for the plan as ``explain()`` shows it (every optimizer rule, a
         terminal reading all of its output, the CPU, 2 cell blocks in flight).
         ``passes`` counts the passes over the store's matrix: each statistics pass
-        streams the data again from the store, and one more pass delivers what is read
-        from the stream. ``bytes_read`` is the decoded size of the matrix tiles those
+        streams the data again from the store (once for all of a step's statistics passes
+        when it holds its input, below), and one more pass delivers what is read from the
+        stream. ``bytes_read`` is the decoded size of the matrix tiles those
         passes read (fewer bytes are on disk, compressed; the cell and gene tables are
         not counted). ``peak_memory`` is the most memory the plan holds at once: the
         blocks in flight in every streamed step (sized for blocks of mean density) plus
         statistics, in-memory results and the cell and gene tables the run reads (a
         filter, ``take_cells``, ``select_genes``, a computed column or a sink reads a
         whole table; string lengths are assumed, task 5.10); within 25% of what the
-        executor allocates on the test fixtures. Nothing is read.
+        executor allocates on the test fixtures. A step with several statistics passes
+        (``pca``, ``highly_variable_genes`` with ``seurat_v3``) holds its input in memory
+        and reads it from the store once (task 5.12; ``explain()`` says ``input held``):
+        ``held_memory`` is what those inputs hold (part of ``peak_memory``) and
+        ``passes_saved`` the passes over the store they save. Under a ``memory_limit``
+        the input is held only if the plan still fits. Nothing is read.
 
         Returns
         -------
         CostEstimate
-            A new dict with ``passes``, ``bytes_read`` and ``peak_memory`` (bytes, as
-            ``int``) and ``device`` (``"cpu"``).
+            A new dict with ``passes``, ``bytes_read``, ``peak_memory`` and
+            ``held_memory`` (bytes, as ``int``), ``passes_saved`` and ``device``
+            (``"cpu"``).
 
         Examples
         --------
-        >>> scan(store).estimate()
-        {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'device': 'cpu'}
+        >>> scan(store).estimate()  # doctest: +NORMALIZE_WHITESPACE
+        {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'held_memory': 0,
+         'passes_saved': 0, 'device': 'cpu'}
         """
     def _execute(
         self,
@@ -2119,6 +2132,8 @@ class CostEstimate(TypedDict):
     passes: int
     bytes_read: int
     peak_memory: int
+    held_memory: int
+    passes_saved: int
     device: Literal["cpu"]
 
 class ExplainedStep(TypedDict):
@@ -2151,6 +2166,7 @@ class ExplainedNode(TypedDict):
     apply_pass: bool
     blocks: Literal["cells", "in_memory", "none"]
     block_cells: int | None
+    holds_input: bool
 
 class ExplainedPlan(TypedDict):
     """The optimized plan of ``Atlas.explain(format="json")``."""

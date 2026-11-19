@@ -188,6 +188,18 @@ fn run(
     threads: usize,
     block_cells: Option<u64>,
 ) -> DataFrame {
+    run_holding(plan, columns, threads, block_cells, true)
+}
+
+/// [`run`], `seurat_v3`'s input held in memory (task 5.12, the default) or streamed on
+/// both passes.
+fn run_holding(
+    plan: &Arc<Plan>,
+    columns: &[String],
+    threads: usize,
+    block_cells: Option<u64>,
+    hold_inputs: bool,
+) -> DataFrame {
     let output = Output::members(
         plan,
         columns.iter().map(|name| Member::GeneColumn(name.clone())),
@@ -195,6 +207,7 @@ fn run(
     .unwrap();
     let options = PhysicalOptions {
         max_block_cells: block_cells.and_then(NonZeroU64::new),
+        hold_inputs,
         ..PhysicalOptions::default()
     };
     let physical = physical_plan(std::slice::from_ref(&output), OptimizeOptions::ALL, options);
@@ -372,14 +385,19 @@ fn highly_variable_genes_match_scanpy_on_fixtures() {
                     report.join(", ")
                 );
                 // R11: the same bits on all threads and at smaller blocks (small blocks
-                // on synthetic only, pbmc3k's 2700 cells in 37-cell blocks is slow).
-                let reruns: &[(usize, Option<u64>)] = if batched {
-                    &[(all, None), (all, Some(37))]
+                // on synthetic only, pbmc3k's 2700 cells in 37-cell blocks is slow),
+                // and streamed on every pass instead of held (task 5.12: seurat_v3).
+                let reruns: &[(usize, Option<u64>, bool)] = if batched {
+                    &[
+                        (all, None, true),
+                        (all, Some(37), true),
+                        (4, Some(37), false),
+                    ]
                 } else {
-                    &[(all, None)]
+                    &[(all, None, true), (1, None, false), (all, None, false)]
                 };
-                for &(threads, block_cells) in reruns {
-                    let other = run(&plan, &columns, threads, block_cells);
+                for &(threads, block_cells, hold) in reruns {
+                    let other = run_holding(&plan, &columns, threads, block_cells, hold);
                     for column in &columns {
                         let bits = |frame: &DataFrame| -> Vec<u64> {
                             floats(frame, column)
@@ -390,7 +408,7 @@ fn highly_variable_genes_match_scanpy_on_fixtures() {
                         assert_eq!(
                             bits(&genes),
                             bits(&other),
-                            "{name} {label} {column}: {threads} threads, blocks {block_cells:?}"
+                            "{name} {label} {column}: {threads} threads, blocks {block_cells:?}, held {hold}"
                         );
                     }
                 }

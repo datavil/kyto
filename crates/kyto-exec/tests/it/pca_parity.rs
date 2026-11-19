@@ -19,7 +19,8 @@
 //! all) variances to 1.5e-6 relative, angles 4.3e-6 rad; pbmc3k variances and ratios
 //! to 1.3e-6 (the `float32` reference's own precision), the first 10 components' span
 //! within 9.6e-6 rad and each within 2.2e-5 of its column, all 50 within 1.0e-3 rad.
-//! Also the same bits at 1 and all threads and at blocks of 37 cells (R11), and
+//! Also the same bits at 1 and all threads and at blocks of 37 cells (R11), the same
+//! bits with the input held in memory or streamed on every pass (task 5.12), and
 //! another seed changes the bits but not the result beyond the tolerances.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
@@ -115,14 +116,27 @@ fn scan(store: &Path) -> Arc<Plan> {
     Plan::scan(store.display().to_string(), schema, gene_ids)
 }
 
-/// The PCA's statistics, and the cells the output stream gave.
+/// The PCA's statistics, and the cells the output stream gave; its input held in
+/// memory (task 5.12, the default) or streamed on every pass.
 fn run(plan: &Arc<Plan>, threads: usize, block_cells: Option<u64>) -> (PcaStatistics, usize) {
+    run_holding(plan, threads, block_cells, true)
+}
+
+fn run_holding(
+    plan: &Arc<Plan>,
+    threads: usize,
+    block_cells: Option<u64>,
+    hold_inputs: bool,
+) -> (PcaStatistics, usize) {
     let output = Output::members(plan, [Member::Embedding("X_pca".to_owned())]).unwrap();
     let options = PhysicalOptions {
         max_block_cells: block_cells.and_then(NonZeroU64::new),
+        hold_inputs,
         ..PhysicalOptions::default()
     };
     let physical = physical_plan(std::slice::from_ref(&output), OptimizeOptions::ALL, options);
+    let pca_node = physical.optimized().nodes().len() - 1;
+    assert_eq!(physical.executions()[pca_node].holds_input(), hold_inputs);
     let mut stream = Pipeline::new(&physical, 0)
         .unwrap()
         .run(ExecuteOptions::new(NonZeroUsize::new(threads).unwrap()))
@@ -283,6 +297,15 @@ fn pca_matches_scanpy_on_fixtures() {
             assert_eq!(
                 again, pca,
                 "{name}: R11 at {threads} threads, {block_cells:?} cells"
+            );
+        }
+        // Task 5.12: the held input gives the streamed path's bits, at 1, 4 and all
+        // threads and with split cell blocks.
+        for (threads, block_cells) in [(1, None), (4, None), (all, None), (4, Some(37))] {
+            let (streamed, _) = run_holding(&plan, threads, block_cells, false);
+            assert_eq!(
+                streamed, pca,
+                "{name}: held vs streamed at {threads} threads, {block_cells:?} cells"
             );
         }
         let (other, _) = run(

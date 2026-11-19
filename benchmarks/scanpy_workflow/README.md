@@ -10,6 +10,8 @@ timing scripts, run by hand.
 | `run_kyto.py IN.h5ad STORE OUT SEARCH` | `ky.convert`, then the same workflow as one plan run by `sink_zarr`; `SEARCH` is `exact` or `approximate` |
 | `kyto_breakdown.py STORE OUT [--with-umap]` | Runs the kyto plan cut after each step; prints cumulative seconds |
 | `measure.py SCRIPT ARGS...` | Runs a script and prints its peak RSS |
+| `pca_timing.py STORE WORK` | kyto's PCA alone (on the HVG store it writes to `WORK` once) and in the workflow, input held vs streamed, at 1, 4 and 10 threads; checks the embeddings are bit-identical (task 5.12) |
+| `pca_scanpy.py IN.h5ad [--kyto WORK/kyto_pca.npy]` | scanpy's `pp.pca` alone on the same HVG matrix, threads capped by threadpoolctl; compares kyto's embedding |
 
 scanpy needs its own environment (it is not a kyto dependency):
 
@@ -22,6 +24,14 @@ uv run maturin develop --release   # kyto in the project environment
 .venv-scanpy/bin/python measure.py run_scanpy.py synthetic_50000.h5ad out_scanpy.h5ad
 uv run python measure.py run_kyto.py synthetic_50000.h5ad store.kyto out_kyto.kyto exact
 uv run python kyto_breakdown.py store.kyto tmp.kyto --with-umap
+```
+
+PCA alone (task 5.12; peak memory with `/usr/bin/time -l`, as `measure.py` divides
+macOS's byte count as if it were Linux's kilobytes):
+
+```bash
+uv run python pca_timing.py store.kyto work
+.venv-scanpy/bin/python pca_scanpy.py synthetic_50000.h5ad --kyto work/kyto_pca.npy
 ```
 
 Run scanpy twice and report the second run: the first spends minutes compiling numba code.

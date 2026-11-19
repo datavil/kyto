@@ -50,6 +50,7 @@ mod elementwise;
 mod expression;
 mod gene_qc;
 mod gene_steps;
+mod held_input;
 mod hvg;
 mod hvg_pass;
 mod kernels;

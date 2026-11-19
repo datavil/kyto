@@ -5,7 +5,8 @@
 //! resolved in full (R6), input, and a note in brackets when the step has a cheaper
 //! alternative: a centred `scale` densifies, task 6.4) and the optimized plan's outputs and nodes (from
 //! the top down: arena position, name, parameters, what a scan reads, input, the
-//! logical nodes it came from, and how it runs: device, passes, blocks). [`Explain`]
+//! logical nodes it came from, and how it runs: device, passes, blocks, and
+//! `input held` for a node holding its input in memory, task 5.12). [`Explain`]
 //! prints the text form and writes the JSON form from the same entries, so the two
 //! always say the same. Text:
 //!
@@ -102,6 +103,9 @@ pub struct OptimizedEntry {
     pub blocks: &'static str,
     /// The cells in each block when streamed (`None` otherwise).
     pub block_cells: Option<u64>,
+    /// Whether it holds its input in memory and reads the store once for all of its
+    /// statistics passes (task 5.12).
+    pub holds_input: bool,
 }
 
 impl Explain {
@@ -156,6 +160,7 @@ impl Explain {
                     apply_pass: execution.apply_pass(),
                     blocks,
                     block_cells,
+                    holds_input: execution.holds_input(),
                 }
             })
             .collect();
@@ -293,10 +298,14 @@ impl fmt::Display for Explain {
                 )?;
             }
             match entry.block_cells {
-                Some(cells) => write!(formatter, " blocks={cells} cells]")?,
-                None if entry.blocks == "in_memory" => formatter.write_str(" in memory]")?,
-                None => formatter.write_str(" no data]")?,
+                Some(cells) => write!(formatter, " blocks={cells} cells")?,
+                None if entry.blocks == "in_memory" => formatter.write_str(" in memory")?,
+                None => formatter.write_str(" no data")?,
             }
+            if entry.holds_input {
+                formatter.write_str(" input held")?;
+            }
+            formatter.write_str("]")?;
         }
         Ok(())
     }

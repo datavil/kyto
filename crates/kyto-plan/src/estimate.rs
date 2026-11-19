@@ -10,7 +10,10 @@
 //! again from the scan (nothing between is kept); a node shared by two outputs makes
 //! its passes once (the optimized plan is a DAG). Statistics passes of sibling nodes
 //! (`highly_variable_genes` and `pca` on one layer) are not merged into one stream:
-//! an upper bound, as is counting every streamed node's blocks at once below. One more, final pass delivers what
+//! an upper bound, as is counting every streamed node's blocks at once below. A node
+//! holding its input (task 5.12, [`crate::Execution::holds_input`]) streams it once,
+//! whatever its statistics passes: it saves the others
+//! ([`CostEstimate::passes_saved`]). One more, final pass delivers what
 //! the outputs read from the stream: a layer, or a member written in a streamed node's
 //! apply pass (a `with_cells` column computed from the matrix).
 //!
@@ -71,7 +74,13 @@
 //! row's cell) and their `float32` copy (`n_cells x n_components x 4`), and per leaf of its
 //! passes' reductions `n_genes x (l x 8 + 16)` (the sketch or a product), and
 //! `scrublet` (task 6.12) the layer's gathered rows and its dense working matrices
-//! (`scrublet_bytes`, with [`SCRUBLET_ASSUMED_GENES`]).
+//! (`scrublet_bytes`, with [`SCRUBLET_ASSUMED_GENES`]). A node holding its input
+//! (task 5.12) keeps its input layer's rows ([`CostEstimate::held_memory`]): the layer's
+//! entries at the node's input, `nnz x (4 + value bytes)`, and per cell its `indptr`
+//! entry and table position (16 bytes), and per block [`HELD_BLOCK_BYTES`] (one more
+//! `indptr` entry, the 64-byte lines its three buffers round up to and the block's
+//! bookkeeping); counted resident (an upper bound: it is freed when the node's passes
+//! end).
 //!
 //! The scan's terms are the reader's (`kyto_store::LayerReader`) as it allocates today;
 //! with the per-cell maps, the held block and the pool they are checked within 25% of
@@ -116,6 +125,10 @@ pub const ASSUMED_NNZ_SHARD_SIZE: u64 = 1 << 20;
 /// `tile_offsets` (format.md §4.4: 65 536 `uint64` values) and a copy of it. Opening
 /// comes before streaming, so a plan needs the larger of this and its blocks.
 const OPEN_LAYER_BYTES: u128 = 2 * 65_536 * 8;
+
+/// Bytes per held block (task 5.12) beyond its entries and cells: one more `indptr`
+/// entry, three buffers rounded up to 64-byte lines, the block's layer map and fields.
+pub const HELD_BLOCK_BYTES: u64 = 512;
 
 /// Extra columns of the streamed randomized PCA's blocks beyond its components
 /// (Halko et al., scikit-learn's default; task 6.5).
@@ -165,9 +178,11 @@ fn pca_block_columns(n_components: u64, n_genes: u128) -> u128 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CostEstimate {
     passes: u32,
+    passes_saved: u32,
     bytes_read: u64,
     block_memory: u64,
     resident_memory: u64,
+    held_memory: u64,
     device: Device,
 }
 
@@ -175,6 +190,18 @@ impl CostEstimate {
     /// Passes over the store's matrix (0 when the plan reads none).
     pub fn passes(&self) -> u32 {
         self.passes
+    }
+
+    /// Passes over the store that nodes holding their input save (task 5.12): their
+    /// statistics passes but the one that reads the input.
+    pub fn passes_saved(&self) -> u32 {
+        self.passes_saved
+    }
+
+    /// Bytes of the inputs nodes hold in memory (task 5.12), part of
+    /// [`CostEstimate::resident_memory`].
+    pub fn held_memory(&self) -> u64 {
+        self.held_memory
     }
 
     /// Decoded bytes of the matrix tiles read, over all passes.
@@ -229,6 +256,8 @@ impl PhysicalPlan {
         let in_flight = u128::from(self.options().blocks_in_flight.get());
 
         let mut statistics_passes = 0_u32;
+        let mut passes_saved = 0_u32;
+        let mut held = 0_u128;
         let mut pass_bytes = 0_u128;
         let mut opening = 0_u128;
         let mut resident = 0_u128;
@@ -257,6 +286,7 @@ impl PhysicalPlan {
             nodes.iter().zip(executions).zip(&schemas).enumerate()
         {
             statistics_passes = statistics_passes.saturating_add(execution.statistics_passes());
+            passes_saved = passes_saved.saturating_add(execution.passes_saved());
             let input = node.input().map(|input| &schemas[input]);
             let Blocks::Cells(cell_block_size) = execution.blocks() else {
                 resident += node_resident(node, schema, input);
@@ -266,6 +296,9 @@ impl PhysicalPlan {
                 streamed_writes.extend(node.writes());
             }
             let sizes = BlockSizes::new(schema, input, cell_block_size);
+            if execution.holds_input() {
+                held += held_input_bytes(node, input.unwrap_or(schema), &sizes);
+            }
             window = window.max(in_flight.min(sizes.n_blocks.max(1)));
             n_blocks = n_blocks.max(sizes.n_blocks);
             match node.operation() {
@@ -361,13 +394,17 @@ impl PhysicalPlan {
             .iter()
             .zip(executions)
             .any(|(_, execution)| matches!(execution.blocks(), Blocks::Cells(_)));
-        let passes = statistics_passes.saturating_add(u32::from(reads_stream && streams));
+        let passes = statistics_passes
+            .saturating_sub(passes_saved)
+            .saturating_add(u32::from(reads_stream && streams));
         let tables = TableReads::new(nodes);
         CostEstimate {
             passes,
+            passes_saved,
             bytes_read: saturate(pass_bytes * u128::from(passes)),
             block_memory: saturate(block.max(opening).max(tables.reading)),
-            resident_memory: saturate(resident + tables.held),
+            resident_memory: saturate(resident + held + tables.held),
+            held_memory: saturate(held),
             device: self.options().device,
         }
     }
@@ -433,6 +470,30 @@ fn is_cell_or_gene_step(node: &OptimizedNode) -> bool {
 /// values at the capacity pushing reaches, and the `u64` row pointer.
 fn held_block_bytes(sizes: &BlockSizes, nnz: u64, dtype: LayerDtype) -> u128 {
     vec_capacity(sizes.entries(nnz)) * (4 + layer_value_bytes(dtype)) + (sizes.rows + 1) * 8
+}
+
+/// What a node holding its input keeps (task 5.12): its input layer's entries at its
+/// input (`input`), each cell's `indptr` entry and table position, and
+/// [`HELD_BLOCK_BYTES`] per block (module doc).
+fn held_input_bytes(node: &OptimizedNode, input: &PlanSchema, sizes: &BlockSizes) -> u128 {
+    let Operation::Node(plan) = node.operation() else {
+        return 0;
+    };
+    let Plan::CrossCell(cross_cell) = plan.as_ref() else {
+        return 0;
+    };
+    let layer = match cross_cell.params().op() {
+        CrossCellOp::Scale { layer, .. }
+        | CrossCellOp::HighlyVariableGenes { layer, .. }
+        | CrossCellOp::Pca { layer, .. }
+        | CrossCellOp::Scrublet { layer, .. } => layer,
+    };
+    let Some(layer) = input.layer(layer) else {
+        return 0;
+    };
+    u128::from(layer.nnz) * (4 + layer_value_bytes(layer.dtype))
+        + sizes.n_cells * 16
+        + sizes.n_blocks * u128::from(HELD_BLOCK_BYTES)
 }
 
 /// The layers `node` writes in its pass, with their output schemas.

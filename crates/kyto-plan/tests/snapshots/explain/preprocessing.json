@@ -87,7 +87,8 @@
         "statistics_passes": 11,
         "apply_pass": false,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": true
       },
       {
         "index": 3,
@@ -103,7 +104,8 @@
         "statistics_passes": 1,
         "apply_pass": true,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": false
       },
       {
         "index": 2,
@@ -119,7 +121,8 @@
         "statistics_passes": 2,
         "apply_pass": false,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": true
       },
       {
         "index": 1,
@@ -136,7 +139,8 @@
         "statistics_passes": 0,
         "apply_pass": true,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": false
       },
       {
         "index": 0,
@@ -163,7 +167,8 @@
         "statistics_passes": 0,
         "apply_pass": true,
         "blocks": "cells",
-        "block_cells": 4096
+        "block_cells": 4096,
+        "holds_input": false
       }
     ]
   }

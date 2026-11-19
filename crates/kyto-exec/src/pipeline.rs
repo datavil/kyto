@@ -63,6 +63,7 @@ use crate::cross_cell::{Accumulator, CrossCellKind, CrossCellStage, starts_with_
 use crate::elementwise::ElementwiseMaps;
 use crate::expression::Prepared;
 use crate::gene_steps::{GeneStepKind, Genes, collect_inputs, pass_layers};
+use crate::held_input::HeldInput;
 use crate::hvg;
 use crate::leiden::{self, ClusterStatistics};
 use crate::neighbors::{self, NeighborStatistics};
@@ -202,6 +203,9 @@ pub struct Pipeline {
     pub(crate) sink: Option<SinkSpec>,
     /// The source of each embedding of the plan at each stage, by stage (task 5.11).
     pub(crate) embeddings_at: Vec<BTreeMap<String, EmbeddingSource>>,
+    /// The optimized nodes that hold their input in memory for their statistics
+    /// passes (task 5.12, [`kyto_plan::Execution::holds_input`]).
+    pub(crate) held: BTreeSet<usize>,
 }
 
 impl Pipeline {
@@ -309,6 +313,12 @@ impl Pipeline {
             block_cells,
             sink,
             embeddings_at: members.at_stage,
+            held: executions
+                .iter()
+                .enumerate()
+                .filter(|(_, execution)| execution.holds_input())
+                .map(|(index, _)| index)
+                .collect(),
         })
     }
 
@@ -387,7 +397,10 @@ impl Pipeline {
             | Stage::Neighbors(_)
             | Stage::Cluster(_)
             | Stage::Umap(_) => passes,
-            Stage::CrossCell(cross_cell) => passes.saturating_add(u64::from(cross_cell.passes)),
+            // A held input (task 5.12) streams once more, to be held.
+            Stage::CrossCell(cross_cell) => passes
+                .saturating_add(u64::from(cross_cell.passes))
+                .saturating_add(u64::from(self.held.contains(&cross_cell.node))),
             Stage::Genes { passes: more, .. } => passes.saturating_add(u64::from(*more)),
         });
         control.set_total(self.grid.n_cells().saturating_mul(passes));
@@ -634,22 +647,44 @@ impl Pipeline {
                 gene_set.as_ref().map(GeneSet::mask),
             );
             let input = BTreeSet::from([cross_cell.input_layer().to_owned()]);
+            // The input read once and held for every pass (task 5.12), if the physical
+            // plan holds it; dropped when the passes end.
+            let held = if self.held.contains(&cross_cell.node) {
+                Some(HeldInput::read(
+                    &source(Arc::clone(&readers), &operators, input.clone()),
+                    &thread_pool,
+                    cross_cell.input_layer(),
+                )?)
+            } else {
+                None
+            };
             for pass in 0..cross_cell.passes {
                 if accumulator.skips(pass) {
                     // Nothing left to compute (pca's basis stopped growing): counted as done.
                     control.add_done(self.grid.n_cells());
                     continue;
                 }
-                // A tree in block order over the store's cell blocks (task 5.6, R11).
-                let reduced = reduce_pass(
-                    &source(Arc::clone(&readers), &operators, input.clone()),
-                    &thread_pool,
-                    cross_cell.input_layer(),
-                    &accumulator,
-                    pass,
-                )?;
+                // A tree in block order over the store's cell blocks (task 5.6, R11),
+                // over the held blocks or streamed from the store: the same bits.
+                let reduced = match &held {
+                    Some(held) => {
+                        let reduced =
+                            held.reduce_pass(&thread_pool, &accumulator, pass, &control)?;
+                        // A pass over every cell, as a streamed one counts it.
+                        control.add_done(self.grid.n_cells());
+                        reduced
+                    }
+                    None => reduce_pass(
+                        &source(Arc::clone(&readers), &operators, input.clone()),
+                        &thread_pool,
+                        cross_cell.input_layer(),
+                        &accumulator,
+                        pass,
+                    )?,
+                };
                 accumulator.end_pass(pass, reduced)?;
             }
+            drop(held);
             if let Accumulator::Rows(rows) = accumulator {
                 // Scrublet runs its search on the run's pool (task 6.12).
                 let (found, columns) = thread_pool.install(|| rows.finish(&control))?;

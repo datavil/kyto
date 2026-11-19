@@ -78,12 +78,8 @@ Done (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7): see [Implementation Plan - Done.md](Im
 
 Goal: any plan runs within a memory limit, uses every core, and gives the same answer on 1 or 64 threads.
 
-Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
+Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.12 Materialize multi-pass inputs.** When a node that needs several passes (PCA, `scale`, differential expression, doublet detection) has an input that fits the memory limit, hold that input once in memory as CSR and iterate there instead of re-reading the store on every pass; otherwise stream as today. The physical plan chooses, `explain()` shows the choice, and `estimate()` counts the held bytes and the passes saved. Results keep their bits (R11). (added Nov 14, 2026, at the user's request: a profile at 50k cells × 2,000 HVGs on a 10-core Mac put PCA at 17.6 s on one thread, about 1 s of it PCA arithmetic and the rest zstd decoding, the gene subset, `log1p` and tile checks repeated on each of 11 passes; scanpy 2.5 s, kyto 7 to 9 s on 10 threads)
-  - Depends: 5.5, 5.6, 6.5
-  - Done when: on the `benchmarks/scanpy_workflow` 50k data PCA takes at most 1.5× scanpy's time on the same machine, with the embedding bit-identical to the streamed path's at 1, 4 and all threads; a memory limit below the input's size still streams (test).
-  - Open: (1) whether a one-pass covariance path for few genes (gene × gene matrix, exact solve, one projection pass) is still worth building; measure again after this task.
 - [ ] **5.13 Default blocks in flight.** With no memory limit, `blocks_in_flight` defaults to the thread count instead of 2; with a limit, 5.5's fit chooses. (added Nov 14, 2026, at the user's request: the same profile showed 10 threads giving 2.4× over one thread on PCA's passes)
   - Depends: 5.2, 5.5
   - Done when: the benchmark's preprocessing and PCA passes scale at least 5× from 1 to 10 threads on the 50k data, and outputs are bit-identical at 1, 4 and all threads.

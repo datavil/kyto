@@ -153,6 +153,7 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
                     "apply_pass": True,
                     "blocks": "cells",
                     "block_cells": 4096,
+                    "holds_input": False,
                 },
                 {
                     "index": 0,
@@ -167,6 +168,7 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
                     "apply_pass": True,
                     "blocks": "cells",
                     "block_cells": 4096,
+                    "holds_input": False,
                 },
             ],
         },
