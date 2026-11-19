@@ -18,7 +18,9 @@
 //! through the same [`Windows`] without the producer thread (`reduction.rs`).
 //! Blocks hold at most `block_cells` rows of one store cell block: the store's cell
 //! blocks, or parts of them when the physical plan splits them for a memory limit
-//! (task 5.5).
+//! (task 5.5, read in parts) or over many threads (task 5.14: `read_cells` rows are
+//! read and decoded at once, then joined into parts in parallel by the reader,
+//! [`LayerReader::cell_blocks_in_parts`], so reading costs what whole blocks cost).
 //! A cancelled run (task 5.7, the source's [`RunControl`]) stops at its next block:
 //! no block is read or computed after the cancel is seen, the window ends with
 //! `KY-E503` and the stream after it. Each computed block adds its cells to the run's
@@ -81,9 +83,25 @@ pub(crate) struct StreamSource<S: ?Sized> {
     pub(crate) window: NonZeroUsize,
     /// Cells per block: the store's `C`, or fewer to split its cell blocks (5.5).
     pub(crate) block_cells: NonZeroU64,
+    /// Cells per read, at least `block_cells`: more when blocks are cut from what was
+    /// read in memory (task 5.14).
+    pub(crate) read_cells: NonZeroU64,
     pub(crate) store: String,
     /// The run's cancel flag and progress counters.
     pub(crate) control: RunControl,
+}
+
+impl<S: ?Sized> StreamSource<S> {
+    /// Cell blocks read at once: the window's blocks, or when they are cut from blocks
+    /// read whole (task 5.14) as many whole reads as hold the window's cells (at least
+    /// one), so the cells read at once stay those of the window.
+    pub(crate) fn read_window(&self) -> NonZeroUsize {
+        let cells = (self.window.get() as u64).saturating_mul(self.block_cells.get());
+        usize::try_from(cells / self.read_cells.get())
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .unwrap_or(NonZeroUsize::MIN)
+    }
 }
 
 /// What the producer thread owns.
@@ -257,11 +275,12 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
             .readers
             .iter()
             .map(|reader| {
-                reader.cell_blocks_of_rows(
+                reader.cell_blocks_in_parts(
                     &AxisSelection::All,
                     &AxisSelection::All,
+                    source.read_cells,
                     source.block_cells,
-                    source.window,
+                    source.read_window(),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;

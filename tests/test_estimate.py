@@ -117,3 +117,18 @@ def test_pca_holds_its_input(store: Path) -> None:
     assert estimate["passes_saved"] == 10
     assert estimate["passes"] == 2
     assert atlas.estimate()["held_memory"] == 0
+
+
+def test_threads_estimate_a_run(store: Path) -> None:
+    """Task 5.14: ``threads`` estimates a run on that many threads."""
+    atlas = _kyto.scan(store)
+    shutil.rmtree(store)  # estimate() reads nothing
+    assert atlas.estimate(threads=2) == atlas.estimate()
+    one, many = atlas.estimate(threads=1), atlas.estimate(threads=10)
+    # The same passes and bytes; the blocks in flight change only the peak.
+    assert {key: one[key] for key in ("passes", "bytes_read")} == {
+        key: many[key] for key in ("passes", "bytes_read")
+    }
+    with pytest.raises(kyto.PlanError) as raised:
+        atlas.estimate(threads=0)
+    assert raised.value.code == "KY-E215"

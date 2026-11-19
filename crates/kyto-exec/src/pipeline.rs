@@ -199,6 +199,9 @@ pub struct Pipeline {
     /// Cells per streamed block: the scan's execution's (the store's `C`, or fewer
     /// under a memory limit, task 5.5).
     pub(crate) block_cells: NonZeroU64,
+    /// Cells per read: `block_cells`, or more when blocks are cut in memory from what
+    /// is read (task 5.14, [`kyto_plan::PhysicalOptions::store_blocks_in_flight`]).
+    pub(crate) read_cells: NonZeroU64,
     /// What the plan's sink writes, when the output ends in one (task 5.9).
     pub(crate) sink: Option<SinkSpec>,
     /// The source of each embedding of the plan at each stage, by stage (task 5.11).
@@ -290,6 +293,11 @@ impl Pipeline {
         // A scan streams in blocks of at most C cells (physical_plan.rs).
         let store_cells = NonZeroU64::new(grid.cell_block_size()).unwrap_or(NonZeroU64::MIN);
         let block_cells = block_cells.map_or(store_cells, |cells| cells.min(store_cells));
+        // Reading splits a cell block only for max_block_cells (a memory limit, 5.5);
+        // smaller blocks for many threads are cut in memory from it (task 5.14).
+        let read_cells = NonZeroU64::new(plan.options().scan_read_cells(store_cells.get()))
+            .unwrap_or(NonZeroU64::MIN)
+            .max(block_cells);
         // At most one window of every block (as 4.6's estimate counts them), so a huge
         // blocks_in_flight sizes nothing beyond the store; at least 1.
         let n_blocks = grid.n_cell_blocks().saturating_mul(
@@ -311,6 +319,7 @@ impl Pipeline {
             output_layers,
             blocks_in_flight,
             block_cells,
+            read_cells,
             sink,
             embeddings_at: members.at_stage,
             held: executions
@@ -430,6 +439,7 @@ impl Pipeline {
                 output_layers,
                 window: self.blocks_in_flight,
                 block_cells: self.block_cells,
+                read_cells: self.read_cells,
                 store: self.store.clone(),
                 control: control.clone(),
             }

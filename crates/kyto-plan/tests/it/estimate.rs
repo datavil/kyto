@@ -143,6 +143,7 @@ fn a_run_holds_one_block_in_flight_per_thread() {
     assert_eq!(
         PhysicalOptions {
             blocks_in_flight: PhysicalOptions::default().blocks_in_flight,
+            store_blocks_in_flight: None,
             ..threads(10)
         },
         PhysicalOptions::default()
@@ -150,9 +151,10 @@ fn a_run_holds_one_block_in_flight_per_thread() {
     // usize::MAX threads saturate (u64 is as wide on every target kyto builds for).
     assert_eq!(threads(usize::MAX).blocks_in_flight.get(), u64::MAX);
     let plan = scan();
+    // 2 threads build the default's plan.
     assert_eq!(
-        plan.physical(threads(3)).estimate().block_memory(),
-        3 * SCAN_BLOCK
+        plan.physical(threads(2)).estimate(),
+        plan.physical(PhysicalOptions::default()).estimate()
     );
     // A limit with room for two full blocks only: halved from 8 (8, 4, 2) to 2, the
     // blocks kept whole.
@@ -185,6 +187,70 @@ fn a_run_holds_one_block_in_flight_per_thread() {
     )
     .unwrap();
     assert_eq!(roomy.options(), threads(3));
+}
+
+/// Task 5.14: on more threads than 2 a run's blocks shrink so the cells in flight stay
+/// those of 2 store cell blocks; a memory limit's fit still starts from the store's.
+#[test]
+fn many_threads_share_two_cell_blocks() {
+    use std::num::NonZeroUsize;
+
+    use kyto_plan::{Blocks, MemoryLimit, PhysicalPlan};
+
+    let threads =
+        |threads: usize| PhysicalOptions::for_threads(NonZeroUsize::new(threads).unwrap());
+    let scan_cells =
+        |options: PhysicalOptions| match scan().physical(options).executions()[0].blocks() {
+            Blocks::Cells(cells) => cells,
+            blocks => panic!("a scan streams, got {blocks:?}"),
+        };
+    // ceil(2 x 4096 / threads), the store's 4096 on 1 and 2 threads.
+    for (count, cells) in [(1, 4_096), (2, 4_096), (3, 2_731), (4, 2_048), (10, 820)] {
+        assert_eq!(scan_cells(threads(count)), cells, "{count} threads");
+    }
+    // At least 1 cell, however many threads.
+    assert_eq!(scan_cells(threads(100_000)), 1);
+    assert_eq!(scan_cells(threads(usize::MAX)), 1);
+    // A smaller max_block_cells wins; without the share the store's blocks stay.
+    let capped = PhysicalOptions {
+        max_block_cells: NonZeroU64::new(500),
+        ..threads(4)
+    };
+    assert_eq!(scan_cells(capped), 500);
+    let unshared = PhysicalOptions {
+        store_blocks_in_flight: None,
+        ..threads(10)
+    };
+    assert_eq!(scan_cells(unshared), 4_096);
+    // A limit with room for 2 full blocks: the fit's candidates are the store's
+    // blocks, as before the share (5.13's 2 blocks in flight of 4096 cells).
+    let fits_two = 2 * SCAN_BLOCK + 56;
+    let fitted = PhysicalPlan::within_memory_limit(
+        scan().optimize(),
+        threads(8),
+        MemoryLimit::new(NonZeroU64::new(fits_two).unwrap()),
+    )
+    .unwrap();
+    assert!(fitted.estimate().peak_memory() <= fits_two);
+    let roomy = PhysicalPlan::within_memory_limit(
+        scan().optimize(),
+        threads(10),
+        MemoryLimit::new(NonZeroU64::new(u64::MAX).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(roomy.options(), threads(10));
+    assert_eq!(roomy.executions()[0].blocks(), Blocks::Cells(820));
+    // The parts are cut from whole reads: every pass reads what 2 threads read
+    // (each tile's indptr once), whatever the threads.
+    let plan = scan();
+    assert_eq!(
+        plan.physical(threads(10)).estimate().bytes_read(),
+        PASS_BYTES
+    );
+    assert_eq!(
+        plan.physical(threads(3)).estimate().bytes_read(),
+        PASS_BYTES
+    );
 }
 
 #[test]

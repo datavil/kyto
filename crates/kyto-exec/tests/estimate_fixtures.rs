@@ -188,16 +188,23 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                 ("maps", &mapped, "log1p"),
                 ("filters", &filtered, "log1p"),
             ];
-            for ((kind, plan, read), blocks_in_flight, block_cells) in plans
+            // Blocks in flight, cells per block, and store blocks shared over the blocks
+            // in flight (task 5.14: 4 parts of C/2 cut from 2 whole reads).
+            let shapes = [
+                (1, None, None),
+                (1, Some(256), None),
+                (2, None, None),
+                (2, Some(256), None),
+                (4, None, Some(2)),
+            ];
+            for ((kind, plan, read), (blocks_in_flight, block_cells, shared)) in plans
                 .into_iter()
-                .flat_map(|plan| [1, 2].map(|in_flight| (plan, in_flight)))
-                .flat_map(|(plan, in_flight)| {
-                    [None, Some(256)].map(|cells| (plan, in_flight, cells))
-                })
+                .flat_map(|plan| shapes.map(|shape| (plan, shape)))
             {
                 let options = PhysicalOptions {
                     blocks_in_flight: NonZeroU64::new(blocks_in_flight).unwrap(),
                     max_block_cells: block_cells.and_then(NonZeroU64::new),
+                    store_blocks_in_flight: shared.and_then(NonZeroU64::new),
                     ..PhysicalOptions::default()
                 };
                 let plan = physical(plan, read, options);
@@ -210,13 +217,19 @@ fn estimated_peak_memory_is_within_25_percent_of_measured() {
                     "{name} {kind} C={} G={} in_flight={blocks_in_flight} block_cells={}: estimated {estimated} B, measured {measured} B ({:+.1}%)",
                     tiling.cell_block_size,
                     tiling.gene_block_size,
-                    block_cells.map_or("C".to_owned(), |cells| cells.to_string()),
+                    match (block_cells, shared) {
+                        (Some(cells), _) => cells.to_string(),
+                        (None, Some(_)) => "C/2 cut".to_owned(),
+                        (None, None) => "C".to_owned(),
+                    },
                     error * 100.0
                 ));
                 // Whole blocks: the 4.6 Done-when. Split blocks (5.5) on many gene blocks
                 // are dominated by the decode term, which assumes every tile of a block
-                // decodes at once (4.6 Open (3)): too high, never far too low.
-                let off = if block_cells.is_none() {
+                // decodes at once (4.6 Open (3)): too high, never far too low. So are
+                // parts cut from whole reads (5.14: whole reads and computed parts are
+                // modelled apart, the larger counted).
+                let off = if block_cells.is_none() && shared.is_none() {
                     error.abs() > TOLERANCE
                 } else {
                     error < -TOLERANCE

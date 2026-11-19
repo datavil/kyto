@@ -31,6 +31,11 @@
 //! stream.
 //! Blocks hold the store's cell block size (`C`, `schema.json` `tiling`) rows, or
 //! fewer with [`PhysicalOptions::max_block_cells`] (task 5.5), and every gene read.
+//! With more blocks in flight than [`PhysicalOptions::store_blocks_in_flight`] (a run on
+//! many threads, task 5.14), every scan's blocks shrink to `ceil(n x C / in flight)`
+//! cells, so the cells in flight stay those of `n` store cell blocks; the executor
+//! still reads whole cell blocks ([`PhysicalOptions::scan_read_cells`]) and cuts them
+//! in memory, so reading costs what it costs at `C`.
 //! Does not: execute (5.x), choose blocks for a memory limit (`memory_limit.rs`), count the
 //! passes over the store for the whole plan or estimate bytes and memory (4.6,
 //! `estimate.rs`), pick
@@ -83,8 +88,9 @@ impl fmt::Display for Device {
 }
 
 /// Cell blocks a stream reads at once in [`PhysicalOptions::default`] (as
-/// `kyto_store::sink_h5ad`): what `explain` and `estimate` assume, which know no
-/// thread count. A run uses [`PhysicalOptions::for_threads`] (task 5.13).
+/// `kyto_store::sink_h5ad`): what `explain` and `estimate` assume when given no thread
+/// count. A run uses [`PhysicalOptions::for_threads`] (task 5.13), which keeps the cells
+/// in flight of this many store cell blocks (task 5.14).
 pub const DEFAULT_BLOCKS_IN_FLIGHT: NonZeroU64 = NonZeroU64::new(2).expect("2 is not zero");
 
 /// The choices the physical plan is built with.
@@ -106,6 +112,12 @@ pub struct PhysicalOptions {
     /// read the store once (task 5.12); `false` streams every pass from the store.
     /// [`PhysicalPlan::within_memory_limit`] turns it off when holding does not fit.
     pub hold_inputs: bool,
+    /// At most the cells of this many store cell blocks in flight (task 5.14): with
+    /// `Some(n)` and more than `n` [`PhysicalOptions::blocks_in_flight`], every scan
+    /// streams blocks of at most `ceil(n x C / blocks_in_flight)` cells (`C` the
+    /// scan's store cell block size; the smaller of it and
+    /// [`PhysicalOptions::max_block_cells`] wins). `None` keeps the blocks as they are.
+    pub store_blocks_in_flight: Option<NonZeroU64>,
 }
 
 impl Default for PhysicalOptions {
@@ -115,22 +127,55 @@ impl Default for PhysicalOptions {
             blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
             max_block_cells: None,
             hold_inputs: true,
+            store_blocks_in_flight: None,
         }
     }
 }
 
 impl PhysicalOptions {
     /// The options of a run on `threads` threads with no memory limit: one cell block
-    /// in flight per thread (task 5.13), so every thread computes a block of its own;
-    /// the rest as [`Default`]. Under a memory limit the fit starts from these and
-    /// lowers the blocks in flight until the plan fits
-    /// ([`PhysicalPlan::within_memory_limit`]). The output does not depend on it (R11).
+    /// in flight per thread (task 5.13), so every thread computes a block of its own,
+    /// holding the cells of [`DEFAULT_BLOCKS_IN_FLIGHT`] store cell blocks (task 5.14:
+    /// on more threads the blocks are smaller, so the peak memory does not grow with
+    /// the threads); the rest as [`Default`] (so `for_threads(2)` builds the default's plan). Under a
+    /// memory limit the fit starts from these and lowers the blocks in flight until the
+    /// plan fits ([`PhysicalPlan::within_memory_limit`]). The output does not depend
+    /// on it (R11).
     pub fn for_threads(threads: std::num::NonZeroUsize) -> Self {
         let threads = u64::try_from(threads.get()).unwrap_or(u64::MAX);
         Self {
             blocks_in_flight: NonZeroU64::new(threads).unwrap_or(NonZeroU64::MIN),
+            store_blocks_in_flight: Some(DEFAULT_BLOCKS_IN_FLIGHT),
             ..Self::default()
         }
+    }
+
+    /// The cells a scan reads at once from a store cell block of `store_cells` cells:
+    /// the store's or [`PhysicalOptions::max_block_cells`], the smaller (at least 1).
+    /// Blocks smaller than this, for [`PhysicalOptions::store_blocks_in_flight`], are
+    /// cut in memory from what was read (task 5.14), so reading costs what it costs
+    /// for whole blocks.
+    pub fn scan_read_cells(&self, store_cells: u64) -> u64 {
+        let limited = self.max_block_cells.map_or(u64::MAX, NonZeroU64::get);
+        store_cells.min(limited).max(1)
+    }
+
+    /// The most cells per block of a scan whose store cell blocks hold `store_cells`
+    /// cells: the store's, [`PhysicalOptions::max_block_cells`] and
+    /// [`PhysicalOptions::store_blocks_in_flight`]'s share, the smallest (at least 1).
+    pub fn scan_block_cells(&self, store_cells: u64) -> u64 {
+        let in_flight = self.blocks_in_flight.get();
+        let shared = self
+            .store_blocks_in_flight
+            .filter(|store_blocks| in_flight > store_blocks.get())
+            .map_or(u64::MAX, |store_blocks| {
+                store_cells
+                    .saturating_mul(store_blocks.get())
+                    .div_ceil(in_flight)
+                    .max(1)
+            });
+        let limited = self.max_block_cells.map_or(u64::MAX, NonZeroU64::get);
+        store_cells.min(shared).min(limited)
     }
 }
 
@@ -240,10 +285,7 @@ impl PhysicalPlan {
             // Inputs come first, so the input's block size is known.
             let cells = match (node.operation(), node.input()) {
                 (Operation::Scan { plan, .. }, _) => {
-                    let store_cells = plan.root().schema().tiling.cell_block_size;
-                    options
-                        .max_block_cells
-                        .map_or(store_cells, |cells| store_cells.min(cells.get()))
+                    options.scan_block_cells(plan.root().schema().tiling.cell_block_size)
                 }
                 (_, Some(input)) => block_sizes[input],
                 // Only a scan has no input (the arena's invariant, as `Plan::root`).

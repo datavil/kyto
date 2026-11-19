@@ -194,3 +194,25 @@ def test_unknown_format_is_ky_e215(store: Path) -> None:
     assert "'text' or 'json'" in message
     with pytest.raises(TypeError):
         atlas.explain("json")  # pyright: ignore[reportCallIssue]
+
+
+def test_threads_show_the_runs_blocks(store: Path) -> None:
+    """Task 5.14: ``threads`` shows a run's blocks, smaller on more than 2 threads."""
+    atlas = _kyto.scan(store).filter(gene_column("feature_type") == "Gene Expression")
+
+    def block_cells(threads: int | None) -> list[int | None]:
+        explained = atlas.explain(format="json", threads=threads)
+        return [node["block_cells"] for node in explained["optimized"]["nodes"]]
+
+    assert block_cells(None) == [4096, 4096]
+    assert block_cells(1) == block_cells(2) == [4096, 4096]
+    # ceil(2 x 4096 / threads): the cells in flight of 2 store cell blocks.
+    assert block_cells(4) == [2048, 2048]
+    assert block_cells(10) == [820, 820]
+    assert "blocks=820 cells" in atlas.explain(threads=10)
+    assert atlas.explain(threads=2) == atlas.explain()
+    for threads in (0, -1):
+        with pytest.raises(kyto.PlanError) as raised:
+            atlas.explain(threads=threads)
+        assert raised.value.code == "KY-E215"
+        assert "explain(..., threads=" in str(raised.value)

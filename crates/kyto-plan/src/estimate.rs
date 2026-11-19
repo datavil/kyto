@@ -45,8 +45,16 @@
 //! consumer does not hold and the later window does not take, at most the pool's
 //! `(window + 1) x entries` (one entry per scanned layer and per operator: a node
 //! writing layers, a cell step, a gene selection), each at most the largest layer
-//! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) + (rows +
-//! 1) x 8`. Per node:
+//! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) +
+//! (rows + 1) x 8`. Blocks smaller than the scan's reads, on many threads (task 5.14,
+//! [`crate::PhysicalOptions::store_blocks_in_flight`]), are cut in memory from reads of
+//! `R` cells (the store's `C`, or `max_block_cells`): a window reads `max(1, window x
+//! B / R)` of them at once, each holding the scan's reading (its row below, sized for
+//! `R` rows) with every part joined, before the window computes its parts; the blocks
+//! term is the larger of those reads and the window's parts (with the joined layers,
+//! the scan's reading term is 0). Bytes read are those of the reads. Measured on the
+//! fixtures it is high (up to 70% on pbmc3k: the reading term assumes every tile
+//! decodes at once), never low. Per node:
 //!
 //! | Node | Bytes per block in flight |
 //! | --- | --- |
@@ -266,6 +274,10 @@ impl PhysicalPlan {
         // layers with every layer the streamed nodes write (task 5.5: not at once).
         let mut scan_reading = 0_u128;
         let mut joined_and_written = 0_u128;
+        // Blocks cut in memory from cell blocks read whole (task 5.14): what reading one
+        // whole block takes, and how many are read at once.
+        let mut whole_reading = 0_u128;
+        let mut read_window = 0_u128;
         let mut once = 0_u128;
         // The stream (task 5.2): its window, its blocks, and its block pool's entries
         // (one per scanned layer and per operator: a streamed node writing layers, a
@@ -304,16 +316,36 @@ impl PhysicalPlan {
             match node.operation() {
                 Operation::Scan { plan, reads } => {
                     let store = plan.root().schema();
+                    // Blocks smaller than a read are cut from it in memory (task 5.14):
+                    // the read's tiles are read once and its parts joined from them.
+                    let read_cells = self
+                        .options()
+                        .scan_read_cells(store.tiling.cell_block_size)
+                        .max(cell_block_size);
+                    let cut = read_cells > cell_block_size;
+                    let read_sizes = BlockSizes::new(schema, input, read_cells);
+                    if cut {
+                        let window_cells =
+                            in_flight.min(sizes.n_blocks.max(1)) * u128::from(cell_block_size);
+                        read_window = read_window.max(
+                            (window_cells / u128::from(read_cells))
+                                .clamp(1, read_sizes.n_blocks.max(1)),
+                        );
+                    }
                     for layer in scanned_layers(&store.layers, reads) {
-                        let scan = ScanLayer::new(&sizes, layer);
+                        let read = ScanLayer::new(&read_sizes, layer);
                         let joined = held_block_bytes(&sizes, layer.nnz, layer.dtype);
-                        scan_reading += scan.block_bytes();
+                        if cut {
+                            whole_reading += read.block_bytes();
+                        } else {
+                            scan_reading += read.block_bytes();
+                        }
+                        scanned_buffers += 1;
                         joined_and_written += joined;
                         pool_entries += 1;
-                        scanned_buffers += 1;
                         largest_layer_block = largest_layer_block.max(joined);
-                        pass_bytes += scan.pass_bytes();
-                        resident += scan.tile_offsets_bytes();
+                        pass_bytes += read.pass_bytes();
+                        resident += read.tile_offsets_bytes();
                         opening = OPEN_LAYER_BYTES;
                         carried.push((layer.nnz, layer.dtype));
                     }
@@ -361,7 +393,10 @@ impl PhysicalPlan {
         // copy per block, however many steps (task 5.10).
         joined_and_written += rewrite;
         let per_block = scan_reading.max(joined_and_written);
-        let mut block = window * per_block;
+        // Blocks cut from whole reads (task 5.14): the reads of a window (their tiles
+        // and every part joined) come before the window computes its parts.
+        let whole = read_window * whole_reading;
+        let mut block = (window * per_block).max(whole);
         // A stream longer than its window: while a later window (`later` blocks) is
         // computed, the consumer holds a block and the pool keeps the buffers of the
         // blocks before (the layers the stream drops and the blocks the consumer gave
@@ -381,7 +416,7 @@ impl PhysicalPlan {
                 .saturating_sub(held_layers + later * taken)
                 .min((window + 1) * pool_entries);
             let pool = recycled * largest_layer_block;
-            block = block.max(later * per_block + held + pool);
+            block = block.max((later * per_block).max(whole) + held + pool);
         }
         block += once;
 

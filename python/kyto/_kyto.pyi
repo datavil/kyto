@@ -896,7 +896,7 @@ class Atlas:
             How the p-values are adjusted.
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
 
         Returns
@@ -979,7 +979,7 @@ class Atlas:
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1046,7 +1046,7 @@ class Atlas:
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1121,7 +1121,7 @@ class Atlas:
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1198,7 +1198,7 @@ class Atlas:
             ``AnnData`` itself is held in memory whole.
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1244,7 +1244,9 @@ class Atlas:
         ['X_pca']
         """
     @overload
-    def explain(self, *, format: Literal["text"] = "text") -> str:
+    def explain(
+        self, *, format: Literal["text"] = "text", threads: int | None = None
+    ) -> str:
         """How the plan would run: its logical and optimized trees (task 4.7).
 
         The logical tree lists the plan's steps from the last down to the scan, each with
@@ -1258,8 +1260,9 @@ class Atlas:
         (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
         (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
         all cells and the ``apply`` pass when there are statistics passes), and
-        ``blocks=N cells`` (streamed in blocks of the store's cell block size), ``in
-        memory`` or ``no data``, then ``input held`` for a step that holds its input in
+        ``blocks=N cells`` (streamed in blocks of N cells: the store's cell block size,
+        or smaller on more than 2 ``threads``), ``in memory`` or ``no data``, then
+        ``input held`` for a step that holds its input in
         memory (task 5.12: it reads the store once, and its ``passes`` run over the held
         blocks). ``estimate()`` gives the cost of the whole plan. Nothing is read.
 
@@ -1274,6 +1277,11 @@ class Atlas:
             ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
             ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
             text's order.
+        threads : int or None, default=None
+            Show the plan a run on this many threads without ``memory_limit`` uses (task
+            5.14: on more than 2 threads one block in flight per thread, each smaller, so
+            the cells in flight stay those of 2 store cell blocks); ``None`` shows 2 blocks
+            in flight of the store's cell blocks, the same on every machine.
 
         Returns
         -------
@@ -1284,7 +1292,8 @@ class Atlas:
         Raises
         ------
         PlanError
-            ``KY-E215``: ``format`` is not ``"text"`` or ``"json"``.
+            ``KY-E215``: ``format`` is not ``"text"`` or ``"json"``, or ``threads`` is
+            below 1.
 
         Examples
         --------
@@ -1302,16 +1311,21 @@ class Atlas:
         ['FILTER_GENES', 'SCAN']
         >>> explained["optimized"]["nodes"][0]["passes"]
         1
+        >>> scan(store).explain(format="json", threads=10)["optimized"]["nodes"][0]["block_cells"]
+        820
         """
     @overload
-    def explain(self, *, format: Literal["json"]) -> Explanation: ...
-    def estimate(self) -> CostEstimate:
+    def explain(
+        self, *, format: Literal["json"], threads: int | None = None
+    ) -> Explanation: ...
+    def estimate(self, *, threads: int | None = None) -> CostEstimate:
         """What running the plan would cost, from its schema alone (task 4.6).
 
-        Estimated for the plan as ``explain()`` shows it (every optimizer rule, a
-        terminal reading all of its output, the CPU, 2 cell blocks in flight; a run
-        without ``memory_limit`` holds one per thread, task 5.13, so its peak grows
-        with the threads).
+        Estimated for the plan as ``explain(threads=threads)`` shows it (every
+        optimizer rule, a terminal reading all of its output, the CPU; one cell block in
+        flight per thread, smaller blocks on more than 2 threads, so the cells in flight
+        stay those of 2 store cell blocks, task 5.14; on more than 2 threads the
+        estimated peak is high, up to about 1.5x the 2-thread one, never low).
         ``passes`` counts the passes over the store's matrix: each statistics pass
         streams the data again from the store (once for all of a step's statistics passes
         when it holds its input, below), and one more pass delivers what is read from the
@@ -1328,6 +1342,13 @@ class Atlas:
         ``held_memory`` is what those inputs hold (part of ``peak_memory``) and
         ``passes_saved`` the passes over the store they save. Under a ``memory_limit``
         the input is held only if the plan still fits. Nothing is read.
+
+        Parameters
+        ----------
+        threads : int or None, default=None
+            Estimate a run on this many threads without ``memory_limit`` (as
+            ``explain(threads=...)``); ``None`` for 2 blocks in flight of the store's
+            cell blocks, the same on every machine.
 
         Returns
         -------
@@ -1362,7 +1383,7 @@ class Atlas:
         ----------
         threads : int or None, default=None
             Threads that read and compute blocks, one cell block in flight per
-            thread (more threads hold more memory); ``None`` for one per CPU core.
+            thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
             The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run

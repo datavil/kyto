@@ -20,7 +20,9 @@ use std::sync::Arc;
 use kyto_algo::RankGenesGroups;
 use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
-use kyto_plan::{Cluster, ClusterMethod, Neighbors, Plan, Scrublet, Umap};
+use kyto_plan::{
+    Cluster, ClusterMethod, Explain, Neighbors, PhysicalOptions, Plan, Scrublet, Umap,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
 use pyo3::{IntoPyObjectExt, PyAny};
@@ -1173,7 +1175,7 @@ impl Atlas {
     ///     How the p-values are adjusted.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     ///
     /// Returns
@@ -1310,7 +1312,7 @@ impl Atlas {
     ///     anything is read. ``None`` runs with the default blocks.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1414,7 +1416,7 @@ impl Atlas {
     ///     anything is read. ``None`` runs with the default blocks.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1502,7 +1504,7 @@ impl Atlas {
     ///     anything is read. ``None`` runs with the default blocks.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -1597,7 +1599,7 @@ impl Atlas {
     ///     ``AnnData`` itself is held in memory whole.
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -2497,8 +2499,9 @@ impl Atlas {
     /// (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
     /// (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
     /// all cells and the ``apply`` pass when there are statistics passes), and
-    /// ``blocks=N cells`` (streamed in blocks of the store's cell block size), ``in
-    /// memory`` or ``no data``, then ``input held`` for a step that holds its input in
+    /// ``blocks=N cells`` (streamed in blocks of N cells: the store's cell block size,
+    /// or smaller on more than 2 ``threads``), ``in memory`` or ``no data``, then
+    /// ``input held`` for a step that holds its input in
     /// memory (task 5.12: it reads the store once, and its ``passes`` run over the held
     /// blocks). ``estimate()`` gives the cost of the whole plan. Nothing is read.
     ///
@@ -2513,6 +2516,11 @@ impl Atlas {
     ///     ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
     ///     ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
     ///     text's order.
+    /// threads : int or None, default=None
+    ///     Show the plan a run on this many threads without ``memory_limit`` uses (task
+    ///     5.14: on more than 2 threads one block in flight per thread, each smaller, so
+    ///     the cells in flight stay those of 2 store cell blocks); ``None`` shows 2 blocks
+    ///     in flight of the store's cell blocks, the same on every machine.
     ///
     /// Returns
     /// -------
@@ -2541,13 +2549,22 @@ impl Atlas {
     /// ['FILTER_GENES', 'SCAN']
     /// >>> explained["optimized"]["nodes"][0]["passes"]
     /// 1
-    #[pyo3(signature = (*, format = "text"))]
-    fn explain<'py>(&self, py: Python<'py>, format: &str) -> PyResult<Bound<'py, PyAny>> {
+    /// >>> scan(store).explain(format="json", threads=10)["optimized"]["nodes"][0]["block_cells"]
+    /// 820
+    #[pyo3(signature = (*, format = "text", threads = None))]
+    fn explain<'py>(
+        &self,
+        py: Python<'py>,
+        format: &str,
+        threads: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = shown_options(py, "explain", threads)?;
+        let explanation = || Explain::new(&self.plan, &self.plan.physical(options));
         match format {
-            "text" => self.plan.explain().into_bound_py_any(py),
+            "text" => explanation().to_string().into_bound_py_any(py),
             "json" => py
                 .import("json")?
-                .call_method1("loads", (self.plan.explain_json(),)),
+                .call_method1("loads", (explanation().to_json(),)),
             _ => {
                 let error = KytoError::InvalidArgument {
                     function: "explain".to_owned(),
@@ -2563,10 +2580,11 @@ impl Atlas {
 
     /// What running the plan would cost, from its schema alone (task 4.6).
     ///
-    /// Estimated for the plan as ``explain()`` shows it (every optimizer rule, a
-    /// terminal reading all of its output, the CPU, 2 cell blocks in flight; a run
-    /// without ``memory_limit`` holds one per thread, task 5.13, so its peak grows
-    /// with the threads).
+    /// Estimated for the plan as ``explain(threads=threads)`` shows it (every
+    /// optimizer rule, a terminal reading all of its output, the CPU; one cell block in
+    /// flight per thread, smaller blocks on more than 2 threads, so the cells in flight
+    /// stay those of 2 store cell blocks, task 5.14; on more than 2 threads the
+    /// estimated peak is high, up to about 1.5x the 2-thread one, never low).
     /// ``passes`` counts the passes over the store's matrix: each statistics pass
     /// streams the data again from the store (once for all of a step's statistics passes
     /// when it holds its input, below), and one more pass delivers what is read from the
@@ -2582,6 +2600,13 @@ impl Atlas {
     /// ``passes_saved`` the passes over the store they save. Under a ``memory_limit``
     /// the input is held only if the plan still fits. Nothing is read.
     ///
+    /// Parameters
+    /// ----------
+    /// threads : int or None, default=None
+    ///     Estimate a run on this many threads without ``memory_limit`` (as
+    ///     ``explain(threads=...)``); ``None`` for 2 blocks in flight of the store's
+    ///     cell blocks, the same on every machine.
+    ///
     /// Returns
     /// -------
     /// CostEstimate
@@ -2594,8 +2619,14 @@ impl Atlas {
     /// >>> scan(store).estimate()  # doctest: +NORMALIZE_WHITESPACE
     /// {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'held_memory': 0,
     ///  'passes_saved': 0, 'device': 'cpu'}
-    fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let estimate = self.plan.estimate();
+    #[pyo3(signature = (*, threads = None))]
+    fn estimate<'py>(
+        &self,
+        py: Python<'py>,
+        threads: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let options = shown_options(py, "estimate", threads)?;
+        let estimate = self.plan.physical(options).estimate();
         let dict = PyDict::new(py);
         dict.set_item("passes", estimate.passes())?;
         dict.set_item("bytes_read", estimate.bytes_read())?;
@@ -2620,7 +2651,7 @@ impl Atlas {
     /// ----------
     /// threads : int or None, default=None
     ///     Threads that read and compute blocks, one cell block in flight per
-    ///     thread (more threads hold more memory); ``None`` for one per CPU core.
+    ///     thread (smaller blocks on more than 2, task 5.14); ``None`` for one per CPU core.
     ///     The result does not depend on it (R11).
     /// progress : callable or None, default=None
     ///     Called as ``progress(done, total)`` on the calling thread whenever the run
@@ -2879,4 +2910,20 @@ fn open_plan(py: Python<'_>, store: PathBuf) -> PyResult<Arc<Plan>> {
         })
         .map_err(|error| to_py_err(py, &error))?;
     Ok(Plan::scan(store.display().to_string(), schema, gene_ids))
+}
+
+/// The physical options `explain` and `estimate` show (task 5.14): those of a run on
+/// `threads` threads without a memory limit, or for `None` the default (2 cell blocks
+/// in flight, the store's blocks), which does not depend on the machine.
+fn shown_options(
+    py: Python<'_>,
+    function: &str,
+    threads: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PhysicalOptions> {
+    match threads {
+        None => Ok(PhysicalOptions::default()),
+        Some(_) => Ok(PhysicalOptions::for_threads(terminal::threads(
+            py, function, threads,
+        )?)),
+    }
 }

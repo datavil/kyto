@@ -119,7 +119,9 @@ impl MemoryLimit {
 impl PhysicalPlan {
     /// The physical plan of `optimized` whose estimated peak memory fits `limit`.
     ///
-    /// `options` as given if the plan fits. Otherwise the blocks shrink: every
+    /// `options` as given if the plan fits (with
+    /// [`PhysicalOptions::store_blocks_in_flight`]'s smaller blocks on many threads,
+    /// task 5.14). Otherwise the blocks shrink, from the store's: every
     /// combination of blocks in flight (the given number, then each power of two below
     /// it down to 1) and cells per block (the given cells, halved down to 1) is
     /// estimated, and the fitting one
@@ -167,7 +169,13 @@ impl PhysicalPlan {
         if fits(estimate) {
             return Ok(plan);
         }
-        let Some(block_cells) = plan.largest_block() else {
+        // The candidates choose every block size themselves, from the store's blocks
+        // (not those shared out over many blocks in flight, task 5.14).
+        let options = PhysicalOptions {
+            store_blocks_in_flight: None,
+            ..options
+        };
+        let Some(block_cells) = Self::new(plan.optimized().clone(), options).largest_block() else {
             // Nothing streams: no block to shrink.
             return Err(estimate.peak_memory());
         };

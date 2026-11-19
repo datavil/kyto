@@ -79,6 +79,8 @@ struct RunOptions {
     threads: usize,
     blocks_in_flight: u64,
     max_block_cells: Option<u64>,
+    /// Blocks cut in memory from whole reads (task 5.14).
+    store_blocks_in_flight: Option<u64>,
     /// 0: no delays; otherwise the [`DelayingStore`]'s seed.
     delay_seed: u64,
 }
@@ -89,6 +91,7 @@ impl RunOptions {
             threads,
             blocks_in_flight: 2,
             max_block_cells: None,
+            store_blocks_in_flight: None,
             delay_seed: 0,
         }
     }
@@ -156,6 +159,9 @@ fn fingerprint(store: &Path, output: &Output, options: RunOptions) -> (u64, usiz
         max_block_cells: options
             .max_block_cells
             .map(|cells| NonZeroU64::new(cells).unwrap()),
+        store_blocks_in_flight: options
+            .store_blocks_in_flight
+            .map(|blocks| NonZeroU64::new(blocks).unwrap()),
         ..PhysicalOptions::default()
     };
     let physical: PhysicalPlan = physical_plan(
@@ -260,6 +266,19 @@ fn runs() -> Vec<RunOptions> {
             max_block_cells: Some(37),
             delay_seed: 1,
             ..RunOptions::threads(all)
+        },
+        // Parts cut from whole reads, alone and from reads split for a limit (5.14).
+        RunOptions {
+            blocks_in_flight: 7,
+            store_blocks_in_flight: Some(2),
+            ..RunOptions::threads(all)
+        },
+        RunOptions {
+            blocks_in_flight: 5,
+            max_block_cells: Some(37),
+            store_blocks_in_flight: Some(1),
+            delay_seed: 2,
+            ..RunOptions::threads(4)
         },
     ]
 }
@@ -461,6 +480,7 @@ proptest! {
         threads in 1_usize..=8,
         blocks_in_flight in 1_u64..=6,
         max_block_cells in proptest::option::of(1_u64..=80),
+        store_blocks_in_flight in proptest::option::of(1_u64..=3),
         delay_seed in 0_u64..4,
     ) {
         let work = tempfile::tempdir().unwrap();
@@ -469,7 +489,13 @@ proptest! {
         let base = scan(&store);
         for (case, output) in cases(&base, "values") {
             let expected = fingerprint(&store, &output, RunOptions::threads(1));
-            let options = RunOptions { threads, blocks_in_flight, max_block_cells, delay_seed };
+            let options = RunOptions {
+                threads,
+                blocks_in_flight,
+                max_block_cells,
+                store_blocks_in_flight,
+                delay_seed,
+            };
             prop_assert_eq!(fingerprint(&store, &output, options), expected, "{}", case);
         }
     }

@@ -20,8 +20,12 @@ before joining, so a producer blocked in `send` gets an error and returns.
   4.09x at 2, 4, 8 threads with as many blocks in flight; past 4 threads the
   efficiency cores add less.
 - Since 5.13 a run holds one block in flight per thread (`PhysicalOptions::for_threads`;
-  `explain`/`estimate` still assume 2). On the 50k data, 10 threads went from 2.5x to
-  3.6x (preprocessing) but peak memory doubled; 5.14 is meant to win it back with smaller
-  blocks (same speed at 2,048 cells). Past ~3.6x the cap here is the hardware: CPU time
+  `explain`/`estimate` take `threads=`, default as 2). On the 50k data, 10 threads went
+  from 2.5x to 3.6x (preprocessing) but peak memory doubled. 5.14 won it back: on more
+  than 2 threads blocks hold `ceil(2C / threads)` cells, **cut from whole reads** by the
+  reader (`cell_blocks_in_parts`: tiles decoded once, parts joined in parallel). Reading
+  each small part from the store (5.5's split reads) cost 10% (5x tile reads, chunks
+  decoded twice); copying parts out of a block joined on one thread cost 6% (2 of 10
+  threads joining). Past ~3.6x the cap here is the hardware: CPU time
   grows 1.7x from 1 to 10 threads (efficiency cores, shared bandwidth), not block count.
   Under a limit the fit tries the threads, then powers of two below (not halvings).

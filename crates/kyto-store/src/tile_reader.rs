@@ -148,6 +148,26 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         max_rows: NonZeroU64,
         blocks_in_flight: NonZeroUsize,
     ) -> Result<CellBlocks<'_, S>, KytoError> {
+        self.cell_blocks_in_parts(cells, genes, max_rows, max_rows, blocks_in_flight)
+    }
+
+    /// As [`LayerReader::cell_blocks_of_rows`] reading blocks of at most `max_rows`
+    /// rows, each then cut into blocks of at most `part_rows` rows in memory (task
+    /// 5.14): a read's tiles are read and decoded once, and its parts are joined from
+    /// them in parallel, each part's rows as [`LayerReader::cell_blocks`] joins them
+    /// (the same bits). `blocks_in_flight` counts the reads at once, not the parts.
+    /// With `part_rows >= max_rows` it is [`LayerReader::cell_blocks_of_rows`].
+    ///
+    /// # Errors
+    /// As [`LayerReader::cell_blocks`].
+    pub fn cell_blocks_in_parts(
+        &self,
+        cells: &AxisSelection,
+        genes: &AxisSelection,
+        max_rows: NonZeroU64,
+        part_rows: NonZeroU64,
+        blocks_in_flight: NonZeroUsize,
+    ) -> Result<CellBlocks<'_, S>, KytoError> {
         let grid = &self.grid;
         let cell_picks = block_picks(
             cells,
@@ -174,52 +194,76 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
             cell_picks,
             gene_picks,
             n_genes,
+            part_rows: usize::try_from(part_rows.get()).unwrap_or(usize::MAX),
             next: 0,
             blocks_in_flight: blocks_in_flight.get(),
             ready: VecDeque::new(),
         })
     }
 
-    /// Read the selected rows of one cell block over every selected gene block.
-    fn read_block(
+    /// Read the selected rows of one cell pick over every selected gene block: its
+    /// tiles once, then its rows joined in parts of at most `part_rows` rows, the
+    /// parts in parallel and in cell order (task 5.14; one part when it fits).
+    fn read_parts(
         &self,
         (cell_pick, split): &(BlockPick, bool),
         gene_picks: &[BlockPick],
         n_genes: u64,
-    ) -> Result<SelectedBlock, KytoError> {
+        part_rows: usize,
+    ) -> Vec<Result<SelectedBlock, KytoError>> {
         let block = match self.layer.dtype {
-            ValueDtype::F32 => {
-                let (indptr, indices, data) =
-                    self.read_rows::<f32>(cell_pick, *split, gene_picks)?;
-                CellBlock::new(indptr, indices, CellData::F32(data), n_genes)
-            }
-            ValueDtype::U32 => {
-                let (indptr, indices, data) =
-                    self.read_rows::<u32>(cell_pick, *split, gene_picks)?;
-                CellBlock::new(indptr, indices, CellData::U32(data), n_genes)
-            }
+            ValueDtype::F32 => self
+                .read_parts_of::<f32>(cell_pick, *split, gene_picks, part_rows)
+                .map(|parts| {
+                    parts
+                        .into_iter()
+                        .map(|(rows, (indptr, indices, data))| {
+                            let data = CellData::F32(data);
+                            (rows, CellBlock::new(indptr, indices, data, n_genes))
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            ValueDtype::U32 => self
+                .read_parts_of::<u32>(cell_pick, *split, gene_picks, part_rows)
+                .map(|parts| {
+                    parts
+                        .into_iter()
+                        .map(|(rows, (indptr, indices, data))| {
+                            let data = CellData::U32(data);
+                            (rows, CellBlock::new(indptr, indices, data, n_genes))
+                        })
+                        .collect::<Vec<_>>()
+                }),
+        };
+        let parts = match block {
+            Ok(parts) => parts,
+            Err(error) => return vec![Err(error)],
         };
         let first_cell = cell_pick.block * self.grid.cell_block_size();
-        Ok(SelectedBlock {
-            cell_block: cell_pick.block,
-            cells: cell_pick
-                .locals()
-                .into_iter()
-                .map(|row| first_cell + u64::from(row))
-                .collect(),
-            block,
-        })
+        parts
+            .into_iter()
+            .map(|(rows, block)| {
+                Ok(SelectedBlock {
+                    cell_block: cell_pick.block,
+                    cells: rows
+                        .into_iter()
+                        .map(|row| first_cell + u64::from(row))
+                        .collect(),
+                    block,
+                })
+            })
+            .collect()
     }
 
-    /// Read the block's tiles in parallel and join the selected rows (format.md §4.8):
-    /// tiles in increasing gene block, entries of unselected genes dropped.
-    #[allow(clippy::type_complexity)]
-    fn read_rows<T: LayerValue>(
+    /// [`LayerReader::read_parts`] for values of type `T`: each part's local rows and
+    /// its joined block.
+    fn read_parts_of<T: LayerValue>(
         &self,
         cell_pick: &BlockPick,
         split: bool,
         gene_picks: &[BlockPick],
-    ) -> Result<(AlignedBuffer<u64>, AlignedBuffer<u32>, AlignedBuffer<T>), KytoError> {
+        part_rows: usize,
+    ) -> Result<Vec<JoinedPart<T>>, KytoError> {
         // Collect every result in gene block order, then take the first error, so the
         // error reported does not depend on the thread count (R11).
         let tiles = gene_picks
@@ -229,29 +273,11 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         let rows = cell_pick.locals();
-        // Joined arrays grow by push, as 4.6's estimate models (its Open (2)).
-        let mut indptr = AlignedBuffer::with_capacity(rows.len() + 1);
-        let mut indices = AlignedBuffer::new();
-        let mut data = AlignedBuffer::new();
-        indptr.push(0);
-        for &row in &rows {
-            let row = row as usize;
-            for (gene_pick, tile) in gene_picks.iter().zip(&tiles) {
-                let Some(tile) = tile else { continue };
-                // Rows of this pick lie in the span read: indptr[row] >= first_entry.
-                let from = (tile.indptr[row] - tile.first_entry) as usize;
-                let to = (tile.indptr[row + 1] - tile.first_entry) as usize;
-                for (&local, &value) in tile.indices[from..to].iter().zip(&tile.data[from..to]) {
-                    if let Some(position) = gene_pick.position(local) {
-                        // position < selection length <= n_genes <= 2^32 - 1.
-                        indices.push(position as u32);
-                        data.push(value);
-                    }
-                }
-            }
-            indptr.push(indices.len() as u64);
-        }
-        Ok((indptr, indices, data))
+        // An indexed parallel collect keeps the parts in cell order (R11).
+        Ok(rows
+            .par_chunks(part_rows.max(1))
+            .map(|rows| (rows.to_vec(), join_rows(rows, gene_picks, &tiles)))
+            .collect())
     }
 
     /// Read and check tile `(block, gene_block)` (format.md §4.7), with `block` the
@@ -331,6 +357,44 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
     }
 }
 
+/// A joined block's `indptr`, `indices` and `data`.
+type Joined<T> = (AlignedBuffer<u64>, AlignedBuffer<u32>, AlignedBuffer<T>);
+
+/// A part's local rows and its joined block.
+type JoinedPart<T> = (Vec<u32>, Joined<T>);
+
+/// Join `rows` (local rows of the tiles' cell block) from the read `tiles`, in
+/// increasing gene block, entries of unselected genes dropped (format.md §4.8).
+fn join_rows<T: LayerValue>(
+    rows: &[u32],
+    gene_picks: &[BlockPick],
+    tiles: &[Option<Tile<T>>],
+) -> Joined<T> {
+    // Joined arrays grow by push, as 4.6's estimate models (its Open (2)).
+    let mut indptr = AlignedBuffer::with_capacity(rows.len() + 1);
+    let mut indices = AlignedBuffer::new();
+    let mut data = AlignedBuffer::new();
+    indptr.push(0);
+    for &row in rows {
+        let row = row as usize;
+        for (gene_pick, tile) in gene_picks.iter().zip(tiles) {
+            let Some(tile) = tile else { continue };
+            // Rows of this pick lie in the span read: indptr[row] >= first_entry.
+            let from = (tile.indptr[row] - tile.first_entry) as usize;
+            let to = (tile.indptr[row + 1] - tile.first_entry) as usize;
+            for (&local, &value) in tile.indices[from..to].iter().zip(&tile.data[from..to]) {
+                if let Some(position) = gene_pick.position(local) {
+                    // position < selection length <= n_genes <= 2^32 - 1.
+                    indices.push(position as u32);
+                    data.push(value);
+                }
+            }
+        }
+        indptr.push(indices.len() as u64);
+    }
+    (indptr, indices, data)
+}
+
 fn read_subset<S, T>(array: &Array<S>, ranges: &[std::ops::Range<u64>]) -> Result<Vec<T>, KytoError>
 where
     S: ?Sized + ReadableStorageTraits + 'static,
@@ -350,6 +414,8 @@ pub struct CellBlocks<'a, S: ?Sized> {
     cell_picks: Vec<(BlockPick, bool)>,
     gene_picks: Vec<BlockPick>,
     n_genes: u64,
+    /// Rows per part a read is cut into (task 5.14).
+    part_rows: usize,
     next: usize,
     blocks_in_flight: usize,
     ready: VecDeque<Result<SelectedBlock, KytoError>>,
@@ -362,10 +428,14 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Iterator for CellBlocks<'_, S>
         if self.ready.is_empty() && self.next < self.cell_picks.len() {
             let end = (self.next + self.blocks_in_flight).min(self.cell_picks.len());
             let (reader, gene_picks, n_genes) = (self.reader, &self.gene_picks, self.n_genes);
+            let part_rows = self.part_rows;
             // An indexed parallel collect keeps cell order on any thread count (R11).
             let window: Vec<_> = self.cell_picks[self.next..end]
                 .par_iter()
-                .map(|cell_pick| reader.read_block(cell_pick, gene_picks, n_genes))
+                .map(|cell_pick| reader.read_parts(cell_pick, gene_picks, n_genes, part_rows))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flatten()
                 .collect();
             self.ready.extend(window);
             self.next = end;

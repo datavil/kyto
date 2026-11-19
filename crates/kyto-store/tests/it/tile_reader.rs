@@ -748,6 +748,7 @@ proptest! {
         as_range in any::<bool>(),
         in_flight in 1_usize..5,
         max_rows in 1_u64..9,
+        part_rows in 1_u64..9,
     ) {
         let dir = tempfile::tempdir().unwrap();
         let tiling = Tiling { cell_block_size, gene_block_size };
@@ -783,6 +784,44 @@ proptest! {
             prop_assert!(split.iter().all(|block| block.cells.len() as u64 <= max_rows));
             prop_assert!(split.len() >= blocks.len());
             prop_assert_eq!(join(&split, genes.len() as u64), expected.clone(), "{:?}", backend);
+            // Reads of max_rows rows cut into parts of part_rows in memory (task 5.14):
+            // the same rows; and when the parts start where reading them would (whole
+            // cell blocks read, or reads a multiple of the parts), the blocks reading
+            // parts of min(max_rows, part_rows) rows gives, bit for bit.
+            let parts = reader
+                .cell_blocks_in_parts(
+                    &cell_selection,
+                    &gene_selection,
+                    NonZeroU64::new(max_rows).unwrap(),
+                    NonZeroU64::new(part_rows).unwrap(),
+                    NonZeroUsize::new(in_flight).unwrap(),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let read_in_parts = reader
+                .cell_blocks_of_rows(
+                    &cell_selection,
+                    &gene_selection,
+                    NonZeroU64::new(max_rows.min(part_rows)).unwrap(),
+                    NonZeroUsize::new(in_flight).unwrap(),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let smallest = max_rows.min(part_rows);
+            prop_assert!(parts.iter().all(|block| block.cells.len() as u64 <= smallest));
+            prop_assert_eq!(join(&parts, genes.len() as u64), expected.clone(), "{:?}", backend);
+            if max_rows % part_rows != 0 && max_rows < cell_block_size {
+                continue;
+            }
+            prop_assert_eq!(parts.len(), read_in_parts.len());
+            for (part, read) in parts.iter().zip(&read_in_parts) {
+                prop_assert_eq!(
+                    (part.cell_block, &part.cells, &part.block),
+                    (read.cell_block, &read.cells, &read.block)
+                );
+            }
         }
     }
 }

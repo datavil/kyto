@@ -174,6 +174,64 @@ Measured Nov 19, 2026, on the task 5.13 tree (base `d0d471d`; release extension 
   store); kyto matches scanpy at about 4 threads (1.05 s vs 0.96 s) and is 1.2x faster
   at 10.
 
+## Smaller blocks on many threads, cut from whole reads (task 5.14)
+
+Measured Nov 19, 2026, on the task 5.14 tree (base `c186467`; release extension built
+by `uv sync`), same machine, data and scripts as 5.13 above.
+
+- **Change:** a run without `memory_limit` on more than 2 threads still holds one block
+  in flight per thread, but each holds `ceil(2 x C / threads)` cells (820 at 10 threads,
+  2,048 at 4), so the cells in flight are those of 2 store cell blocks, as before 5.13.
+  The store is still read in whole cell blocks: a window reads `window x B / C` of them
+  (2 at 10 threads), decodes their tiles once, and the reader joins each block's parts
+  from the decoded tiles in parallel. 1 and 2 threads are unchanged.
+- **Times:** median of 5 runs after a warm-up (`thread_scaling.py --threads 1,2,4,10
+  --repeats 5`). **Peak memory:** `ru_maxrss` of a fresh process running one
+  configuration once. **5.13** is the same tree with the old rule (whole blocks),
+  measured twice in the same session through a temporary switch, since removed.
+- **scanpy** is not re-run: its numbers are 5.13's and 5.12's (same machine and data).
+
+| Seconds, 10 threads | 5.13 (whole blocks) | split reads (first try) | 5.14 (cut from whole reads) |
+|---|---|---|---|
+| kyto preprocessing | 0.815 / 0.799 | 0.961 to 0.976 | **0.805** |
+| kyto QC through PCA | 2.170 / 2.182 | 2.385 to 2.406 | **2.161** |
+| QC through PCA peak, MB | 2,606 / 2,547 | 1,269 to 1,308 | **1,336** |
+
+- **Split reads** (the first try, not kept) read each 820-cell part from the store on
+  its own: every part reads all 20 gene tiles of its cell block, with each tile's `indptr`
+  whole and the zstd chunks (65,536 entries) around its rows, so a cell block costs five
+  times the tile reads and about twice the decoding. A first cut-in-memory version read
+  whole blocks and copied the parts out (2.30 s, 0.905 s): the reader joined each whole
+  block's rows on one thread, so only 2 of 10 threads joined. The kept version joins the
+  parts in parallel from the decoded tiles.
+
+| Seconds (speedup over 1 thread) | 1 thread | 2 | 4 | 10 |
+|---|---|---|---|---|
+| kyto preprocessing | 2.90 | 1.56 | 1.06 | 0.81 (3.6x) |
+| scanpy preprocessing (in memory, 5.13) | 0.99 | | | 0.96 |
+| kyto QC through PCA | 6.49 | 3.71 | 2.69 | 2.16 (3.0x) |
+| kyto PCA alone (held input) | 2.72 | 1.68 | 1.29 | 1.11 (2.4x) |
+| scanpy `pp.pca` (in memory, 5.13) | 2.02 | | | 1.93 |
+
+| Peak memory, MB | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto preprocessing, 5.13 / 5.14 | 958 / 959 | 1,622 / 1,178 | 2,404 / **1,158** |
+| kyto QC through PCA, 5.13 / 5.14 | 1,096 / 1,096 | 1,756 / 1,304 | 2,616 / **1,336** |
+| kyto PCA alone, 5.13 / 5.14 | | not measured / 450 | 570 / 478 |
+| scanpy read through PCA (5.12) | | | 2,853 |
+
+- **Bit identity (R11):** the HVG gene table, the cell table and both embeddings are
+  bit-identical at 1, 2, 4 and 10 threads.
+- **Estimate:** `estimate(threads=10)` gives the same bytes read as 1 thread (whole
+  reads). Its peak is high for cut parts: 1,498 MB modelled against 1,158 MB measured for
+  preprocessing at 10 threads. On the fixtures it runs up to 70% high and is never low
+  (`estimate_fixtures.rs`), because the reading term assumes every tile decodes at once.
+- **Where kyto loses:** on 1 thread kyto's preprocessing is 2.9x scanpy's time, which
+  has the matrix in memory (kyto decodes the store); kyto catches up at about 4 threads
+  and is 1.2x faster at 10. PCA alone is 1.35x scanpy's time on 1 thread (inside 5.12's
+  1.5x target) and 0.58x at 10. QC through PCA now peaks at 47% of scanpy's read-through-PCA
+  peak at 10 threads (it was 92% after 5.13).
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).
