@@ -148,7 +148,8 @@ pub fn output_run_arguments(
     let limit = memory_limit(py, function, limit)?;
     let threads = threads(py, function, threads_argument)?;
     check_progress(py, function, progress)?;
-    let options = PhysicalOptions::default();
+    // One block in flight per thread (task 5.13); a memory limit fits fewer.
+    let options = PhysicalOptions::for_threads(threads);
     let optimized = optimize(&[output], OptimizeOptions::ALL);
     let physical = match limit {
         None => PhysicalPlan::new(optimized, options),

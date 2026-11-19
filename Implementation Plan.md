@@ -78,12 +78,15 @@ Done (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7): see [Implementation Plan - Done.md](Im
 
 Goal: any plan runs within a memory limit, uses every core, and gives the same answer on 1 or 64 threads.
 
-Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
+Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.13 Default blocks in flight.** With no memory limit, `blocks_in_flight` defaults to the thread count instead of 2; with a limit, 5.5's fit chooses. (added Nov 14, 2026, at the user's request: the same profile showed 10 threads giving 2.4× over one thread on PCA's passes)
-  - Depends: 5.2, 5.5
-  - Done when: the benchmark's preprocessing and PCA passes scale at least 5× from 1 to 10 threads on the 50k data, and outputs are bit-identical at 1, 4 and all threads.
-  - Open: (1) that the default of 2 is the cap is inferred from the idle cores, not yet tested; confirm by setting it before changing the default.
+- [ ] **5.14 Smaller cell blocks on many threads.** When a run without a memory limit has more threads than 2, stream blocks smaller than the store's cell blocks (`PhysicalOptions::max_block_cells`), so the peak memory that one block in flight per thread doubled (5.13) comes back down at the same speed. (added Nov 19, 2026, at the user's request: on the `benchmarks/scanpy_workflow` 50k data at 10 threads, preprocessing took 0.82 s with 4,096-cell blocks, 0.83 s with 2,048 and 0.90 s with 1,024, at peaks of 2,495, 1,785 and 1,205 MB; 1 thread took 2.93, 3.14 and 3.57 s)
+  - Depends: 5.13
+  - Done when: on the 50k data at 10 threads, QC through PCA peaks at most 1,400 MB (1,364 MB with 2 blocks in flight before 5.13, plus slack; 2,616 MB after) and runs at most 5% slower than 5.13's 2.15 s; `estimate()` and `explain()` show the chosen blocks; outputs are bit-identical at 1, 4 and all threads.
+  - Open: (1) the rule (fixed cells per block, or the store's cell block divided by threads over 2) and whether `estimate()` should take the thread count (today it assumes 2 blocks in flight, so it under-counts a run on many threads). (2) Bug hunt of 5.13: under a `memory_limit`, peak RSS growth already exceeded the estimate at 1 thread (a 60,000 x 600 store, `normalize_total` + `log1p`, `sink_zarr`: estimate about 30 MB, growth about 110 MB) and the overshoot grows with the blocks in flight (64 threads, 120 MB limit: 177 MB). Re-check the per-block estimate against RSS at many blocks in flight.
+- [ ] **5.15 Parallel PCA passes over a held input.** Split the work inside each of PCA's statistics passes over the held input (5.12) finer than one leaf per store cell block, for example over genes or by more leaves folded in the same tree, and run the small dense steps between passes (the Krylov basis's QR, the eigen solve) in parallel where it pays, with the same bits on any thread count (R11). (added Nov 19, 2026, at the user's request: PCA alone on the 50k data's 2,000 HVGs scaled 2.4x from 1 to 10 threads after 5.13, 2.73 s to 1.14 s, with 4.5 cores busy on average: its 13 leaves fold in chunks of the thread count, 10 then 3, with serial steps between the 11 passes)
+  - Depends: 5.12, 5.13
+  - Done when: PCA alone (`pca_timing.py`'s isolated case) scales at least 3.5x from 1 to 10 threads on the 50k data on the 10-core Mac, and the embedding is bit-identical at 1, 4 and all threads and to the streamed path's.
 
 ## 6. Algorithms (`kyto-algo`)
 
@@ -197,6 +200,6 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M0 Skeleton | 1.1–1.6, 8.1 |
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
-| M3 Full analysis | 2.9, 5.12–5.13, 6.4–6.10, 6.12, 6.15–6.16, 7.8, 8.4–8.7, 10.4, 10.7 |
+| M3 Full analysis | 2.9, 5.12–5.15, 6.4–6.10, 6.12, 6.15–6.16, 7.8, 8.4–8.7, 10.4, 10.7 |
 | M4 GPU backend | 9.1–9.8 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |

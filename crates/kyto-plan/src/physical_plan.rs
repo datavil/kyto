@@ -82,10 +82,15 @@ impl fmt::Display for Device {
     }
 }
 
-/// Cell blocks a stream reads at once by default (as `kyto_store::sink_h5ad`).
+/// Cell blocks a stream reads at once in [`PhysicalOptions::default`] (as
+/// `kyto_store::sink_h5ad`): what `explain` and `estimate` assume, which know no
+/// thread count. A run uses [`PhysicalOptions::for_threads`] (task 5.13).
 pub const DEFAULT_BLOCKS_IN_FLIGHT: NonZeroU64 = NonZeroU64::new(2).expect("2 is not zero");
 
 /// The choices the physical plan is built with.
+///
+/// [`Default`] streams [`DEFAULT_BLOCKS_IN_FLIGHT`] blocks at once;
+/// [`PhysicalOptions::for_threads`] one per thread of the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalOptions {
     /// The device every node runs on.
@@ -110,6 +115,21 @@ impl Default for PhysicalOptions {
             blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
             max_block_cells: None,
             hold_inputs: true,
+        }
+    }
+}
+
+impl PhysicalOptions {
+    /// The options of a run on `threads` threads with no memory limit: one cell block
+    /// in flight per thread (task 5.13), so every thread computes a block of its own;
+    /// the rest as [`Default`]. Under a memory limit the fit starts from these and
+    /// lowers the blocks in flight until the plan fits
+    /// ([`PhysicalPlan::within_memory_limit`]). The output does not depend on it (R11).
+    pub fn for_threads(threads: std::num::NonZeroUsize) -> Self {
+        let threads = u64::try_from(threads.get()).unwrap_or(u64::MAX);
+        Self {
+            blocks_in_flight: NonZeroU64::new(threads).unwrap_or(NonZeroU64::MIN),
+            ..Self::default()
         }
     }
 }

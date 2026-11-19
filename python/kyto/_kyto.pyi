@@ -895,8 +895,9 @@ class Atlas:
         correction : {"benjamini-hochberg", "bonferroni"}, default="benjamini-hochberg"
             How the p-values are adjusted.
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
 
         Returns
         -------
@@ -977,8 +978,9 @@ class Atlas:
             of bytes: blocks shrink to fit, and a plan that cannot fit raises before
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved (cell rows, summed over the passes).
@@ -1043,8 +1045,9 @@ class Atlas:
             of bytes: blocks shrink to fit, and a plan that cannot fit raises before
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved (cell rows, summed over the passes).
@@ -1117,8 +1120,9 @@ class Atlas:
             of bytes: blocks shrink to fit, and a plan that cannot fit raises before
             anything is read. ``None`` runs with the default blocks.
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved (cell rows, summed over the passes).
@@ -1193,8 +1197,9 @@ class Atlas:
             anything is read. ``None`` runs with the default blocks. The returned
             ``AnnData`` itself is held in memory whole.
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved (cell rows, summed over the passes).
@@ -1304,7 +1309,9 @@ class Atlas:
         """What running the plan would cost, from its schema alone (task 4.6).
 
         Estimated for the plan as ``explain()`` shows it (every optimizer rule, a
-        terminal reading all of its output, the CPU, 2 cell blocks in flight).
+        terminal reading all of its output, the CPU, 2 cell blocks in flight; a run
+        without ``memory_limit`` holds one per thread, task 5.13, so its peak grows
+        with the threads).
         ``passes`` counts the passes over the store's matrix: each statistics pass
         streams the data again from the store (once for all of a step's statistics passes
         when it holds its input, below), and one more pass delivers what is read from the
@@ -1344,7 +1351,8 @@ class Atlas:
         """Run the plan and stream its output to nowhere (private, task 5.7).
 
         Task 5.7's hook until the terminals of 7.2 and 7.3 return the data. Runs the
-        plan as ``estimate()`` costs it on the CPU executor, drops every block it
+        plan as ``estimate()`` costs it, with one cell block in flight per thread, on
+        the CPU executor, drops every block it
         streams and returns how many cell rows it streamed. The GIL is released while
         the plan computes, so other Python threads run. Ctrl-C (or any exception a
         signal handler raises) cancels the run: it stops at its next block, its threads
@@ -1353,8 +1361,9 @@ class Atlas:
         Parameters
         ----------
         threads : int or None, default=None
-            Threads that read and compute blocks; ``None`` for one per CPU core. The
-            result does not depend on it (R11).
+            Threads that read and compute blocks, one cell block in flight per
+            thread (more threads hold more memory); ``None`` for one per CPU core.
+            The result does not depend on it (R11).
         progress : callable or None, default=None
             Called as ``progress(done, total)`` on the calling thread whenever the run
             moved: cell rows computed and in the whole run, both summed over its passes

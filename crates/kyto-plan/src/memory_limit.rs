@@ -120,8 +120,9 @@ impl PhysicalPlan {
     /// The physical plan of `optimized` whose estimated peak memory fits `limit`.
     ///
     /// `options` as given if the plan fits. Otherwise the blocks shrink: every
-    /// combination of blocks in flight (the given number, halved down to 1) and cells
-    /// per block (the given cells, halved down to 1) is estimated, and the fitting one
+    /// combination of blocks in flight (the given number, then each power of two below
+    /// it down to 1) and cells per block (the given cells, halved down to 1) is
+    /// estimated, and the fitting one
     /// with the most cells in flight wins (then the larger blocks, then more blocks in
     /// flight). The estimate is the model (task 4.6): what it does not count (the
     /// process's own memory, threads' scratch) is not in the limit.
@@ -173,7 +174,7 @@ impl PhysicalPlan {
         let optimized = plan.optimized().clone();
         let mut best: Option<(u128, u64, u64)> = None;
         let mut smallest = estimate.peak_memory();
-        for in_flight in halvings(options.blocks_in_flight.get()) {
+        for in_flight in in_flight_candidates(options.blocks_in_flight.get()) {
             for cells in halvings(block_cells) {
                 let candidate = PhysicalOptions {
                     blocks_in_flight: nonzero(in_flight),
@@ -234,6 +235,17 @@ impl Plan {
     }
 }
 
+/// The blocks in flight the fit tries: `value`, then every power of two below it, down
+/// to 1 (`value` at least 1). Since task 5.13 `value` is the thread count, and halving
+/// it would skip counts (3 to 1, never 2) that a limit fitting 2 blocks needs.
+fn in_flight_candidates(value: u64) -> impl Iterator<Item = u64> {
+    let value = value.max(1);
+    let below = (value > 1).then(|| 1_u64 << (63 - (value - 1).leading_zeros()));
+    std::iter::once(value).chain(std::iter::successors(below, |&power| {
+        (power > 1).then_some(power / 2)
+    }))
+}
+
 /// `value`, `value / 2`, ... down to 1 (`value` at least 1).
 fn halvings(value: u64) -> impl Iterator<Item = u64> {
     std::iter::successors(Some(value.max(1)), |&value| {
@@ -254,7 +266,7 @@ fn too_small(required_bytes: u64, limit: MemoryLimit) -> KytoError {
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryLimit, halvings};
+    use super::{MemoryLimit, halvings, in_flight_candidates};
 
     fn parse(text: &str) -> u64 {
         MemoryLimit::parse(text, "collect").unwrap().bytes()
@@ -296,6 +308,19 @@ mod tests {
             assert!(message.contains("collect(..., memory_limit="), "{message}");
             assert!(message.contains(problem), "{text}: {message}");
         }
+    }
+
+    #[test]
+    fn in_flight_candidates_try_every_power_of_two_below() {
+        let candidates = |value: u64| in_flight_candidates(value).collect::<Vec<_>>();
+        assert_eq!(candidates(10), vec![10, 8, 4, 2, 1]);
+        assert_eq!(candidates(3), vec![3, 2, 1]);
+        assert_eq!(candidates(8), vec![8, 4, 2, 1]);
+        assert_eq!(candidates(2), vec![2, 1]);
+        assert_eq!(candidates(1), vec![1]);
+        assert_eq!(candidates(0), vec![1]);
+        assert_eq!(candidates(u64::MAX).len(), 65);
+        assert_eq!(candidates(u64::MAX)[1], 1 << 63);
     }
 
     #[test]

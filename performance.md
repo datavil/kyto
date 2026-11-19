@@ -115,6 +115,65 @@ Measured Nov 19, 2026, on the task 5.12 tree (base `c08894b`; release extension 
 - The workflow's held run is 5.7x faster than streaming at 10 threads: the 10 passes it
   saves each re-read the store, re-ran QC, normalisation, `log1p` and the gene subset.
 
+## One block in flight per thread (task 5.13)
+
+Measured Nov 19, 2026, on the task 5.13 tree (base `d0d471d`; release extension built by
+`uv sync`), same machine, data and scanpy as 5.12 above.
+
+- **Change:** a run without `memory_limit` streams one cell block per thread at once
+  (was 2). With a limit, the fit starts there and tries fewer until the plan fits.
+- **Work, kyto:** from the converted counts store. `preprocessing` is QC, the three
+  filters, `normalize_total(1e4)`, `log1p`, 2,000 `seurat` HVGs and the HVG filter,
+  streamed to nowhere (`_execute`); `QC through PCA` adds PCA (50 components, seed 0) to the
+  embedding; `PCA alone` is the 5.12 isolated case. Each run reads and decodes the store.
+- **Work, scanpy:** the same steps on the `.h5ad` read into memory (read 0.09 s, not
+  included), threads capped with threadpoolctl and `sc.settings.n_jobs`, second run.
+- **Times:** median of 5 runs after a warm-up (`thread_scaling.py --repeats 5`, final tree). **Peak memory:**
+  `ru_maxrss` of a fresh process running one configuration once (kyto); scanpy's is 5.12's
+  read-through-PCA run.
+- **Before** is the same tree with the old default (2 blocks in flight), rebuilt; its
+  times are medians of 3.
+- **Memory-limit fit:** with a limit, the fit now tries the thread count, then every
+  power of two below it (10, 8, 4, 2, 1), not its halvings (10, 5, 2, 1), so a limit that
+  fits 2 full blocks still gets them from 3 threads.
+
+| Seconds (speedup over 1 thread) | 1 thread | 2 | 4 | 10 | 10, before |
+|---|---|---|---|---|---|
+| kyto preprocessing | 2.90 | 1.56 | 1.05 | 0.80 (3.6x) | 1.15 (2.5x) |
+| scanpy preprocessing (in memory) | 0.99 | | | 0.96 | |
+| kyto QC through PCA | 6.50 | 3.71 | 2.64 | 2.15 (3.02x) | 2.67 (2.5x) |
+| kyto PCA alone (held input) | 2.72 | 1.67 | 1.30 | 1.12 (2.4x) | 1.13 (2.5x) |
+| scanpy `pp.pca` (in memory) | 2.02 | | | 1.93 | |
+
+| Peak memory, MB | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto preprocessing, before / after | 1,001 / 958 | 1,268 / 1,622 | 1,265 / **2,404** |
+| kyto QC through PCA, before / after | 1,126 / 1,096 | 1,362 / 1,756 | 1,364 / **2,616** |
+| kyto PCA alone, before / after | | | 408 / 570 |
+| scanpy read through PCA | | | 2,853 |
+
+- **Run to run:** an earlier run (median of 3, before the memory-limit fit change, which
+  does not touch runs without a limit) gave 2.91 / 0.81 s (3.6x) for preprocessing, 6.56 /
+  2.21 s (**2.97x**) for QC through PCA and 2.73 / 1.14 s (2.4x) for PCA alone: QC through
+  PCA sits at the 3x bar, within the noise between runs.
+- **Bit identity (R11):** the HVG gene table, the cell table and both embeddings are
+  bit-identical at 1, 2, 4 and 10 threads.
+- **Why not 5x:** the work costs more CPU on more threads: preprocessing uses 2.95 s of
+  CPU on 1 thread and 5.05 s on 10 (6 of the 10 cores are efficiency cores, memory
+  bandwidth is shared, idle rayon threads spin). Even with every core busy that caps it at
+  about 5.8x; on average 6.2 cores are busy (5.4 for QC through PCA, 4.5 for PCA alone).
+  It is not block granularity: 2,048- and 1,024-cell blocks (26 and 49 per pass instead of
+  13) took 0.83 s and 0.90 s against 0.82 s. PCA alone does not change: its passes over
+  the held input fold leaves in chunks of the thread count (13 leaves: 10, then 3) with
+  serial dense steps between passes (task 5.15).
+- **Where kyto loses:** peak memory nearly doubles at 10 threads (QC through PCA 1,364 to
+  2,616 MB, close to scanpy's 2,853 MB): every thread holds a 4,096-cell block of every
+  layer. Smaller blocks undo most of it at the same speed (preprocessing at 10 threads:
+  1,785 MB with 2,048-cell blocks, 1,205 MB with 1,024; task 5.14). On 1 thread kyto's
+  preprocessing is 2.9x scanpy's time, which has the matrix in memory (kyto decodes the
+  store); kyto matches scanpy at about 4 threads (1.05 s vs 0.96 s) and is 1.2x faster
+  at 10.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

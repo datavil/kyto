@@ -128,6 +128,65 @@ fn blocks_in_flight_scale_the_blocks_up_to_the_cell_blocks() {
     assert_eq!(with(8).bytes_read(), PASS_BYTES);
 }
 
+/// Task 5.13: a run holds one block in flight per thread; under a memory limit the fit
+/// starts there and halves them.
+#[test]
+fn a_run_holds_one_block_in_flight_per_thread() {
+    use std::num::NonZeroUsize;
+
+    use kyto_plan::{MemoryLimit, PhysicalPlan};
+
+    let threads =
+        |threads: usize| PhysicalOptions::for_threads(NonZeroUsize::new(threads).unwrap());
+    assert_eq!(threads(1).blocks_in_flight.get(), 1);
+    assert_eq!(threads(10).blocks_in_flight.get(), 10);
+    assert_eq!(
+        PhysicalOptions {
+            blocks_in_flight: PhysicalOptions::default().blocks_in_flight,
+            ..threads(10)
+        },
+        PhysicalOptions::default()
+    );
+    // usize::MAX threads saturate (u64 is as wide on every target kyto builds for).
+    assert_eq!(threads(usize::MAX).blocks_in_flight.get(), u64::MAX);
+    let plan = scan();
+    assert_eq!(
+        plan.physical(threads(3)).estimate().block_memory(),
+        3 * SCAN_BLOCK
+    );
+    // A limit with room for two full blocks only: halved from 8 (8, 4, 2) to 2, the
+    // blocks kept whole.
+    let fits_two = 2 * SCAN_BLOCK + 56;
+    let fitted = PhysicalPlan::within_memory_limit(
+        plan.optimize(),
+        threads(8),
+        MemoryLimit::new(NonZeroU64::new(fits_two).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(fitted.options().blocks_in_flight.get(), 2);
+    assert_eq!(fitted.estimate().peak_memory(), fits_two);
+    // From 3 threads too (3, 2, 1: not halved to 1, which would lose a block).
+    let fitted = PhysicalPlan::within_memory_limit(
+        plan.optimize(),
+        threads(3),
+        MemoryLimit::new(NonZeroU64::new(fits_two).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(fitted.options().blocks_in_flight.get(), 2);
+    assert_eq!(
+        fitted.options().max_block_cells,
+        Some(NonZeroU64::new(4_096).unwrap())
+    );
+    // A limit the threads' blocks fit leaves them as they are.
+    let roomy = PhysicalPlan::within_memory_limit(
+        plan.optimize(),
+        threads(3),
+        MemoryLimit::new(NonZeroU64::new(u64::MAX).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(roomy.options(), threads(3));
+}
+
 #[test]
 fn split_blocks_hold_fewer_cells() {
     let plan = scan();
