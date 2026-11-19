@@ -78,14 +78,14 @@ Done (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7): see [Implementation Plan - Done.md](Im
 
 Goal: any plan runs within a memory limit, uses every core, and gives the same answer on 1 or 64 threads.
 
-Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
+Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.15 Parallel PCA passes over a held input.** Split the work inside each of PCA's statistics passes over the held input (5.12) finer than one leaf per store cell block, for example over genes or by more leaves folded in the same tree, and run the small dense steps between passes (the Krylov basis's QR, the eigen solve) in parallel where it pays, with the same bits on any thread count (R11). (added Nov 19, 2026, at the user's request: PCA alone on the 50k data's 2,000 HVGs scaled 2.4x from 1 to 10 threads after 5.13, 2.73 s to 1.14 s, with 4.5 cores busy on average: its 13 leaves fold in chunks of the thread count, 10 then 3, with serial steps between the 11 passes)
-  - Depends: 5.12, 5.13
-  - Done when: PCA alone (`pca_timing.py`'s isolated case) scales at least 3.5x from 1 to 10 threads on the 50k data on the 10-core Mac, and the embedding is bit-identical at 1, 4 and all threads and to the streamed path's.
 - [ ] **5.16 Free a block's layers once nothing reads them.** In the streaming executor, drop (to the block pool) each layer a block carries as soon as no later operator of the stream reads it, instead of at the stream's end (counts and `normalize_total`'s layer after `log1p`, for example), and count it so in `estimate()`. (added Nov 19, 2026, by the 5.14 session, offered as an option to the maestro: after 5.14, QC through PCA at 10 threads peaks at 1,336 MB on the 50k data; a block carries counts, normalised and `log1p` layers until the stream ends)
   - Depends: 5.14
   - Done when: on the 50k data, QC through PCA peaks lower than 5.14's 1,336 MB at 10 threads with no slower run (within 2%), outputs bit-identical at 1, 4 and all threads, and the estimate stays within 25% of the measured allocations on the fixtures (`estimate_fixtures.rs`).
+- [ ] **5.17 Parallel encoding in the output sink.** `kyto_store::StoreWriter::push` encodes a pushed block's layers in parallel over layers only, so a sink with one layer (every handle terminal's temporary store, `materialize.rs`) encodes and compresses its tiles on one thread at a time; encode a block's gene tiles (and their zstd chunks) in parallel on the run's pool, with the same bytes on any thread count (R11, `memory/zarrs_shard_determinism.md`). (added Nov 19, 2026, at the user's request, from 5.15's measurement: on the 50k data's PCA alone, `embedding().to_numpy()` spends about 0.35 s of its 1.11 s at 10 threads after the PCA, writing the 2,000-gene `log1p` layer to the temporary store, against 0.42 s on 1 thread)
+  - Depends: 5.14
+  - Done when: on the 50k data, the time `embedding("X_pca").to_numpy()` spends after the PCA's passes (end to end minus `_execute`) drops at least 2.5x from 1 to 10 threads, with 1 thread not slower and peak memory not above 5.15's; the written store's files are byte-identical at 1, 4 and all threads.
 
 ## 6. Algorithms (`kyto-algo`)
 

@@ -374,9 +374,32 @@ impl Accumulator {
             }
             (Self::Genes(genes), Partial::Groups(groups)) => genes.fold(pass, groups, layer, block),
             (Self::Moments(_), Partial::Moments(moments)) => fold_moments(moments, layer),
-            (Self::Pca(pca), Partial::Pca(partial)) => pca.fold(partial, layer, block),
+            (Self::Pca(pca), Partial::Pca(partial)) => pca.fold(partial, &[(layer, block)]),
             (Self::Rows(rows), Partial::Rows(partial)) => rows.fold(partial, layer, block),
             _ => unreachable!("a pass's leaves come from Accumulator::leaf"),
+        }
+    }
+
+    /// Add a run of blocks to `leaf` (`group`: each block's input layer and the block,
+    /// in cell order), as folding them one by one with [`Self::fold`]; `pca` splits the
+    /// whole run over the pool's threads (task 5.15).
+    ///
+    /// # Errors
+    /// Those of [`Self::fold`].
+    pub(crate) fn fold_group(
+        &self,
+        pass: u32,
+        leaf: &mut Partial,
+        group: &[(&CellBlock, &PipelineBlock)],
+    ) -> Result<(), KytoError> {
+        match (self, leaf) {
+            (Self::Pca(pca), Partial::Pca(partial)) => pca.fold(partial, group),
+            (_, leaf) => {
+                for &(layer, block) in group {
+                    self.fold(pass, leaf, layer, block)?;
+                }
+                Ok(())
+            }
         }
     }
 

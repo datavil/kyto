@@ -8,6 +8,9 @@ Two cases, each run with the input held (the default) and streamed on every pass
   (written once beforehand, not timed): one read of the stored layer and the passes.
 - ``workflow``: QC, filters, ``normalize_total``, ``log1p``, HVG, the HVG filter and
   PCA from the converted counts store, as ``kyto_breakdown.py``'s ``pca`` prefix.
+- ``stage`` (not in the default ``--cases``): the ``isolated`` plan, held, run with no
+  sink (``_execute``) after one warm-up run per thread count: the held read, the passes
+  and the output's stream, without the handle terminal's temporary store (task 5.15).
 
 Prints, per run, seconds (median of ``--repeats``) and the progress total (cell rows:
 a held input adds one pass, so it tells which path ran), then whether every
@@ -68,6 +71,41 @@ def timed(
     return statistics.median(seconds), totals[-1], embedding
 
 
+def stage(plan: Atlas, thread_counts: list[int], repeats: int) -> None:
+    """Print the median seconds of ``plan`` run with no sink, per thread count.
+
+    Parameters
+    ----------
+    plan : Atlas
+        The isolated plan.
+    thread_counts : list of int
+        Threads to run it on; the speedup is over the first.
+    repeats : int
+        Runs after one warm-up; the median time is reported.
+    """
+    first: float | None = None
+    for threads in thread_counts:
+        plan._execute(threads=threads)
+        seconds: list[float] = []
+        for _ in range(repeats):
+            start = time.perf_counter()
+            plan._execute(threads=threads)
+            seconds.append(time.perf_counter() - start)
+        median = statistics.median(seconds)
+        first = first or median
+        print(
+            json.dumps(
+                {
+                    "case": "stage",
+                    "threads": threads,
+                    "seconds": round(median, 3),
+                    "speedup": round(first / median, 2),
+                }
+            ),
+            flush=True,
+        )
+
+
 def main() -> None:
     """Run the cases and print one JSON line per run, then the bit checks."""
     parser = argparse.ArgumentParser()
@@ -96,6 +134,9 @@ def main() -> None:
         "workflow": prefixes["pca"],
     }
     for case in arguments.cases.split(","):
+        if case == "stage":
+            stage(plans["isolated"], thread_counts, arguments.repeats)
+            continue
         plan = plans[case]
         print(case, plan.estimate(), flush=True)
         embeddings: dict[str, npt.NDArray[np.float32 | np.float64]] = {}

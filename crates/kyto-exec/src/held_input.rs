@@ -9,6 +9,9 @@
 //! streamed pass uses (`reduction.rs`, task 5.6): one leaf per store cell block, its
 //! blocks folded in cell order (the parts of a split cell block continue it), the
 //! leaves in a [`BlockOrderTree`] in block order, folded in parallel over cell blocks.
+//! A leaf's blocks go to the accumulator as one group (`Accumulator::fold_group`), so
+//! `pca` splits a whole cell block's rows and genes over the threads (task 5.15), not
+//! the small parts 5.14 cuts on many threads one after another.
 //! The blocks are the ones a streamed pass would fold, in the same order, so every pass
 //! gives the same bits as streaming it (R11), on any thread count.
 //! Does not: choose which nodes hold their input (the physical plan does, by the memory
@@ -118,11 +121,12 @@ impl HeldInput {
                     .map(|group| {
                         control.check()?;
                         let mut leaf = accumulator.leaf(pass);
-                        for block in *group {
-                            // Present: `read` kept it in every block.
-                            let layer = &block.layers[&self.layer];
-                            accumulator.fold(pass, &mut leaf, layer, block)?;
-                        }
+                        // Present: `read` kept it in every block.
+                        let blocks: Vec<_> = group
+                            .iter()
+                            .map(|block| (&block.layers[&self.layer], block))
+                            .collect();
+                        accumulator.fold_group(pass, &mut leaf, &blocks)?;
                         Ok(leaf)
                     })
                     .collect::<Result<Vec<_>, KytoError>>()

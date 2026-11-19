@@ -232,6 +232,79 @@ by `uv sync`), same machine, data and scripts as 5.13 above.
   1.5x target) and 0.58x at 10. QC through PCA now peaks at 47% of scanpy's read-through-PCA
   peak at 10 threads (it was 92% after 5.13).
 
+## Parallel PCA passes over a held input (task 5.15)
+
+Measured Nov 19, 2026, on the task 5.15 tree (base `0b30f09`; release extension built by
+`uv sync`), same machine, data, scanpy and scripts as 5.12 to 5.14 above. A game launcher
+kept about 0.7 of a core busy through every run (load average 1.5 when idle), so each
+comparison below ran its builds back to back in the same session; the final timings ran at
+load 1.5.
+
+- **Change:** each PCA pass over the held input folds a leaf's run of blocks as one group,
+  and splits it inside: row work (the sketch's random rows, each row's projection on the
+  basis, the embedding rows) runs in parallel over tiles of 64 rows, which walk the genes
+  128 at a time so the basis rows they read stay in cache; the per-gene sums run in parallel
+  over fixed parts of 256 genes, each gene adding its rows in cell order. Neither split
+  depends on the thread count, and each sum adds in the old order, so the bits are those of
+  the row-by-row fold (R11). Between passes, the Rayleigh-Ritz step's two products run as two
+  fixed halves on the pool; the basis's QR stays on one thread.
+- **Before 5.15** (10 threads): of PCA alone's 1.11 s, the held read took 0.07 s, the 11
+  passes' folds about 0.53 s, the dense steps between them 0.13 s, and the handle
+  terminal's temporary store (writing the 2,000-gene `log1p` layer, `materialize.rs`) about
+  0.35 s, which barely scales (0.42 s on 1 thread; task 5.17).
+- **Stage:** PCA alone run with no sink, `_execute` (`pca_timing.py --cases stage`): the
+  held read, the passes and the output's stream, without the temporary store. Median of 5
+  after a warm-up. **End to end:** `pca_timing.py` and `thread_scaling.py`, median of 5.
+  **Peak memory:** `ru_maxrss` of a fresh process running one configuration once, median
+  of 3 alternating runs per build.
+
+**Dense products against peak memory.** Every thread that runs a gemm keeps its own
+packing buffers, so the more of the dense products between passes run on the pool, the
+faster the stage and the higher its peak. Three builds, same session, stage at 1 and 10
+threads, peak at 10 threads against base:
+
+| Build | 1 thread | 10 threads | Speedup | Peak at 10 threads |
+|---|---|---|---|---|
+| base (5.14) | 2.57 s | 0.83 s | 3.1x | 369 to 384 MB stage, 446 to 477 MB PCA alone |
+| A: every dense product in 32-row groups on the pool | 2.34 s | 0.626 s | 3.74x | 25 to 35 MB above base |
+| B: QR on one thread, Rayleigh-Ritz in 32-row groups | 2.31 s | 0.652 s | 3.55x | 13 to 30 MB above base |
+| **C, kept: QR on one thread, Rayleigh-Ritz in 2 halves** | 2.32 s | 0.66 s | 3.43 to 3.52x | equal to base |
+
+The user took C and set the target at 3.4x (A breaks "peak not above 5.14's"). The final
+run of C gave:
+
+| Seconds (speedup over 1 thread) | 1 thread | 2 | 4 | 10 |
+|---|---|---|---|---|
+| kyto PCA stage (`_execute`) | 2.311 | 1.251 | 0.903 | **0.661 (3.50x)** |
+| kyto PCA alone, end to end, base (5.14) | 2.70 | 1.69 | 1.28 | 1.11 (2.43x) |
+| kyto PCA alone, end to end, 5.15 | 2.466 | 1.487 | 1.163 | 0.937 (2.63x) |
+| kyto PCA alone, streamed (`memory_limit` 180MB) | 5.72 | 3.51 | 2.89 | 2.55 |
+| kyto QC through PCA, base (5.14) | 6.47 | 3.70 | 2.69 | 2.16 (3.0x) |
+| kyto QC through PCA, 5.15 | 6.25 | 3.53 | 2.60 | 2.00 (3.13x) |
+| scanpy `pp.pca` (matrix in memory) | 1.95 | | 1.94 | 1.94 |
+
+| Peak memory at 10 threads, MB (median of 3) | base (5.14) | 5.15 |
+|---|---|---|
+| kyto PCA stage | 380 | 372 |
+| kyto PCA alone, end to end | 461 | 464 |
+| kyto QC through PCA | 1,332 | 1,297 |
+| scanpy read through PCA (5.12) | | 2,853 |
+
+At 1 thread the stage peaks at 274 MB (base 276 MB).
+
+- **Bit identity (R11):** the embedding is bit-identical at 1, 2, 4 and 10 threads, held
+  and streamed (`pca_timing.py`), and in QC through PCA (`thread_scaling.py`). It differs
+  from 5.14's by at most 1.2e-7: the Rayleigh-Ritz products are cut differently.
+- **Parity with scanpy:** first 10 components, worst column difference 2.9e-5 relative to
+  the column, largest principal angle 1.7e-5 rad (as in 5.12).
+- **Where kyto loses:** on 1 thread PCA alone takes 1.27x scanpy's time (scanpy has the
+  matrix in memory; kyto decodes the stored layer and writes the temporary store). From 2
+  threads kyto is faster, 0.48x scanpy's time at 10. End to end, PCA alone scales only
+  2.63x: the temporary store's 0.35 s is the largest serial part left (task 5.17). The
+  stage reaches 3.5x of a 5.8x hardware ceiling: the QR and the eigen solve between passes
+  stay serial, and the folds are bound by L2 bandwidth (each stored value reads a 480-byte
+  row of the basis).
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

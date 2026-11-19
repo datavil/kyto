@@ -10,7 +10,7 @@ timing scripts, run by hand.
 | `run_kyto.py IN.h5ad STORE OUT SEARCH` | `ky.convert`, then the same workflow as one plan run by `sink_zarr`; `SEARCH` is `exact` or `approximate` |
 | `kyto_breakdown.py STORE OUT [--with-umap]` | Runs the kyto plan cut after each step; prints cumulative seconds |
 | `measure.py SCRIPT ARGS...` | Runs a script and prints its peak RSS |
-| `pca_timing.py STORE WORK` | kyto's PCA alone (on the HVG store it writes to `WORK` once) and in the workflow, input held vs streamed, at 1, 4 and 10 threads; checks the embeddings are bit-identical (task 5.12) |
+| `pca_timing.py STORE WORK` | kyto's PCA alone (on the HVG store it writes to `WORK` once) and in the workflow, input held vs streamed, at 1, 4 and 10 threads; checks the embeddings are bit-identical (task 5.12). `--cases stage` times PCA alone with no sink (`_execute`), the stage 5.15 measures |
 | `thread_scaling.py STORE WORK` | Preprocessing (streamed to nowhere), QC through PCA and PCA alone at 1, 4 and 10 threads (`--threads`); speedups and bit checks across thread counts (task 5.13) |
 | `pca_scanpy.py IN.h5ad [--kyto WORK/kyto_pca.npy]` | scanpy's `pp.pca` alone on the same HVG matrix, threads capped by threadpoolctl; compares kyto's embedding |
 
@@ -32,6 +32,7 @@ macOS's byte count as if it were Linux's kilobytes):
 
 ```bash
 uv run python pca_timing.py store.kyto work
+uv run python pca_timing.py store.kyto work --cases stage --threads 1,2,4,10 --repeats 5
 uv run python thread_scaling.py store.kyto work --threads 1,2,4,10
 .venv-scanpy/bin/python pca_scanpy.py synthetic_50000.h5ad --kyto work/kyto_pca.npy
 ```

@@ -20,6 +20,13 @@
 //! - the last pass: each cell's row `(x - mu) V` (scanpy's `X_pca`, in cell order) and
 //!   each gene's centred sum of squares (for the total variance).
 //!
+//! Each fold splits a block's work over the pool's threads (task 5.15): the row-wise
+//! steps (`Omega`'s rows, `w`, the embedding rows) over tiles of rows, each tile walking
+//! the genes a range at a time so its rows of the dense matrix stay in cache; the
+//! per-gene sums over disjoint ranges of genes. Every sum still adds its terms in cell
+//! order and each row's in gene order, so the bits are those of folding row by row, on
+//! any thread count.
+//!
 //! Variance `lambda / (n - 1)` and its ratio to the total variance (the genes'
 //! variances with `ddof=1`, as scikit-learn's `explained_variance_ratio_`). Every
 //! reduction folds through `reduction.rs`'s fixed tree (R11).
@@ -37,6 +44,7 @@ use std::sync::Arc;
 use kyto_error::KytoError;
 use kyto_plan::{PCA_OVERSAMPLES, PCA_POWER_ITERATIONS};
 use kyto_store::{CellBlock, CellValues};
+use rayon::prelude::*;
 
 use crate::kernels::KernelValue;
 use crate::pca_dense::{Dense, extend_basis, rayleigh_ritz};
@@ -110,6 +118,67 @@ impl PcaStatistics {
 
 /// The passes `pca` runs: one sketch, `q` products, one projection.
 pub(crate) const PCA_PASSES: u32 = 2 + PCA_POWER_ITERATIONS;
+
+/// Genes per range whose sums one thread adds in a leaf's fold (task 5.15): the
+/// range's sums stay in the core's cache while every row's values for it go by. Any
+/// split gives the same bits.
+const GENES_PER_PART: usize = 256;
+
+/// Genes a tile of rows projects at a time (their rows of the matrix stay in cache).
+const GENES_PER_TILE: usize = 128;
+
+/// Rows per tile of a row-wise step (one parallel task).
+const ROWS_PER_TILE: usize = 64;
+
+/// Genes `start..end` (positions among the genes computed over) and the stream's genes
+/// they are found among (`stream_start..stream_end`, genes outside a gene set
+/// included).
+#[derive(Debug, Clone, Copy)]
+struct GenePart {
+    start: usize,
+    end: usize,
+    stream_start: u32,
+    stream_end: u32,
+}
+
+/// One block's rows of a pass's input layer, as `fold_rows` reads them.
+struct BlockRows<'a, T> {
+    indptr: &'a [u64],
+    indices: &'a [u32],
+    values: &'a [T],
+    /// The rows' cells (table positions).
+    cells: &'a [u64],
+}
+
+impl<'a, T> BlockRows<'a, T> {
+    fn new(layer: &'a CellBlock, values: &'a [T], block: &'a PipelineBlock) -> Self {
+        Self {
+            indptr: layer.indptr(),
+            indices: layer.indices(),
+            values,
+            cells: &block.cells,
+        }
+    }
+
+    fn n_rows(&self) -> usize {
+        self.indptr.len().saturating_sub(1)
+    }
+}
+
+/// `values` (`per_gene` values per gene, genes in order) cut at `parts`' bounds.
+fn split_genes<'a, V>(
+    mut values: &'a mut [V],
+    parts: &[GenePart],
+    per_gene: usize,
+) -> Vec<&'a mut [V]> {
+    let mut split = Vec::with_capacity(parts.len());
+    for part in parts {
+        let (head, tail) = values.split_at_mut((part.end - part.start) * per_gene);
+        split.push(head);
+        values = tail;
+    }
+    split
+}
 
 /// What one leaf of a `pca` pass sums (task 5.6).
 #[derive(Debug, Clone, PartialEq)]
@@ -227,6 +296,8 @@ pub(crate) struct PcaAccumulator {
     /// With a gene set: the position among its genes of each gene of the stream,
     /// `u32::MAX` for a gene outside it.
     subset: Option<Vec<u32>>,
+    /// With a gene set: the stream gene of each of its genes, in order.
+    set_genes: Option<Vec<u32>>,
     /// Columns of `Omega` (`l`).
     width: usize,
     n_cells: u64,
@@ -275,6 +346,13 @@ impl PcaAccumulator {
                 })
                 .collect::<Vec<u32>>()
         });
+        let set_genes = gene_set.map(|flags| {
+            (0_u32..)
+                .zip(flags)
+                .filter(|&(_, &flag)| flag)
+                .map(|(gene, _)| gene)
+                .collect::<Vec<u32>>()
+        });
         let n_genes = match gene_set {
             Some(flags) => flags.iter().filter(|&&flag| flag).count(),
             None => stream_genes,
@@ -289,6 +367,7 @@ impl PcaAccumulator {
             n_genes,
             stream_genes,
             subset,
+            set_genes,
             width,
             n_cells: 0,
             means: Vec::new(),
@@ -335,67 +414,147 @@ impl PcaAccumulator {
         pass > 0 && pass < PCA_PASSES - 1 && self.loadings.is_some()
     }
 
-    /// Add `layer`'s rows (those of `block`, in cell order) to `leaf`, a leaf of one
-    /// of the passes.
+    /// Add the rows of `group` (each block's input layer and the block, in cell order)
+    /// to `leaf`, a leaf of one of the passes: as folding the blocks one by one, row by
+    /// row, but with a whole run of a leaf's blocks split over the pool's threads
+    /// (task 5.15).
     ///
     /// # Errors
-    /// `KY-E117` if the block's genes are not the accumulator's (a kyto bug, reported).
+    /// `KY-E117` if a block's genes are not the accumulator's (a kyto bug, reported).
     pub(crate) fn fold(
         &self,
         leaf: &mut PcaPartial,
-        layer: &CellBlock,
-        block: &PipelineBlock,
+        group: &[(&CellBlock, &PipelineBlock)],
     ) -> Result<(), KytoError> {
         let flags = self.subset.as_ref().map_or(self.stream_genes, Vec::len);
-        if layer.n_genes() as usize != self.stream_genes || flags != self.stream_genes {
-            return Err(KytoError::InvalidCellBlock {
-                context: "pca statistics pass".to_owned(),
-                problem: format!(
-                    "a statistics pass over {} genes (a gene set over {flags}) got a block of {} genes",
-                    self.stream_genes,
-                    layer.n_genes()
-                ),
-            });
+        for (layer, _) in group {
+            if layer.n_genes() as usize != self.stream_genes || flags != self.stream_genes {
+                return Err(KytoError::InvalidCellBlock {
+                    context: "pca statistics pass".to_owned(),
+                    problem: format!(
+                        "a statistics pass over {} genes (a gene set over {flags}) got a block of {} genes",
+                        self.stream_genes,
+                        layer.n_genes()
+                    ),
+                });
+            }
         }
-        match layer.data() {
-            CellValues::F32(values) => {
-                self.fold_rows(leaf, layer.indptr(), layer.indices(), values, block)
-            }
-            CellValues::U32(values) => {
-                self.fold_rows(leaf, layer.indptr(), layer.indices(), values, block)
-            }
+        let f32_rows: Option<Vec<BlockRows<'_, f32>>> = group
+            .iter()
+            .map(|(layer, block)| match layer.data() {
+                CellValues::F32(values) => Some(BlockRows::new(layer, values, block)),
+                CellValues::U32(_) => None,
+            })
+            .collect();
+        if let Some(rows) = f32_rows {
+            self.fold_rows(leaf, &rows);
+            return Ok(());
+        }
+        let u32_rows: Option<Vec<BlockRows<'_, u32>>> = group
+            .iter()
+            .map(|(layer, block)| match layer.data() {
+                CellValues::U32(values) => Some(BlockRows::new(layer, values, block)),
+                CellValues::F32(_) => None,
+            })
+            .collect();
+        if let Some(rows) = u32_rows {
+            self.fold_rows(leaf, &rows);
+            return Ok(());
+        }
+        // Blocks of both value types (not from one stream): one at a time, in order.
+        for &(layer, block) in group {
+            self.fold(leaf, &[(layer, block)])?;
         }
         Ok(())
     }
 
-    fn fold_rows<T: KernelValue>(
-        &self,
-        leaf: &mut PcaPartial,
-        indptr: &[u64],
-        indices: &[u32],
-        values: &[T],
-        block: &PipelineBlock,
-    ) {
-        let n_rows = indptr.len().saturating_sub(1);
+    fn fold_rows<T: KernelValue>(&self, leaf: &mut PcaPartial, blocks: &[BlockRows<'_, T>]) {
+        // Each row of the group: its block and its row there, in cell order.
+        let rows_at: Vec<(usize, usize)> = blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, rows)| (0..rows.n_rows()).map(move |row| (block, row)))
+            .collect();
+        let n_rows = rows_at.len();
+        let cell = |index: usize| {
+            let (block, row) = rows_at[index];
+            blocks[block].cells[row]
+        };
+        // Row `index`'s stored genes and values.
+        let entries = |index: usize| {
+            let (block, row) = rows_at[index];
+            let rows = &blocks[block];
+            let start = rows.indptr[row] as usize;
+            let end = rows.indptr[row + 1] as usize;
+            (&rows.indices[start..end], &rows.values[start..end])
+        };
         let subset = self.subset.as_deref();
-        // A row's stored values, by position among the genes computed over (a gene
-        // outside the gene set is skipped).
-        let row = |index: usize| {
-            let start = indptr[index] as usize;
-            let end = indptr[index + 1] as usize;
-            indices[start..end]
-                .iter()
-                .zip(&values[start..end])
-                .filter_map(move |(&gene, &value)| {
-                    let gene = match subset {
-                        Some(subset) => match subset[gene as usize] {
-                            u32::MAX => return None,
-                            position => position as usize,
-                        },
-                        None => gene as usize,
-                    };
-                    Some((gene, value.to_f64()))
-                })
+        let position = move |gene: u32| match subset {
+            Some(subset) => match subset[gene as usize] {
+                u32::MAX => None,
+                position => Some(position as usize),
+            },
+            None => Some(gene as usize),
+        };
+        // Row `index`'s stored values of the genes of `part`, by position from the
+        // part's start (genes outside a gene set skipped) (a
+        // row's genes are strictly increasing, so they are one run of the row).
+        let part_row =
+            |part: GenePart, index: usize| {
+                let (genes, values) = entries(index);
+                let low = genes.partition_point(|&gene| gene < part.stream_start);
+                let high = low + genes[low..].partition_point(|&gene| gene < part.stream_end);
+                genes[low..high].iter().zip(&values[low..high]).filter_map(
+                    move |(&gene, &value)| Some((position(gene)? - part.start, value.to_f64())),
+                )
+            };
+        // Each gene sums its rows in cell order whatever the split (task 5.15): the
+        // row-wise steps run in parallel over tiles of rows, each gene's sums over
+        // disjoint ranges of genes, so the bits are those of folding the rows one by one.
+        let parts = self.gene_parts(GENES_PER_PART);
+        let tile_parts = self.gene_parts(GENES_PER_TILE);
+        // Each row's `offsets`-subtracted projection on `matrix` (genes x `offsets.len()`)
+        // into `out`: `-offsets + sum value * matrix[gene]`, its values added in the
+        // row's gene order. A tile of rows walks the genes a few at a time, each row
+        // resuming where it stopped, so a tile's rows and genes stay in the core's cache.
+        let project = |matrix: &Dense, offsets: &[f64], out: &mut [f64]| {
+            let width = offsets.len();
+            if width == 0 {
+                return;
+            }
+            out.par_chunks_mut(ROWS_PER_TILE * width)
+                .enumerate()
+                .for_each(|(tile, out)| {
+                    let first = tile * ROWS_PER_TILE;
+                    for row in out.chunks_mut(width) {
+                        for (target, offset) in row.iter_mut().zip(offsets) {
+                            *target = -offset;
+                        }
+                    }
+                    // Each row's values not yet projected.
+                    let mut rest: Vec<_> =
+                        (first..first + out.len() / width).map(&entries).collect();
+                    for part in &tile_parts {
+                        for (row, (genes, values)) in out.chunks_mut(width).zip(&mut rest) {
+                            let mut cursor = 0;
+                            while let Some(&gene) = genes.get(cursor) {
+                                if gene >= part.stream_end {
+                                    break;
+                                }
+                                if let Some(position) = position(gene) {
+                                    let value = values[cursor].to_f64();
+                                    for (target, factor) in row.iter_mut().zip(matrix.row(position))
+                                    {
+                                        *target += value * factor;
+                                    }
+                                }
+                                cursor += 1;
+                            }
+                            *genes = &genes[cursor..];
+                            *values = &values[cursor..];
+                        }
+                    }
+                });
         };
         match leaf {
             PcaPartial::Sketch {
@@ -404,41 +563,57 @@ impl PcaAccumulator {
                 omega_sums,
                 sketch,
             } => {
-                let mut omega = vec![0.0; self.width];
-                for index in 0..n_rows {
-                    omega_row(self.seed, block.cells[index], &mut omega);
-                    *n_cells += 1;
-                    add(omega_sums, &omega);
-                    for (gene, value) in row(index) {
-                        sums[gene] += value;
-                        let target = &mut sketch[gene * self.width..(gene + 1) * self.width];
-                        for (target, omega) in target.iter_mut().zip(&omega) {
-                            *target += value * omega;
-                        }
-                    }
+                let width = self.width;
+                let mut omega = vec![0.0; n_rows * width];
+                omega
+                    .par_chunks_mut(width.max(1))
+                    .with_min_len(ROWS_PER_TILE)
+                    .enumerate()
+                    .for_each(|(index, omega)| omega_row(self.seed, cell(index), omega));
+                // Counted by rows, not by `Omega`'s rows (none at width 0, bug-hunter).
+                *n_cells += n_rows as u64;
+                for omega in omega.chunks(width.max(1)).take(n_rows) {
+                    add(omega_sums, omega);
                 }
+                parts
+                    .par_iter()
+                    .zip(split_genes(sums, &parts, 1))
+                    .zip(split_genes(sketch, &parts, width))
+                    .for_each(|((part, sums), sketch)| {
+                        for index in 0..n_rows {
+                            let omega = &omega[index * width..(index + 1) * width];
+                            for (gene, value) in part_row(*part, index) {
+                                sums[gene] += value;
+                                let target = &mut sketch[gene * width..(gene + 1) * width];
+                                for (target, omega) in target.iter_mut().zip(omega) {
+                                    *target += value * omega;
+                                }
+                            }
+                        }
+                    });
             }
             PcaPartial::Product { product, sums } => {
                 let width = self.block.columns;
-                let mut projected = vec![0.0; width];
-                for index in 0..n_rows {
-                    // The centred row's projection: x Q - mu^T Q.
-                    for (target, mean) in projected.iter_mut().zip(&self.block_means) {
-                        *target = -mean;
-                    }
-                    for (gene, value) in row(index) {
-                        for (target, basis) in projected.iter_mut().zip(self.block.row(gene)) {
-                            *target += value * basis;
-                        }
-                    }
-                    for (gene, value) in row(index) {
-                        let target = &mut product[gene * width..(gene + 1) * width];
-                        for (target, projected) in target.iter_mut().zip(&projected) {
-                            *target += value * projected;
-                        }
-                    }
-                    add(sums, &projected);
+                // Each centred row's projection: x Q - mu^T Q.
+                let mut projected = vec![0.0; n_rows * width];
+                project(&self.block, &self.block_means, &mut projected);
+                for projected in projected.chunks(width.max(1)).take(n_rows) {
+                    add(sums, projected);
                 }
+                parts
+                    .par_iter()
+                    .zip(split_genes(product, &parts, width))
+                    .for_each(|(part, product)| {
+                        for index in 0..n_rows {
+                            let projected = &projected[index * width..(index + 1) * width];
+                            for (gene, value) in part_row(*part, index) {
+                                let target = &mut product[gene * width..(gene + 1) * width];
+                                for (target, projected) in target.iter_mut().zip(projected) {
+                                    *target += value * projected;
+                                }
+                            }
+                        }
+                    });
             }
             PcaPartial::Rows {
                 cells,
@@ -449,22 +624,53 @@ impl PcaAccumulator {
                 let Some(loadings) = &self.loadings else {
                     unreachable!("the Rayleigh-Ritz step ends the product passes")
                 };
-                for index in 0..n_rows {
-                    cells.push(block.cells[index]);
-                    let start = rows.len();
-                    rows.extend(self.mean_projection.iter().map(|value| -value));
-                    let out = &mut rows[start..];
-                    for (gene, value) in row(index) {
-                        for (target, loading) in out.iter_mut().zip(loadings.row(gene)) {
-                            *target += value * loading;
+                let width = self.mean_projection.len();
+                cells.extend((0..n_rows).map(cell));
+                let start = rows.len();
+                rows.resize(start + n_rows * width, 0.0);
+                project(loadings, &self.mean_projection, &mut rows[start..]);
+                parts
+                    .par_iter()
+                    .zip(split_genes(squares, &parts, 1))
+                    .zip(split_genes(stored, &parts, 1))
+                    .for_each(|((part, squares), stored)| {
+                        let means = &self.means[part.start..part.end];
+                        for index in 0..n_rows {
+                            for (gene, value) in part_row(*part, index) {
+                                let centred = value - means[gene];
+                                squares[gene] += centred * centred;
+                                stored[gene] += 1;
+                            }
                         }
-                        let centred = value - self.means[gene];
-                        squares[gene] += centred * centred;
-                        stored[gene] += 1;
-                    }
-                }
+                    });
             }
         }
+    }
+
+    /// The genes split into ranges of `size` genes (the last one shorter).
+    fn gene_parts(&self, size: usize) -> Vec<GenePart> {
+        // The stream gene a position starts at (the stream's end past the last).
+        let stream_start = |position: usize| -> u32 {
+            let stream = match &self.set_genes {
+                Some(set_genes) => set_genes
+                    .get(position)
+                    .map_or(self.stream_genes, |&gene| gene as usize),
+                None => position.min(self.stream_genes),
+            };
+            u32::try_from(stream).unwrap_or(u32::MAX)
+        };
+        (0..self.n_genes.div_ceil(size))
+            .map(|part| {
+                let start = part * size;
+                let end = (start + size).min(self.n_genes);
+                GenePart {
+                    start,
+                    end,
+                    stream_start: stream_start(start),
+                    stream_end: stream_start(end),
+                }
+            })
+            .collect()
     }
 
     /// End pass `pass` with its reduction (`None` for a stream without cells).
@@ -727,5 +933,198 @@ mod tests {
         assert_ne!(row, other);
         omega_row(0, 7, &mut other);
         assert_eq!(row, other);
+    }
+
+    /// Stream genes of the split-fold tests: several of `GENES_PER_PART` and
+    /// `GENES_PER_TILE`, so a fold crosses parts and tiles.
+    const GENES: usize = 700;
+
+    /// Seeded sparse rows (strictly increasing genes) with values over many orders of
+    /// magnitude, so any change in the order of additions shows in the bits.
+    fn sparse_rows(n_rows: usize, seed: u64) -> Vec<(Vec<u32>, Vec<f32>)> {
+        let mut state = seed;
+        let mut next = || {
+            state = mix(state.wrapping_add(0x9E37_79B9_7F4A_7C15));
+            state
+        };
+        (0..n_rows)
+            .map(|_| {
+                let (mut genes, mut values) = (Vec::new(), Vec::new());
+                for gene in 0..GENES as u32 {
+                    if next() % 7 == 0 {
+                        genes.push(gene);
+                        let exponent = (next() % 9) as i32 - 4;
+                        values.push((next() % 1000) as f32 / 997.0 * 10_f32.powi(exponent));
+                    }
+                }
+                (genes, values)
+            })
+            .collect()
+    }
+
+    /// A block of `rows` over cells starting at `first`.
+    fn block(rows: &[(Vec<u32>, Vec<f32>)], first: u64) -> (CellBlock, PipelineBlock) {
+        let mut parts = kyto_store::CellBlockParts::new(kyto_store::ValueDtype::F32);
+        parts.indptr.push(0);
+        for (genes, values) in rows {
+            parts.indices.extend_from_slice(genes);
+            if let kyto_store::CellData::F32(data) = &mut parts.data {
+                data.extend_from_slice(values);
+            }
+            parts.indptr.push(parts.indices.len() as u64);
+        }
+        let layer = CellBlock::from_parts(parts, GENES as u64).unwrap();
+        let pipeline = PipelineBlock {
+            cell_block: 0,
+            cells: (first..first + rows.len() as u64).collect(),
+            layers: std::collections::BTreeMap::new(),
+            columns: polars::prelude::DataFrame::empty_with_height(rows.len()),
+        };
+        (layer, pipeline)
+    }
+
+    /// The fold before task 5.15: one row at a time, each row's values in gene order.
+    fn reference_fold(pca: &PcaAccumulator, leaf: &mut PcaPartial, rows: &[(u64, &[u32], &[f32])]) {
+        let row = |genes: &[u32], values: &[f32]| -> Vec<(usize, f64)> {
+            genes
+                .iter()
+                .zip(values)
+                .filter_map(|(&gene, &value)| {
+                    let position = match &pca.subset {
+                        Some(subset) => match subset[gene as usize] {
+                            u32::MAX => return None,
+                            position => position as usize,
+                        },
+                        None => gene as usize,
+                    };
+                    Some((position, f64::from(value)))
+                })
+                .collect()
+        };
+        match leaf {
+            PcaPartial::Sketch {
+                n_cells,
+                sums,
+                omega_sums,
+                sketch,
+            } => {
+                let mut omega = vec![0.0; pca.width];
+                for &(cell, genes, values) in rows {
+                    omega_row(pca.seed, cell, &mut omega);
+                    *n_cells += 1;
+                    add(omega_sums, &omega);
+                    for (gene, value) in row(genes, values) {
+                        sums[gene] += value;
+                        let target = &mut sketch[gene * pca.width..(gene + 1) * pca.width];
+                        for (target, omega) in target.iter_mut().zip(&omega) {
+                            *target += value * omega;
+                        }
+                    }
+                }
+            }
+            PcaPartial::Product { product, sums } => {
+                let width = pca.block.columns;
+                for &(_, genes, values) in rows {
+                    let mut projected: Vec<f64> =
+                        pca.block_means.iter().map(|mean| -mean).collect();
+                    let entries = row(genes, values);
+                    for &(gene, value) in &entries {
+                        for (target, basis) in projected.iter_mut().zip(pca.block.row(gene)) {
+                            *target += value * basis;
+                        }
+                    }
+                    for &(gene, value) in &entries {
+                        let target = &mut product[gene * width..(gene + 1) * width];
+                        for (target, projected) in target.iter_mut().zip(&projected) {
+                            *target += value * projected;
+                        }
+                    }
+                    add(sums, &projected);
+                }
+            }
+            PcaPartial::Rows {
+                cells,
+                rows: out,
+                squares,
+                stored,
+            } => {
+                let loadings = pca.loadings.as_ref().unwrap();
+                for &(cell, genes, values) in rows {
+                    cells.push(cell);
+                    let start = out.len();
+                    out.extend(pca.mean_projection.iter().map(|value| -value));
+                    for (gene, value) in row(genes, values) {
+                        for (target, loading) in out[start..].iter_mut().zip(loadings.row(gene)) {
+                            *target += value * loading;
+                        }
+                        let centred = value - pca.means[gene];
+                        squares[gene] += centred * centred;
+                        stored[gene] += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every pass kind folds a group of blocks with the bits of the row-by-row fold, on
+    /// 1 and 4 threads, with and without a gene set, and one block at a time too.
+    #[test]
+    fn the_split_fold_gives_the_bits_of_folding_row_by_row() {
+        let sizes = [150, 7, 203];
+        let all: Vec<_> = sizes
+            .iter()
+            .enumerate()
+            .map(|(index, &n)| sparse_rows(n, index as u64 + 1))
+            .collect();
+        let mut first = 0;
+        let blocks: Vec<_> = all
+            .iter()
+            .map(|rows| {
+                let built = block(rows, first);
+                first += rows.len() as u64;
+                built
+            })
+            .collect();
+        let group: Vec<_> = blocks.iter().map(|(layer, block)| (layer, block)).collect();
+        let reference_rows: Vec<(u64, &[u32], &[f32])> = all
+            .iter()
+            .flatten()
+            .zip(0_u64..)
+            .map(|((genes, values), cell)| (cell, genes.as_slice(), values.as_slice()))
+            .collect();
+        let flags: Vec<bool> = (0..GENES).map(|gene| gene % 3 != 1).collect();
+        for gene_set in [None, Some(flags.as_slice())] {
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    let mut pca = PcaAccumulator::new("x", 5, 3, GENES, gene_set);
+                    for pass in [0, 1, PCA_PASSES - 1] {
+                        if pass == PCA_PASSES - 1 {
+                            pca.finish_basis().unwrap();
+                        }
+                        let mut expected = pca.leaf(pass);
+                        reference_fold(&pca, &mut expected, &reference_rows);
+                        let mut grouped = pca.leaf(pass);
+                        pca.fold(&mut grouped, &group).unwrap();
+                        assert_eq!(grouped, expected, "pass {pass}, {threads} threads");
+                        let mut one_by_one = pca.leaf(pass);
+                        for pair in &group {
+                            pca.fold(&mut one_by_one, std::slice::from_ref(pair))
+                                .unwrap();
+                        }
+                        assert_eq!(
+                            one_by_one, expected,
+                            "pass {pass} by block, {threads} threads"
+                        );
+                        if pass < PCA_PASSES - 1 {
+                            pca.end_pass(pass, Some(grouped)).unwrap();
+                        }
+                    }
+                });
+            }
+        }
     }
 }

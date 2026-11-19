@@ -692,7 +692,8 @@ impl Pipeline {
                         pass,
                     )?,
                 };
-                accumulator.end_pass(pass, reduced)?;
+                // On the run's pool: pca's dense steps run their products on it (5.15).
+                thread_pool.install(|| accumulator.end_pass(pass, reduced))?;
             }
             drop(held);
             if let Accumulator::Rows(rows) = accumulator {

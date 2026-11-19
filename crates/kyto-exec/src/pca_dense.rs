@@ -1,4 +1,5 @@
-//! The small dense steps of the streamed PCA (task 6.5), with faer on one thread.
+//! The small dense steps of the streamed PCA (task 6.5), with faer on one thread per
+//! product.
 //!
 //! Does: hold row-major `f64` matrices ([`Dense`]: genes x columns, as the passes fold
 //! them); grow the PCA's Krylov basis by one block (project the block off the basis
@@ -8,11 +9,21 @@
 //! zero variance when the data has fewer than `n_components` directions, with
 //! scikit-learn's sign rule (`svd_flip(u_based_decision=False)`: the largest absolute
 //! loading of each component is positive). faer runs without its `rayon` feature, so
-//! every step is sequential and gives the same bits on any thread count (R11).
+//! every faer call is sequential; the Rayleigh-Ritz step's products are cut into fixed
+//! groups of columns (or rows) run in parallel on the current pool ([`multiply`], task
+//! 5.15), a cut that does not depend on the threads, so every step gives the same bits
+//! on any thread count (R11).
 //! Does not: read the data (see `pca.rs`).
 
-use faer::{Mat, Side};
+use faer::linalg::matmul::matmul;
+use faer::{Accum, Mat, MatRef, Par, Side};
 use kyto_error::KytoError;
+use rayon::prelude::*;
+
+/// Groups of columns (or rows) [`multiply`] cuts a product into: fixed, so the bits do
+/// not depend on the thread count. Two, because every thread whose gemm runs keeps its
+/// own packing buffers (32-wide groups on 10 threads cost ~20 MB more at the peak).
+const PRODUCT_GROUPS: usize = 2;
 
 /// A singular value of a new block at most this times the block's norm is a direction
 /// the basis already holds (rounding), and is dropped.
@@ -100,6 +111,9 @@ pub(crate) fn extend_basis(basis: &Dense, block: &Dense) -> Result<Dense, KytoEr
     if basis.columns > 0 {
         let basis = basis.to_faer();
         for _ in 0..2 {
+            // Sequential: run 9 times, in parallel these products cost more memory at
+            // the peak (each thread's gemm keeps its own packing buffers) than they save
+            // in time (task 5.15).
             let projection = basis.transpose() * &rest;
             rest -= &basis * projection;
         }
@@ -133,7 +147,7 @@ pub(crate) fn rayleigh_ritz(
     let mut eigenvalues = Vec::with_capacity(n_components);
     if basis.columns > 0 {
         let basis_matrix = basis.to_faer();
-        let projected = basis_matrix.transpose() * products.to_faer();
+        let projected = multiply(basis_matrix.transpose(), products.to_faer().as_ref());
         let symmetric = Mat::from_fn(projected.nrows(), projected.ncols(), |row, column| {
             0.5 * (projected[(row, column)] + projected[(column, row)])
         });
@@ -148,7 +162,7 @@ pub(crate) fn rayleigh_ritz(
         eigenvalues.extend(order.iter().map(|&index| values[index].max(0.0)));
         let vectors = eigen.U();
         let chosen = Mat::from_fn(n, taken, |row, column| vectors[(row, order[column])]);
-        loadings = Dense::from_faer((&basis_matrix * chosen).as_ref());
+        loadings = Dense::from_faer(multiply(basis_matrix.as_ref(), chosen.as_ref()).as_ref());
     }
     let missing = n_components - eigenvalues.len();
     if missing > 0 {
@@ -157,6 +171,42 @@ pub(crate) fn rayleigh_ritz(
     }
     flip_signs(&mut loadings);
     Ok((eigenvalues, loadings))
+}
+
+/// `left x right`, its longer side cut into [`PRODUCT_GROUPS`] groups of columns (or
+/// rows), each a sequential faer product, run in parallel on the current pool. The cut
+/// depends only on the shapes, so the bits are the same on any thread count (R11).
+fn multiply(left: MatRef<'_, f64>, right: MatRef<'_, f64>) -> Mat<f64> {
+    let (rows, columns) = (left.nrows(), right.ncols());
+    let by_columns = columns >= rows;
+    let length = if by_columns { columns } else { rows };
+    let size = length.div_ceil(PRODUCT_GROUPS).max(1);
+    let groups: Vec<(usize, usize)> = (0..length)
+        .step_by(size)
+        .map(|start| (start, size.min(length - start)))
+        .collect();
+    let parts: Vec<Mat<f64>> = groups
+        .par_iter()
+        .map(|&(start, count)| {
+            let (left, right) = if by_columns {
+                (left, right.subcols(start, count))
+            } else {
+                (left.subrows(start, count), right)
+            };
+            let mut part = Mat::zeros(left.nrows(), right.ncols());
+            matmul(part.as_mut(), Accum::Replace, left, right, 1.0, Par::Seq);
+            part
+        })
+        .collect();
+    let mut product = Mat::zeros(rows, columns);
+    for (&(start, count), part) in groups.iter().zip(&parts) {
+        if by_columns {
+            product.as_mut().subcols_mut(start, count).copy_from(part);
+        } else {
+            product.as_mut().subrows_mut(start, count).copy_from(part);
+        }
+    }
+    product
 }
 
 /// `count` orthonormal columns orthogonal to `columns` (orthonormal): each time the
