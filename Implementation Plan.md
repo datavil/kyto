@@ -99,20 +99,25 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see 
 - [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
+  - Parity: none yet: the exports have no scanpy counterpart; the task adds a round-trip test (kyto -> NumPy/DLPack -> `with_embedding`, bit for bit) and, for scvi/Harmony outputs, a comparison with the same tool run on scanpy's AnnData, its tolerances in [tolerances](tests/parity/tolerances.toml).
 - [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.
+  - Parity: [`umap_parity.rs`](crates/kyto-exec/tests/it/umap_parity.rs) must keep passing with the new kernel; [tolerances](tests/parity/tolerances.toml) `umap.*`.
   - Open: (1) profile the SGD on Linux x86 first, to confirm `pow` is the cause of the gap there.
 - [ ] **6.16 Metacells by e-means (opt-in).** A `metacells(n_metacells=, n_components=, epochs=, seed=, into=)` method that groups cells into many small groups (about n/50 to n/500) with e-means, the mini-batch k-means of Bessa et al., "e-means: outperforming k-means (in one-tenth the epochs)", arXiv 2611.09501 (Nov 2026). The algorithm works in mini-batches. Each centroid is a running sum divided by a running count, both updated by EMA. The step size follows a cosine schedule, and clusters that end up nearly empty are re-seeded. Initialization takes k random cells (not k-means++), and the final centroids are the mean of the cells assigned to each in the last epoch. Input is a `pca` embedding; output is a `String` metacell label per cell plus a centroid embedding. **Opt-in only** (decided by the user, Nov 19, 2026): it runs only when the user calls `metacells`. No other method, default or `device="auto"` rule ever inserts it, and Leiden/Louvain stay the clustering. The method is written in Rust from the paper, with no Faiss dependency. Batches are shuffled with `seed` (R7), and assignments and sums use a fixed reduction order (R11). (added Nov 19, 2026, at the user's request: the paper reports beating Lloyd at 25 epochs in 1.4 to 2.6 epochs, at k from 256 to 16M on 96- to 1024-d embeddings; it was not tested on single-cell data)
   - Depends: 6.5, 7.2, 5.3
   - Done when: on pbmc3k and the `benchmarks/scanpy_workflow` 50k data (PCA, 50 components), e-means at 3 epochs or fewer reaches a training MSE at most that of Lloyd with 25 iterations (scikit-learn `KMeans`, same k and random init) at k = n/50 and n/200; labels and centroids are bit-identical at 1, 4 and all threads; a plan without `metacells` gives the same `explain()`, `estimate()` and output as before the task (test); `explain()` shows the node when it is called.
+  - Parity: none: scanpy has no metacells; the task checks against its own reference (the paper's algorithm in NumPy on the fixtures), its tolerances in [tolerances](tests/parity/tolerances.toml).
   - Open: (1) the paper's step-size and batch-size laws (its Eq. 6 and 7) were fitted on DEEP (d = 96, k ≥ 256); refit or replace them for 50-component PCA and k ≈ n/50 before using their constants. (2) Which downstream steps take metacells as input (pseudobulk aggregation of counts, `neighbors`/`leiden` on centroids), and how the sinks store them, is undecided. (3) An IVF index trained by e-means for approximate `neighbors` on very large atlases (next to HNSW, 6.6; GPU, 9.4) is not part of this task; it would be a separate opt-in task if wanted.
 - [ ] **6.17 Approximate neighbours: no lost cells at 50k.** On 10.8's 50k data, `neighbors(search="approximate")` gives 986 of 49,888 cells (2.0%) recall 0 against the exact search: their HNSW neighbours lie in other clusters (neighbour purity 0.21), and Leiden misassigns 370 cells (ARI 0.983 against both scanpy and the true clusters, where exact search and scanpy give 1.0). The deviations row's recall >= 0.99 was measured only on pbmc3k (2.7k cells). Find why some queries end in the wrong region (entry point, `ef_search`, layer graph, insertion order) and fix it. (added Nov 20, 2026, from 10.8's measurement)
   - Depends: 6.6
   - Done when: a test on the 50k synthetic data (or a seeded generator of the same structure, small enough for the suite) asserts fewer than 0.1% of cells with recall below 0.5 against exact search, a mean recall of at least 0.99, and Leiden ARI of at least 0.999 against the exact search's labels; deviations.md's neighbours row states the measured recall at 50k.
+  - Parity: [`neighbors_parity.rs`](crates/kyto-exec/tests/it/neighbors_parity.rs); [tolerances](tests/parity/tolerances.toml) `neighbors.hnsw_recall`.
 - [ ] **6.18 Neighbours on 1 thread at scanpy's time.** In 10.8's workflow, neighbours on 1 thread take 29.0 s with exact search (blocked brute force, O(n²)) and 20.9 s with HNSW, against pynndescent's 9.8 s warm (3.0x, 2.1x). HNSW is also slower than exact search from 4 threads up (14 s, flat: insertion is sequential for R11). Make one search, with recall of at least 0.99, reach scanpy's time on 1 thread without losing the exact search's 4 and 10 thread times. (added Nov 20, 2026, from 10.8's measurement)
   - Depends: 6.17
   - Done when: `kyto_steps.py` on the 50k data gives a neighbours step of at most 11.8 s on 1 thread (1.2x scanpy's warm 9.8 s) with mean recall of at least 0.99 against exact search and Leiden ARI of 1.0 against scanpy; neighbours on 4 and 10 threads no slower than 10.8's exact times (8.2 s, 4.6 s); results identical across thread counts (R11); `performance.md` and deviations.md updated.
+  - Parity: [`neighbors_parity.rs`](crates/kyto-exec/tests/it/neighbors_parity.rs) must keep passing; [tolerances](tests/parity/tolerances.toml) `neighbors.*`.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -174,11 +179,8 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 
 Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels with a migration guide. 10.1–10.3 start with M1 and grow with each milestone.
 
-Done (10.1, 10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
+Done (10.1, 10.2, 10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
 
-- [ ] **10.2 Parity suite.** One test per algorithm against scanpy and anndata on the 1.5 fixtures, with tolerances kept in one table.
-  - Depends: 1.5
-  - Done when: every 6.x task links its parity test.
 - [ ] **10.3 Benchmarks.** `criterion` for Rust and `pytest-benchmark` for Python, against scanpy and rapids-singlecell at increasing dataset sizes, tracking time and peak RSS.
   - Depends: 5.2
   - Done when: CI posts a benchmark table on PRs and flags regressions.

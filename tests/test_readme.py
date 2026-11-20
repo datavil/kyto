@@ -17,6 +17,7 @@ import numpy as np
 import polars as pl
 import pytest
 from kyto import _kyto
+from parity import tolerance
 
 # anndata and scanpy ship without complete type information.
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
@@ -89,8 +90,13 @@ def test_readme_pipeline_runs_and_matches_scanpy(
     assert len(actual.var_names) == 2000
     reference = hvg[:, actual.var_names]
     np.testing.assert_allclose(
-        actual.obs["pct_counts_mt"], reference.obs["pct_counts_mt"], rtol=1e-6
+        actual.obs["pct_counts_mt"],
+        reference.obs["pct_counts_mt"],
+        rtol=tolerance("readme.qc_percent"),
     )
     np.testing.assert_allclose(
-        actual.X.toarray(), reference.X.toarray(), rtol=1e-6, atol=1e-7
+        actual.X.toarray(),
+        reference.X.toarray(),
+        rtol=tolerance("readme.log1p"),
+        atol=tolerance("readme.log1p_floor"),
     )

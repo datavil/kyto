@@ -4,12 +4,12 @@
 //! `pp.neighbors(n_neighbors=15, n_pcs, method="umap", metric="euclidean")` on the
 //! reference `pca` embedding) holds both graphs. The Done-when check gives kyto
 //! scanpy's own `distances` (the same neighbours) and compares kyto's weights with
-//! scanpy's `connectivities`: same edges, weights within [`WEIGHT_TOLERANCE`]
+//! scanpy's `connectivities`: same edges, weights within `connectivities.weights`
 //! (measured: all 9,762 and 62,096 weights equal bit for bit, scanpy's self loops at
 //! the synthetic duplicates included), the same at 1 and all threads (R11). Then
 //! kyto's own exact search on the same stored `X_pca` (pbmc3k, where every neighbour
 //! row equals scanpy's) gives the same edges and weights within
-//! [`SEARCH_WEIGHT_TOLERANCE`] (measured 1.1e-5, from the distances' last bits).
+//! `connectivities.search_weights` (measured 1.1e-5, from the distances' last bits).
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -21,11 +21,7 @@ use std::process::Command;
 use kyto_exec::{ConnectivityGraph, NeighborGraph, connectivities, nearest_neighbors};
 use kyto_plan::{Metric, NeighborSearch, Neighbors};
 
-/// The Done-when bound on a weight given scanpy's neighbours (plan 6.7).
-const WEIGHT_TOLERANCE: f64 = 1e-5;
-/// The bound on kyto's own search: its distances differ from scanpy's by up to 1.2e-7
-/// relative (6.6), which `(d - rho) / sigma` amplifies (measured 1.1e-5).
-const SEARCH_WEIGHT_TOLERANCE: f64 = 5e-5;
+use crate::tolerances::tolerance;
 
 /// Writes the reference `X_pca` as `<f4` (`embedding`), the reference `distances`
 /// (`distances_indptr`, `distances_indices` as `<u8`, `distances_data` as `<f8`) and
@@ -179,7 +175,10 @@ fn weights_match_scanpy_given_the_same_neighbours() {
              bit, largest difference {worst:.1e}",
             scanpy.2.len()
         );
-        assert!(worst <= WEIGHT_TOLERANCE, "{name}: {worst:.1e}");
+        assert!(
+            worst <= tolerance("connectivities.weights"),
+            "{name}: {worst:.1e}"
+        );
 
         // kyto's own exact search on the same X_pca (every row equal on pbmc3k; the
         // synthetic duplicates differ by deviations.md's neighbour rows).
@@ -201,7 +200,10 @@ fn weights_match_scanpy_given_the_same_neighbours() {
                  largest difference {worst:.1e}",
                 scanpy.2.len()
             );
-            assert!(worst <= SEARCH_WEIGHT_TOLERANCE, "{name}: {worst:.1e}");
+            assert!(
+                worst <= tolerance("connectivities.search_weights"),
+                "{name}: {worst:.1e}"
+            );
         }
     }
 }

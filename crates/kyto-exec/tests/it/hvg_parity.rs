@@ -28,6 +28,8 @@ use kyto_plan::{
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 use polars::prelude::{DataFrame, DataType};
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad` and the `hvg` reference's arrays as raw
 /// little-endian files (`f64` floats, `i64` ints, `u8` booleans, gene IDs one per
 /// line), then prints `n_top_genes min_cells_per_gene target_sum`; exits 77 without
@@ -243,7 +245,7 @@ fn floats(genes: &DataFrame, name: &str) -> Vec<f64> {
 
 /// Compare kyto's column with scanpy's: the worst difference of a statistic, relative
 /// (absolute for the normalised columns, centred on 0: `absolute`), and the first
-/// gene out of tolerance (1e-6; `exact` columns must be equal, NaN equal to NaN).
+/// gene out of tolerance (`hvg.statistics`; `exact` columns must be equal, NaN equal to NaN).
 fn compare(kyto: &[f64], scanpy: &[f64], exact: bool, absolute: bool) -> (f64, Option<String>) {
     assert_eq!(kyto.len(), scanpy.len(), "length");
     let mut worst = 0.0_f64;
@@ -258,7 +260,7 @@ fn compare(kyto: &[f64], scanpy: &[f64], exact: bool, absolute: bool) -> (f64, O
             scanpy.abs().max(f64::MIN_POSITIVE)
         };
         let error = (kyto - scanpy).abs() / scale;
-        if (exact || error > 1e-6) && failure.is_none() {
+        if (exact || error > tolerance("hvg.statistics")) && failure.is_none() {
             failure = Some(format!("gene {gene}: kyto {kyto} vs scanpy {scanpy}"));
         }
         worst = worst.max(error);

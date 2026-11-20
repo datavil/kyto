@@ -9,7 +9,7 @@
 //! `calculate_qc_metrics(log1p=True)` and `filter_genes(min_cells=3)`. The cell filter
 //! comes first so the per-gene metrics are over the cells present, not the store's.
 //! Detected cells are equal, the kept genes are the same in the same order, and every
-//! other column matches to 1e-6 relative (6.1's tolerance: scanpy computes in
+//! other column matches to `qc.values` (6.1's tolerance, `tests/parity/tolerances.toml`: scanpy computes in
 //! `float32`, kyto in `float64`, deviations.md "QC metric dtypes"). The same bits at 1
 //! and all threads and at blocks of 37 cells (R11).
 
@@ -27,6 +27,8 @@ use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 use polars::prelude::{DataFrame, DataType};
+
+use crate::tolerances::tolerance;
 
 /// Writes `load_fixture(name)` as `.h5ad`, then scanpy's cell filter, QC metrics
 /// (`log1p=True`) and gene filter of it: the per-gene and per-cell columns (`f64`) and
@@ -258,7 +260,7 @@ fn worst_difference(what: &str, kyto: &[u64], scanpy: &[f64]) -> f64 {
         }
         let difference = (kyto - scanpy).abs();
         assert!(
-            difference <= 1e-6 * scanpy.abs(),
+            difference <= tolerance("qc.values") * scanpy.abs(),
             "{what} row {row}: kyto {kyto} vs scanpy {scanpy}"
         );
         if difference > 0.0 {

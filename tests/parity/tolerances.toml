@@ -1,0 +1,322 @@
+# The parity tolerance table (task 10.2): every tolerance a test applies when it
+# compares kyto with scanpy or anndata lives here, not in the tests (AGENTS.md,
+# "Parity with scanpy"). Rust tests read it through `tests/parity/tolerances.rs`
+# (`tolerance("pca.variance")`), Python tests through `tests/parity`
+# (`from parity import tolerance`). `tests/test_parity_suite.py` checks the table.
+#
+# One section per tolerance, named `<algorithm>.<what>`, with:
+#   value  : the number the test compares against (a TOML float on one line).
+#   kind   : "relative" (|kyto - ref| <= value * |ref|), "absolute" (|kyto - ref| <=
+#            value), "floor" (an agreement measure must be at least value),
+#            "margin" (kyto may fall at most value below the reference's range), or
+#            "ulp" (at most value float32 units in the last place apart).
+#   task   : the plan task whose Done-when the tolerance checks.
+#   tests  : the test files that apply it (each names the tolerance).
+#   reason : one line: why this value, and what was measured.
+#
+# Tightening a value is always fine. Loosening one needs a reason here and a row in
+# deviations.md if kyto now differs from the reference; never loosen to pass.
+# Comparisons the tests make bit for bit (HVG sets, neighbour rows, normalize_total,
+# connectivities on scanpy's graph, the anndata import) need no entry.
+
+[qc.values]
+value = 1e-6
+kind = "relative"
+task = "6.1"
+tests = [
+    "crates/kyto-algo/tests/it/qc_parity.rs",
+    "crates/kyto-exec/tests/it/filter_qc_parity.rs",
+    "crates/kyto-exec/tests/it/gene_qc_parity.rs",
+    "tests/test_qc.py",
+]
+reason = "6.1's Done-when; scanpy sums float32 values in float32, kyto in float64 (deviations.md 'QC metric dtypes')."
+
+[normalize_log1p.values]
+value = 1e-6
+kind = "relative"
+task = "6.2"
+tests = [
+    "crates/kyto-exec/tests/it/normalize_log1p_parity.rs",
+    "crates/kyto-exec/tests/it/filter_qc_parity.rs",
+]
+reason = "6.2's Done-when; normalize_total is bit for bit, numpy's float32 log1p is up to 1 ulp off kyto's correctly rounded one."
+
+[hvg.statistics]
+value = 1e-6
+kind = "relative"
+task = "6.3"
+tests = ["crates/kyto-exec/tests/it/hvg_parity.rs"]
+reason = "Means, dispersions and variances (absolute for the 0-centred normalised columns); the selected sets and ranks are compared exactly."
+
+[hvg.loess]
+value = 1e-12
+kind = "absolute"
+task = "6.3"
+tests = ["crates/kyto-exec/tests/it/loess_parity.rs"]
+reason = "kyto's port of skmisc's loess runs the same float64 steps; only summation-order bits may differ (strict: worst < value)."
+
+[scale.statistics_same_input]
+value = 1e-12
+kind = "relative"
+task = "6.4"
+tests = ["crates/kyto-exec/tests/it/scale_parity.rs"]
+reason = "Gene means and stds on kyto's correctly rounded log1p: same float32 steps (measured identical bits); room for float64 rounding only."
+
+[scale.values_same_input]
+value = 1.0
+kind = "ulp"
+task = "6.4"
+tests = ["crates/kyto-exec/tests/it/scale_parity.rs"]
+reason = "Scaled values on kyto's log1p, in float32 ulps: scanpy's steps rounded once (measured identical bits everywhere)."
+
+[scale.statistics]
+value = 1e-7
+kind = "relative"
+task = "6.4"
+tests = ["crates/kyto-exec/tests/it/scale_parity.rs"]
+reason = "Against the stored reference, whose numpy log1p is 1 ulp off on some inputs (measured 4.6e-9 on pbmc3k)."
+
+[scale.values]
+value = 1e-5
+kind = "absolute"
+task = "6.4"
+tests = ["crates/kyto-exec/tests/it/scale_parity.rs"]
+reason = "Scaled values against the stored reference; its 1-ulp log1p inputs move 292 of 5.4M values by up to 5.9e-7 (measured)."
+
+[pca.variance]
+value = 1e-3
+kind = "relative"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "6.5's Done-when, for variance and variance ratio; scanpy's float32 arpack moves by up to 1e-3 between platforms (measured 1.5e-6)."
+
+[pca.leading_angle]
+value = 1e-3
+kind = "absolute"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "Largest principal angle (rad) of the leading components' span; measured 9.6e-6 on pbmc3k, the rest is scanpy's float32 noise."
+
+[pca.all_angle]
+value = 1e-2
+kind = "absolute"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "Largest principal angle (rad) over all components; the trailing ones sit on a nearly flat spectrum (measured 1.0e-3 on pbmc3k)."
+
+[pca.loadings]
+value = 1e-3
+kind = "relative"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "Each leading component's loadings relative to its largest, signs included (svd_flip on both sides); measured 2.2e-5 on pbmc3k."
+
+[pca.embedding]
+value = 1e-3
+kind = "relative"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "Each leading embedding column, relative to its largest value; follows the loadings' error (measured 2.2e-5 on pbmc3k)."
+
+[pca.other_seed]
+value = 1e-3
+kind = "relative"
+task = "6.5"
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+reason = "Another seed changes kyto's bits but must not move the variances beyond the parity tolerance (pca.variance)."
+
+[neighbors.distance]
+value = 2e-7
+kind = "relative"
+task = "6.6"
+tests = ["crates/kyto-exec/tests/it/neighbors_parity.rs"]
+reason = "scanpy's float64 distances are float32-precise (2^-23 = 1.2e-7); measured 1.2e-7 on pbmc3k."
+
+[neighbors.distance_floor]
+value = 1e-12
+kind = "absolute"
+task = "6.6"
+tests = ["crates/kyto-exec/tests/it/neighbors_parity.rs"]
+reason = "Lets two zero distances (duplicate cells) compare equal next to neighbors.distance."
+
+[neighbors.hnsw_recall]
+value = 0.99
+kind = "floor"
+task = "6.6"
+tests = ["crates/kyto-exec/tests/it/neighbors_parity.rs"]
+reason = "Approximate search against the exact graph; measured 0.99992 on pbmc3k, 1.0 on synthetic (6.17: 50k data loses cells)."
+
+[neighbors.pipeline_overlap]
+value = 0.995
+kind = "floor"
+task = "6.6"
+tests = ["crates/kyto-exec/tests/it/neighbors_parity.rs"]
+reason = "Neighbours on kyto's own PCA against scanpy's rows; the PCAs differ in the last digits (measured 0.99989)."
+
+[connectivities.weights]
+value = 1e-5
+kind = "absolute"
+task = "6.7"
+tests = ["crates/kyto-exec/tests/it/connectivities_parity.rs"]
+reason = "6.7's Done-when, given scanpy's own distances; measured every weight equal bit for bit."
+
+[connectivities.search_weights]
+value = 5e-5
+kind = "absolute"
+task = "6.7"
+tests = ["crates/kyto-exec/tests/it/connectivities_parity.rs"]
+reason = "Weights from kyto's own exact search, whose distances differ in the last bits (measured 1.1e-5 on pbmc3k)."
+
+[cluster.quality_formula]
+value = 1e-9
+kind = "absolute"
+task = "6.8"
+tests = ["crates/kyto-exec/tests/it/cluster_parity.rs"]
+reason = "kyto's quality (modularity with resolution) against the reference script's on the same labels: the same float64 formula."
+
+[cluster.quality_slack]
+value = 0.01
+kind = "margin"
+task = "6.8"
+tests = ["crates/kyto-exec/tests/it/cluster_parity.rs"]
+reason = "kyto's partition may score at most this below leidenalg's; measured within 0.0023 and above it in 9 of 16 cases."
+
+[cluster.leiden_ari]
+value = 0.7
+kind = "floor"
+task = "6.8"
+tests = ["crates/kyto-exec/tests/it/cluster_parity.rs"]
+reason = "Different random streams give different labels of equal quality, so labels agree by ARI only; quality is the strict check."
+
+[cluster.louvain_ari]
+value = 0.5
+kind = "floor"
+task = "6.8"
+tests = ["crates/kyto-exec/tests/it/cluster_parity.rs"]
+reason = "Louvain varies more with the random order (two kyto seeds agree at 0.75 on pbmc3k); its quality bound is the stronger check."
+
+[umap.trustworthiness_margin]
+value = 0.005
+kind = "margin"
+task = "6.9"
+tests = ["crates/kyto-exec/tests/it/umap_parity.rs"]
+reason = "kyto's trustworthiness may fall this far below umap-learn's range over seeds 0-4 (measured 0.002 below the lowest)."
+
+[umap.ab]
+value = 1e-6
+kind = "relative"
+task = "6.9"
+tests = ["crates/kyto-exec/tests/it/umap_parity.rs"]
+reason = "a and b from find_ab_params: scipy's curve_fit converges to about 1e-8 relative."
+
+[umap.trustworthiness_helper]
+value = 1e-6
+kind = "absolute"
+task = "6.9"
+tests = ["crates/kyto-exec/tests/it/umap_parity.rs"]
+reason = "The test's trustworthiness against scikit-learn's on scanpy's layout: float32 distances ranked in float64."
+
+[rank_genes.values]
+value = 1e-6
+kind = "relative"
+task = "6.10"
+tests = ["crates/kyto-algo/tests/it/rank_genes_parity.rs"]
+reason = "6.10's Done-when; statistic and log fold change relative to max(|ref|, 1) in float32, p-values relative."
+
+[scrublet.scores]
+value = 1e-5
+kind = "absolute"
+task = "6.12"
+tests = ["crates/kyto-exec/tests/it/scrublet_parity.rs"]
+reason = "6.12's Done-when, given scanpy's simulated doublets; the scores follow the PCA's float32 noise."
+
+[scrublet.threshold]
+value = 1e-12
+kind = "absolute"
+task = "6.12"
+tests = ["crates/kyto-exec/tests/it/scrublet_parity.rs"]
+reason = "The automatic threshold on the same scores: the same skimage-style float64 search."
+
+[scrublet.call_agreement]
+value = 0.95
+kind = "floor"
+task = "6.12"
+tests = ["crates/kyto-exec/tests/it/scrublet_parity.rs"]
+reason = "6.12's Done-when, with kyto's own seeded doublets: share of cells called as scanpy calls them."
+
+[scrublet.small_batch_agreement]
+value = 0.85
+kind = "floor"
+task = "6.12"
+tests = ["crates/kyto-exec/tests/it/scrublet_parity.rs"]
+reason = "Batches of about 165 cells: scanpy's own seeds 1-7 agree with its seed 0 on only 86-94%, so 95% is out of reach."
+
+[tutorial.qc_percent]
+value = 2.384185791015625e-7
+kind = "relative"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "pct_counts columns: kyto's float64 against scanpy's float32, one float32 rounding (2^-22)."
+
+[tutorial.pca_variance]
+value = 1e-3
+kind = "relative"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "The clustering tutorial's PCA variances against scanpy's run: 6.5's tolerance (pca.variance)."
+
+[tutorial.leiden_ari]
+value = 0.75
+kind = "floor"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "Measured 0.819-0.979; scanpy stops Leiden after 2 iterations and searches with pynndescent, kyto converges on exact neighbours."
+
+[tutorial.trustworthiness_margin]
+value = 0.01
+kind = "margin"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "UMAP trustworthiness at 5 neighbours against scanpy's layout; measured 0.9634 (kyto) against 0.9627 (scanpy)."
+
+[tutorial.doublet_shared]
+value = 0.9
+kind = "floor"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "Share of scanpy's doublet calls kyto also calls; scanpy's threshold moves with pynndescent's graph (measured 211 of 213)."
+
+[tutorial.doublet_score_correlation]
+value = 0.95
+kind = "floor"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "Pearson correlation of doublet scores; the simulated doublets differ by seed and generator (measured 0.987)."
+
+[tutorial.marker_overlap]
+value = 5.5
+kind = "floor"
+task = "10.7"
+tests = ["tests/test_clustering_tutorial.py"]
+reason = "Mean shared genes among each cluster's top 10 Wilcoxon markers; the clusterings differ slightly (measured 6.6 of 10)."
+
+[readme.qc_percent]
+value = 1e-6
+kind = "relative"
+task = "7.2"
+tests = ["tests/test_readme.py"]
+reason = "The README pipeline's pct_counts_mt against scanpy's run: 6.1's tolerance (qc.values)."
+
+[readme.log1p]
+value = 1e-6
+kind = "relative"
+task = "7.2"
+tests = ["tests/test_readme.py"]
+reason = "The README pipeline's log1p layer against scanpy's: 6.2's tolerance (normalize_log1p.values)."
+
+[readme.log1p_floor]
+value = 1e-7
+kind = "absolute"
+task = "7.2"
+tests = ["tests/test_readme.py"]
+reason = "Lets log1p values near 0 compare next to readme.log1p (numpy's float32 log1p is 1 ulp off on some)."

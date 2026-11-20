@@ -6,7 +6,7 @@
 //! the reference `X_pca` (the space the neighbours were searched in) at 5 and 15
 //! neighbours: umap-learn's range. kyto lays out the same graph (scanpy's own
 //! `distances` through 6.7's connectivities, which equal scanpy's bit for bit) and its
-//! trustworthiness must fall in that range, widened by [`TRUSTWORTHINESS_MARGIN`]: the
+//! trustworthiness must fall in that range, widened by `umap.trustworthiness_margin`: the
 //! Done-when check. The layouts are not compared point by point: umap-learn's own
 //! layouts differ that much between seeds (another random generator, deviations.md).
 //! Also: `a`, `b` equal scanpy's; the same layout at 1 and all threads (R11), spectral
@@ -21,16 +21,7 @@ use std::process::Command;
 use kyto_exec::{NeighborGraph, UmapLayout, connectivities, umap_layout};
 use kyto_plan::{Metric, Umap, UmapInit};
 
-/// How far below umap-learn's lowest (or above its highest) trustworthiness over five
-/// seeds kyto's may be.
-const TRUSTWORTHINESS_MARGIN: f64 = 0.005;
-
-/// scanpy stores `a`, `b` from scipy's `curve_fit` (tolerance ~1e-8 relative).
-const AB_TOLERANCE: f64 = 1e-6;
-
-/// The trustworthiness this test computes against scikit-learn's on the same layout
-/// (ties among the synthetic duplicates may rank differently).
-const HELPER_TOLERANCE: f64 = 1e-6;
+use crate::tolerances::tolerance;
 
 /// Writes the reference `X_pca` (`<f4`), `distances` (`indptr`, `indices` as `<u8`,
 /// `data` as `<f8`), scanpy's layout (`<f4`), its `a`, `b` and trustworthiness (`<f8`);
@@ -222,7 +213,7 @@ fn trustworthiness_is_within_umap_learns_range() {
             // The helper is scikit-learn's measure.
             let helper = truth.score(&scanpy_layout, 2, k);
             assert!(
-                (helper - scanpy[0]).abs() <= HELPER_TOLERANCE,
+                (helper - scanpy[0]).abs() <= tolerance("umap.trustworthiness_helper"),
                 "{name}: trustworthiness helper {helper} vs scikit-learn {}",
                 scanpy[0]
             );
@@ -230,8 +221,8 @@ fn trustworthiness_is_within_umap_learns_range() {
             eprintln!("{name}: umap-learn trustworthiness@{k} over 5 seeds: {low:.4} to {high:.4}");
             bounds.push((
                 k,
-                low - TRUSTWORTHINESS_MARGIN,
-                high + TRUSTWORTHINESS_MARGIN,
+                low - tolerance("umap.trustworthiness_margin"),
+                high + tolerance("umap.trustworthiness_margin"),
             ));
         }
 
@@ -255,11 +246,11 @@ fn trustworthiness_is_within_umap_learns_range() {
             let layout = in_pool(1, || umap_layout(&graph, data, &params).unwrap());
             assert!(layout.embedding().iter().all(|value| value.is_finite()));
             assert!(
-                (layout.a() - ab[0]).abs() <= AB_TOLERANCE * ab[0],
+                (layout.a() - ab[0]).abs() <= tolerance("umap.ab") * ab[0],
                 "{name}: a"
             );
             assert!(
-                (layout.b() - ab[1]).abs() <= AB_TOLERANCE * ab[1],
+                (layout.b() - ab[1]).abs() <= tolerance("umap.ab") * ab[1],
                 "{name}: b"
             );
             check(&layout, &format!("seed {seed}"));

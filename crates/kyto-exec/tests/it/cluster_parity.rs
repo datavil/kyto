@@ -8,7 +8,7 @@
 //! random streams differ, so labels are compared by the adjusted Rand index (the
 //! Done-when check: printed with `--nocapture`), and the partitions' quality (modularity
 //! with the resolution, the same formula on both sides, checked on scanpy's labels to
-//! [`QUALITY_TOLERANCE`]) shows that kyto's is as good. Then: the same labels on every
+//! `cluster.quality_formula`) shows that kyto's is as good. Then: the same labels on every
 //! run with one seed and on 1 and all threads (R11), and another seed's agreement.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
@@ -21,16 +21,7 @@ use std::process::Command;
 use kyto_exec::{CellGraph, Clustering, cluster, partition_quality};
 use kyto_plan::{Cluster, ClusterMethod};
 
-/// kyto's quality formula against the reference script's on the same labels.
-const QUALITY_TOLERANCE: f64 = 1e-9;
-/// How far kyto's partition may fall below leidenalg's quality.
-const QUALITY_SLACK: f64 = 0.01;
-/// The lowest adjusted Rand index accepted for Leiden at a resolution with more than
-/// one cluster.
-const MIN_ADJUSTED_RAND: f64 = 0.7;
-/// The same for Louvain, whose partitions vary more with the random order (two seeds
-/// of kyto agree at 0.75 on pbmc3k); its quality bound is the stronger check.
-const MIN_ADJUSTED_RAND_LOUVAIN: f64 = 0.5;
+use crate::tolerances::tolerance;
 
 /// Writes the reference `connectivities` (`indptr`, `indices` as `<u8`, `data` as
 /// `<f4`) and each reference's labels (`<method>_<resolution>_labels`, `<i4`); prints
@@ -215,7 +206,7 @@ fn labels_agree_with_leidenalg() {
             // The same quality formula as the reference script, on its labels.
             let scanpy_quality = partition_quality(graph, &reference.labels, &params).unwrap();
             assert!(
-                (scanpy_quality - reference.quality).abs() <= QUALITY_TOLERANCE,
+                (scanpy_quality - reference.quality).abs() <= tolerance("cluster.quality_formula"),
                 "{label}: quality {scanpy_quality} against the script's {}",
                 reference.quality
             );
@@ -230,15 +221,15 @@ fn labels_agree_with_leidenalg() {
                 reference.quality
             );
             assert!(
-                found.quality() >= reference.quality - QUALITY_SLACK,
+                found.quality() >= reference.quality - tolerance("cluster.quality_slack"),
                 "{label}: quality {} below leidenalg's {}",
                 found.quality(),
                 reference.quality
             );
             if n_reference > 1 {
                 let floor = match reference.method {
-                    ClusterMethod::Leiden => MIN_ADJUSTED_RAND,
-                    ClusterMethod::Louvain => MIN_ADJUSTED_RAND_LOUVAIN,
+                    ClusterMethod::Leiden => tolerance("cluster.leiden_ari"),
+                    ClusterMethod::Louvain => tolerance("cluster.louvain_ari"),
                 };
                 assert!(agreement >= floor, "{label}: {agreement}");
             } else {

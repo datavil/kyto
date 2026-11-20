@@ -5,13 +5,13 @@
 //! on synthetic) holds each cell's score and call and, per batch, the simulated
 //! doublets' parents, their scores and the threshold. Done when:
 //! - given scanpy's simulated doublets ([`Doublets::Given`]), every score (cells and
-//!   doublets) is within [`SCORE_TOLERANCE`] of scanpy's, the same cells are scored,
+//!   doublets) is within `scrublet.scores` of scanpy's, the same cells are scored,
 //!   and the thresholds and calls are equal;
 //! - with kyto's own seeded doublets, in the pipeline (a store converted from the
 //!   fixture, the plan `scrublet` on its counts), the calls agree with scanpy's on at
-//!   least [`CALL_AGREEMENT`] of the cells (measured and printed), and two runs (1 and
+//!   least `scrublet.call_agreement` of the cells (measured and printed), and two runs (1 and
 //!   all threads) give the same bits (R11). The synthetic fixture's per-batch run is
-//!   held to [`SMALL_BATCH_AGREEMENT`] instead: its batches have about 165 cells, and
+//!   held to `scrublet.small_batch_agreement` instead: its batches have about 165 cells, and
 //!   scanpy's own calls with seeds 1 to 7 agree with its seed 0 on only 86% to 94% of
 //!   them (the automatic threshold moves with the simulated doublets), so no seeded run
 //!   can promise 95% there.
@@ -33,13 +33,7 @@ use kyto_exec::{
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, Scrublet, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
-/// How far kyto's scores may be from scanpy's given the same doublets (the Done-when).
-const SCORE_TOLERANCE: f64 = 1e-5;
-/// The fraction of cells whose calls must agree with kyto's own doublets.
-const CALL_AGREEMENT: f64 = 0.95;
-/// The same for the synthetic fixture's per-batch run: the lowest agreement of scanpy
-/// with itself across seeds 0 to 7 (0.86, measured with scanpy 1.12.5).
-const SMALL_BATCH_AGREEMENT: f64 = 0.85;
+use crate::tolerances::tolerance;
 
 /// Writes `load_fixture(name)` as `.h5ad` and, as raw little-endian files, its counts
 /// (CSR: `indptr` `<u8`, `indices` `<u4`, `data` `<f4`), its batches (one per line)
@@ -265,7 +259,7 @@ fn scores_match_scanpy_given_its_doublets() {
                 let threshold = read_f64(&file(label, "threshold"))[0];
                 match batch.threshold {
                     Some(found) => assert!(
-                        (found - threshold).abs() <= 1e-12,
+                        (found - threshold).abs() <= tolerance("scrublet.threshold"),
                         "{name} {run} {label}: threshold {found} vs scanpy {threshold}"
                     ),
                     None => assert!(threshold.is_nan(), "{name} {run} {label}: no threshold"),
@@ -284,7 +278,10 @@ fn scores_match_scanpy_given_its_doublets() {
                 scores.len(),
                 result.batches.len()
             );
-            assert!(worst <= SCORE_TOLERANCE, "{name} {run}: {worst}");
+            assert!(
+                worst <= tolerance("scrublet.scores"),
+                "{name} {run}: {worst}"
+            );
         }
     }
 }
@@ -383,9 +380,9 @@ fn seeded_calls_agree_with_scanpy_and_repeat() {
                 predicted.iter().filter(|call| **call).count()
             );
             let bound = if name == "synthetic" && run == "by_batch" {
-                SMALL_BATCH_AGREEMENT
+                tolerance("scrublet.small_batch_agreement")
             } else {
-                CALL_AGREEMENT
+                tolerance("scrublet.call_agreement")
             };
             assert!(fraction >= bound, "{name} {run}: {fraction}");
             // Another seed draws other doublets.

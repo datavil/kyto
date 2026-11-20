@@ -37,6 +37,8 @@ use kyto_exec::{ExecuteOptions, NodeStatistics, PcaStatistics, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad`; the filtered gene IDs, the HVG gene IDs and
 /// the reference's arrays as `<f8` (`variance`, `variance_ratio`, `components` genes x
 /// k and `embedding` cells x k, row-major); prints `min_cells_per_gene target_sum
@@ -279,16 +281,25 @@ fn pca_matches_scanpy_on_fixtures() {
              {worst_loading:.1e}, embedding {worst_embedding:.1e} (relative to the column)"
         );
         assert!(
-            variance <= 1e-3 && ratio <= 1e-3,
+            variance <= tolerance("pca.variance") && ratio <= tolerance("pca.variance"),
             "{name}: {variance} {ratio}"
         );
-        assert!(angle <= 1e-3, "{name}: angle {angle}");
+        assert!(
+            angle <= tolerance("pca.leading_angle"),
+            "{name}: angle {angle}"
+        );
         // The trailing components sit in a nearly flat spectrum (where scanpy moves by
         // 1e-3 between platforms): their span still agrees, more loosely.
-        assert!(angle_all <= 1e-2, "{name}: angle over all {angle_all}");
-        assert!(worst_loading <= 1e-3, "{name}: loadings {worst_loading}");
         assert!(
-            worst_embedding <= 1e-3,
+            angle_all <= tolerance("pca.all_angle"),
+            "{name}: angle over all {angle_all}"
+        );
+        assert!(
+            worst_loading <= tolerance("pca.loadings"),
+            "{name}: loadings {worst_loading}"
+        );
+        assert!(
+            worst_embedding <= tolerance("pca.embedding"),
             "{name}: embedding {worst_embedding}"
         );
 
@@ -323,7 +334,7 @@ fn pca_matches_scanpy_on_fixtures() {
             );
         }
         assert!(
-            relative(other.variance(), pca.variance()) <= 1e-3,
+            relative(other.variance(), pca.variance()) <= tolerance("pca.other_seed"),
             "{name}: another seed"
         );
     }

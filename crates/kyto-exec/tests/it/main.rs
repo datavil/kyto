@@ -6,6 +6,10 @@
 #[path = "../../../../tests/property_cases.rs"]
 mod property_cases;
 
+/// The parity tolerance table (task 10.2), shared by every crate's parity tests.
+#[path = "../../../../tests/parity/tolerances.rs"]
+mod tolerances;
+
 // The 4.4 reference evaluator, shared with kyto-plan's tests.
 #[path = "../../../kyto-plan/tests/it/support.rs"]
 mod plan_support;

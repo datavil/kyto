@@ -26,6 +26,8 @@ use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{CellValues, ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad` and the reference's target and arrays as
 /// raw little-endian files (`f64` sums and target, `i64` nnz and CSR structure, `f32`
 /// CSR values), or exits 77 without anndata.
@@ -189,7 +191,7 @@ fn run(
     csr
 }
 
-/// `|kyto - scanpy| <= 1e-6 * |scanpy|` for every element; returns the worst
+/// `|kyto - scanpy| <= normalize_log1p.values * |scanpy|` for every element; returns the worst
 /// relative error.
 fn assert_close(what: &str, kyto: &[f64], scanpy: &[f64]) -> f64 {
     assert_eq!(kyto.len(), scanpy.len(), "{what}: length");
@@ -197,7 +199,7 @@ fn assert_close(what: &str, kyto: &[f64], scanpy: &[f64]) -> f64 {
     for (index, (&kyto, &scanpy)) in kyto.iter().zip(scanpy).enumerate() {
         let error = (kyto - scanpy).abs();
         assert!(
-            error <= 1e-6 * scanpy.abs(),
+            error <= tolerance("normalize_log1p.values") * scanpy.abs(),
             "{what} [{index}]: kyto {kyto} vs scanpy {scanpy}"
         );
         if scanpy != 0.0 {

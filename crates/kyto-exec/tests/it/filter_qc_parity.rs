@@ -7,8 +7,8 @@
 //! 'MT-') -> normalize_total(1e4) -> log1p`, and scanpy runs
 //! `calculate_qc_metrics(qc_vars=['mt'])`, the same subset, `normalize_total(1e4)`,
 //! `log1p`. The kept cells and genes are the same, in the same order; the QC columns
-//! match to 1e-6 relative (6.1's tolerance); the `log1p` layer has the same CSR
-//! structure and every value matches to 1e-6 relative (kyto's `log1p` is correctly
+//! match to `qc.values` (6.1's tolerance, `tests/parity/tolerances.toml`); the `log1p` layer has the same CSR
+//! structure and every value matches to `normalize_log1p.values` (kyto's `log1p` is correctly
 //! rounded, numpy's `float32` one may be 1 ulp off, deviations.md). The same bits at 1
 //! and all threads and at blocks of 37 cells (R11). Task 5.9: the same plan ending in
 //! `sink_zarr`, and in `sink_h5ad` converted back (2.6), writes exactly what the stream
@@ -31,6 +31,8 @@ use kyto_store::{
     ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids, read_layer, read_table,
 };
 use polars::prelude::DataType;
+
+use crate::tolerances::tolerance;
 
 /// Writes `load_fixture(name)` as `.h5ad`, then scanpy's QC, subset, normalize and log
 /// of it: the kept cell and gene IDs (one per line), the QC columns at the kept cells
@@ -304,13 +306,14 @@ fn sunk(plan: &Arc<Plan>, sink: Sink, work: &Path) -> Result {
     }
 }
 
-fn assert_close(what: &str, kyto: f64, scanpy: f64) {
+/// `|kyto - scanpy| <= relative * |scanpy|`, NaN equal to NaN.
+fn assert_close(what: &str, kyto: f64, scanpy: f64, relative: f64) {
     if scanpy.is_nan() {
         assert!(kyto.is_nan(), "{what}: {kyto} vs NaN");
         return;
     }
     assert!(
-        (kyto - scanpy).abs() <= 1e-6 * scanpy.abs(),
+        (kyto - scanpy).abs() <= relative * scanpy.abs(),
         "{what}: kyto {kyto} vs scanpy {scanpy}"
     );
 }
@@ -362,6 +365,7 @@ fn filter_qc_normalize_log1p_match_scanpy_on_fixtures() {
                     &format!("{name} {column} cell {cell}"),
                     f64::from_bits(*kyto),
                     scanpy,
+                    tolerance("qc.values"),
                 );
             }
         }
@@ -382,7 +386,12 @@ fn filter_qc_normalize_log1p_match_scanpy_on_fixtures() {
         let mut worst = 0.0_f64;
         for (entry, (kyto, scanpy)) in kyto.values.iter().zip(&data).enumerate() {
             let (kyto, scanpy) = (f64::from(*kyto), f64::from(*scanpy));
-            assert_close(&format!("{name} log1p entry {entry}"), kyto, scanpy);
+            assert_close(
+                &format!("{name} log1p entry {entry}"),
+                kyto,
+                scanpy,
+                tolerance("normalize_log1p.values"),
+            );
             worst = worst.max((kyto - scanpy).abs() / scanpy.abs());
         }
         eprintln!(

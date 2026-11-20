@@ -15,7 +15,7 @@
 //! synthetic; on kyto's own PCA, 0.99989 overlap with scanpy. The whole pipeline (kyto's own PCA, then `neighbors`) is compared
 //! as a neighbour overlap, since kyto's PCA differs from scanpy's in the last digits.
 //! Approximate search (HNSW) is compared with the exact graph; its recall is printed
-//! (`--nocapture`) and must stay at or above [`RECALL_BOUND`].
+//! (`--nocapture`) and must stay at or above `neighbors.hnsw_recall`.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -36,8 +36,7 @@ use kyto_plan::{
 };
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
-/// The recall HNSW keeps on the fixtures (share of the exact neighbours it finds).
-const RECALL_BOUND: f64 = 0.99;
+use crate::tolerances::tolerance;
 
 /// Writes `load_fixture(name)` as `.h5ad`, the filtered and HVG gene IDs, the
 /// reference `X_pca` as `<f4` (`embedding`) and the reference `distances` graph
@@ -173,7 +172,9 @@ fn params(n_pcs: u64, n_neighbors: u64, search: NeighborSearch) -> Neighbors {
 
 /// Two distances equal within `float32` precision.
 fn same_distance(left: f64, right: f64) -> bool {
-    (left - right).abs() <= 2e-7 * left.abs().max(right.abs()) + 1e-12
+    (left - right).abs()
+        <= tolerance("neighbors.distance") * left.abs().max(right.abs())
+            + tolerance("neighbors.distance_floor")
 }
 
 /// How kyto's rows differ from scanpy's: (rows equal, rows explained by a tie at the
@@ -315,11 +316,12 @@ fn exact_matches_scanpy_and_hnsw_recall_on_fixtures() {
         let approximate_rows = kyto_rows(&approximate);
         let found = recall(&approximate_rows, &exact_rows);
         let found_scanpy = recall(&approximate_rows, &scanpy);
+        let bound = tolerance("neighbors.hnsw_recall");
         eprintln!(
             "{name}: HNSW recall {found:.5} of kyto's exact neighbours, {found_scanpy:.5} \
-             of scanpy's (bound {RECALL_BOUND})"
+             of scanpy's (bound {bound})"
         );
-        assert!(found >= RECALL_BOUND, "{name}: HNSW recall {found}");
+        assert!(found >= bound, "{name}: HNSW recall {found}");
         // Every distance HNSW writes is exact.
         for (ours, exact) in approximate_rows.iter().zip(&exact_rows) {
             for &(id, distance) in ours {
@@ -338,7 +340,7 @@ fn exact_matches_scanpy_and_hnsw_recall_on_fixtures() {
             },
         )
         .unwrap();
-        assert!(recall(&kyto_rows(&reseeded), &exact_rows) >= RECALL_BOUND);
+        assert!(recall(&kyto_rows(&reseeded), &exact_rows) >= bound);
     }
 }
 
@@ -414,5 +416,8 @@ fn pipeline_neighbors_on_kytos_pca_match_scanpy() {
     assert_eq!(graph.n_neighbors(), fixture.n_neighbors as usize);
     let overlap = recall(&kyto_rows(graph), &scanpy);
     eprintln!("{name}: neighbours on kyto's PCA, overlap with scanpy's {overlap:.5}");
-    assert!(overlap >= 0.995, "overlap {overlap}");
+    assert!(
+        overlap >= tolerance("neighbors.pipeline_overlap"),
+        "overlap {overlap}"
+    );
 }

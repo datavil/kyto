@@ -33,6 +33,8 @@ use kyto_exec::{CellValues, ExecuteOptions, NodeStatistics, Pipeline, ScaleStati
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad`; the filtered gene IDs, the HVG gene IDs
 /// and the reference's `mean`/`std` (`<f8`); scanpy's scaled matrix for each variant
 /// `(zero_center, max_value)` as dense `<f8` (`scaled.<zero_center>.<max_value>`);
@@ -283,7 +285,8 @@ fn scale_matches_scanpy_on_fixtures() {
                 statistics.standard_deviations(),
                 &read_f64(&reference.join("std.exact.live")),
             );
-            assert!(means <= 1e-12 && stds <= 1e-12, "{label}: {means} {stds}");
+            let bound = tolerance("scale.statistics_same_input");
+            assert!(means <= bound && stds <= bound, "{label}: {means} {stds}");
             let scanpy = read_f64(&reference.join(format!("{scanpy_label}.exact")));
             let (worst, identical) = ulps(&scaled, &scanpy);
             eprintln!(
@@ -291,7 +294,10 @@ fn scale_matches_scanpy_on_fixtures() {
                  (relative); {identical} of {} values bit-identical, worst {worst} ulp",
                 scaled.len()
             );
-            assert!(worst <= 1, "{label}: {worst} ulp");
+            assert!(
+                f64::from(worst) <= tolerance("scale.values_same_input"),
+                "{label}: {worst} ulp"
+            );
             // Against the stored reference (numpy's log1p): 6.2's log1p deviation moves
             // the statistics by up to a few 1e-9 and a value by a few ulps.
             let means = relative(statistics.means(), &read_f64(&reference.join("mean")));
@@ -311,8 +317,9 @@ fn scale_matches_scanpy_on_fixtures() {
                  {identical} of {} values bit-identical, worst {worst} ulp, {largest:.1e} absolute",
                 scaled.len()
             );
-            assert!(means <= 1e-7 && stds <= 1e-7, "{label}: {means} {stds}");
-            assert!(largest <= 1e-5, "{label}: {largest}");
+            let bound = tolerance("scale.statistics");
+            assert!(means <= bound && stds <= bound, "{label}: {means} {stds}");
+            assert!(largest <= tolerance("scale.values"), "{label}: {largest}");
             if let Some(clip) = clip {
                 let clip = clip as f32;
                 let lower = if zero_center { -clip } else { f32::MIN };

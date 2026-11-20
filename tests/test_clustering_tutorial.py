@@ -24,6 +24,7 @@ import polars as pl
 import pytest
 from fixtures.pbmc import CACHE_DIR
 from fixtures.tutorial_samples import TUTORIAL_SAMPLES, fetch_tutorial_samples
+from parity import tolerance
 
 anndata = pytest.importorskip("anndata")
 pytest.importorskip("cellestial")
@@ -59,20 +60,12 @@ REFERENCE_PACKAGES = (
     "igraph",
     "leidenalg",
 )
-# Measured on macOS arm64 (Nov 14, 2026): 0.819, 0.979, 0.920, 0.878. kyto's Leiden
-# runs to convergence while the tutorial's first call stops after 2 iterations, and the
-# neighbour graphs differ (exact search against pynndescent), so the bound has room.
-LEIDEN_ARI_FLOOR = 0.75
-# Measured 0.9634 (kyto) against 0.9627 (scanpy) at 5 neighbours.
-TRUSTWORTHINESS_MARGIN = 0.01
 # Doublets: kyto's exact search calls 249 to 255 in s1d1 and 181 to 207 in s1d3 over
 # seeds 0 to 5, as scanpy's with `use_approx_neighbors=False`; the tutorial's scanpy run
 # (pynndescent) calls 213, of which kyto calls 211. Scores correlate 0.987.
 DOUBLET_CALLS = (400, 480)
-DOUBLET_SHARED_FLOOR = 0.9
-DOUBLET_SCORE_CORRELATION_FLOOR = 0.95
-# Measured mean 6.6 of 10 over every kept gene (the 11 large clusters 7 to 10).
-MARKER_OVERLAP_FLOOR = 5.5
+# The comparisons with scanpy's run use the parity table (task 10.2,
+# tests/parity/tolerances.toml: `tutorial.*`, each with what was measured).
 
 
 def _run(script: Path, *arguments: Path) -> None:
@@ -161,17 +154,23 @@ def test_matches_scanpys_run(
     assert result.same_cells
     assert all(result.qc_counts_equal.values()), result.qc_counts_equal
     # kyto's Float64 percentages against scanpy's float32: one float32 rounding.
-    assert max(result.qc_percent_error.values()) <= 2.0**-22, result.qc_percent_error
+    qc_percent = tolerance("tutorial.qc_percent")
+    assert max(result.qc_percent_error.values()) <= qc_percent, result.qc_percent_error
     assert result.same_genes
     assert result.hvg_kyto == result.hvg_scanpy == result.hvg_common == 2000
-    assert result.pca_variance_error <= 1e-3
+    assert result.pca_variance_error <= tolerance("tutorial.pca_variance")
     for column, (_, _, ari) in result.leiden.items():
-        assert ari >= LEIDEN_ARI_FLOOR, (column, ari)
+        assert ari >= tolerance("tutorial.leiden_ari"), (column, ari)
     for neighbors, (kyto, scanpy) in result.trustworthiness.items():
-        assert kyto >= scanpy - TRUSTWORTHINESS_MARGIN, (neighbors, kyto, scanpy)
+        margin = tolerance("tutorial.trustworthiness_margin")
+        assert kyto >= scanpy - margin, (neighbors, kyto, scanpy)
     kyto_calls, scanpy_calls, both, correlation = result.doublets
     assert DOUBLET_CALLS[0] <= kyto_calls <= DOUBLET_CALLS[1], result.doublets
-    assert both >= DOUBLET_SHARED_FLOOR * scanpy_calls, result.doublets
-    assert correlation >= DOUBLET_SCORE_CORRELATION_FLOOR, result.doublets
+    assert both >= tolerance("tutorial.doublet_shared") * scanpy_calls, result.doublets
+    assert correlation >= tolerance("tutorial.doublet_score_correlation"), (
+        result.doublets
+    )
     overlaps = list(result.marker_overlap.values())
-    assert sum(overlaps) / len(overlaps) >= MARKER_OVERLAP_FLOOR, overlaps
+    assert sum(overlaps) / len(overlaps) >= tolerance("tutorial.marker_overlap"), (
+        overlaps
+    )

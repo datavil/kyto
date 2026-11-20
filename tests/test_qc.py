@@ -30,6 +30,7 @@ from kyto.qc import (
     total_counts,
     total_counts_in,
 )
+from parity import tolerance
 
 MITOCHONDRIAL = gene_column("symbol").str.starts_with("MT-")
 
@@ -182,13 +183,19 @@ def test_gene_metrics_and_log1p_columns_match_scanpy(tmp_path: Path) -> None:
     ):
         assert genes.schema[name] == pl.Float64, name
         np.testing.assert_allclose(
-            genes[name].to_numpy(), adata.var[name].to_numpy(), rtol=1e-6, err_msg=name
+            genes[name].to_numpy(),
+            adata.var[name].to_numpy(),
+            rtol=tolerance("qc.values"),
+            err_msg=name,
         )
     cells = columns.cells.to_polars()
     assert cells["cell_id"].to_list() == list(adata.obs_names)
     for name in ("log1p_total_counts", "log1p_n_genes_by_counts"):
         np.testing.assert_allclose(
-            cells[name].to_numpy(), adata.obs[name].to_numpy(), rtol=1e-6, err_msg=name
+            cells[name].to_numpy(),
+            adata.obs[name].to_numpy(),
+            rtol=tolerance("qc.values"),
+            err_msg=name,
         )
 
     filtered = columns.filter(cells_detected() >= 20)

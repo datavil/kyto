@@ -24,6 +24,8 @@ use kyto_exec::{ExecuteOptions, Kernels, Pipeline};
 use kyto_plan::{Member, OptimizeOptions, Output, PhysicalOptions, Plan, physical_plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad` and the scanpy QC reference's per-cell
 /// arrays as little-endian `f64` files, or exits 77 without anndata.
 const WRITE_FIXTURE: &str = "\
@@ -148,7 +150,7 @@ fn compute(
     values
 }
 
-/// `NaN` matches `NaN`; otherwise `|kyto - scanpy| <= 1e-6 * |scanpy|`.
+/// `NaN` matches `NaN`; otherwise `|kyto - scanpy| <= qc.values * |scanpy|`.
 fn assert_close(fixture: &str, name: &str, kyto: &[f64], scanpy: &[f64]) {
     assert_eq!(kyto.len(), scanpy.len(), "{fixture} {name}: cell count");
     let mut worst = 0.0_f64;
@@ -159,7 +161,7 @@ fn assert_close(fixture: &str, name: &str, kyto: &[f64], scanpy: &[f64]) {
         }
         let error = (kyto - scanpy).abs();
         assert!(
-            error <= 1e-6 * scanpy.abs(),
+            error <= tolerance("qc.values") * scanpy.abs(),
             "{fixture} {name} cell {cell}: kyto {kyto} vs scanpy {scanpy}"
         );
         if scanpy != 0.0 {

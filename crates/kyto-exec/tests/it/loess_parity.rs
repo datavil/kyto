@@ -13,6 +13,8 @@ use std::process::Command;
 
 use kyto_exec::loess_fitted;
 
+use crate::tolerances::tolerance;
+
 const WRITE_CASES: &str = "\
 import sys
 try:
@@ -77,6 +79,6 @@ fn loess_matches_skmisc() {
             .map(|(kyto, skmisc)| (kyto - skmisc).abs() / skmisc.abs().max(1.0))
             .fold(0.0_f64, f64::max);
         eprintln!("case {case} (n = {n}): worst relative difference {worst:e}");
-        assert!(worst < 1e-12, "case {case}: {worst:e}");
+        assert!(worst < tolerance("hvg.loess"), "case {case}: {worst:e}");
     }
 }

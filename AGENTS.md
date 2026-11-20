@@ -107,7 +107,7 @@ results or semantics than scanpy or anndata gets a row in
 [deviations.md](deviations.md), in the same commit that introduces it: big or small,
 on purpose or a known gap left for later. Each row says what the reference does,
 what kyto does, why, and when and by whom it was decided. Tolerances live in the
-parity table, not in individual tests.
+parity table (`tests/parity/tolerances.toml`, task 10.2), not in individual tests.
 
 Parity covers results and semantics only. It does **not** cover API shape (the design
 rules win: no `.X`, no in-place mutation) or code quality (type hints, docstrings and

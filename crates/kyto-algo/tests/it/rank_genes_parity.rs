@@ -42,6 +42,8 @@ use kyto_plan::{PhysicalOptions, Plan};
 use kyto_store::{ConvertOptions, TableAxis, convert, open_atlas_schema, read_ids};
 use polars::prelude::DataFrame;
 
+use crate::tolerances::tolerance;
+
 /// Writes `load_fixture(name)` as `.h5ad` (pbmc3k with a `group` column), the filtered
 /// gene IDs, and scanpy's `rank_genes_groups_df` for each variant as text
 /// (`<variant>.tsv`: group, gene, score, logfoldchanges, pvals, pvals_adj; synthetic
@@ -379,7 +381,7 @@ fn rank_genes_groups_matches_scanpy_on_fixtures() {
             .unwrap()
             .log1p(Some("normalized"), "log1p")
             .unwrap();
-        let tolerance = 1e-6;
+        let bound = tolerance("rank_genes.values");
         if name == "synthetic" {
             for (method, test) in [
                 ("t-test", DifferentialTest::TTest),
@@ -396,7 +398,7 @@ fn rank_genes_groups_matches_scanpy_on_fixtures() {
                     worst[0], worst[1], worst[2], worst[3]
                 );
                 assert!(
-                    worst.iter().all(|worst| *worst <= tolerance),
+                    worst.iter().all(|worst| *worst <= bound),
                     "{method}: {worst:?}"
                 );
             }
@@ -417,7 +419,7 @@ fn rank_genes_groups_matches_scanpy_on_fixtures() {
                 worst[3]
             );
             assert!(
-                worst.iter().all(|worst| *worst <= tolerance),
+                worst.iter().all(|worst| *worst <= bound),
                 "{label}: {worst:?}"
             );
             // R11 on every synthetic variant, on pbmc3k's first two (a debug run there
