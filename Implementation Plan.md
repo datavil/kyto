@@ -83,6 +83,15 @@ Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14,
 - [ ] **5.21 The estimate reads a short stream's last block as whole.** The pool term (task 5.18) counts every later block at the full block size, so a stream of few blocks whose last one is small is estimated high: pbmc3k at 1,024-cell blocks (3 blocks, the last of 652 cells) with 1 block in flight is +24.1% on `estimate_fixtures.rs`, next to its 25% bound. Size the later window's blocks by the cells left (the last block's rows), keeping the bound for long streams. (added Nov 20, 2026, from 5.18's measurement)
   - Depends: 5.18
   - Done when: whole blocks on the fixtures within 15% of the measured heap; `memory_limit.rs` and the estimate tests pass.
+- [ ] **5.22 Preprocessing on 1 thread at scanpy's time.** In 10.8's workflow at 50k cells, kyto's QC + filters take 0.89 s against scanpy's 0.41 s (2.1x), and its HVG step takes 1.68 s against 0.53 s (3.2x; 1.29x at 4 threads). kyto decodes the store on every pass; scanpy holds the matrix after a 0.11 s read. Profile the passes on 1 thread (decode, QC, the HVG statistics pass) and cut the largest cost. (added Nov 20, 2026, from 10.8's measurement)
+  - Depends: 5.18
+  - Done when: `kyto_steps.py --threads 1,4` on the 50k data gives a `hvg` prefix (QC through HVG, cumulative) of at most 1.5 s on 1 thread (1.2x scanpy's warm read through HVG, 1.26 s) and an HVG step of at most 1.2x scanpy's at 4 threads; outputs bit-identical across thread counts (R11); `performance.md` updated.
+- [ ] **5.23 PCA in the workflow on 1 thread.** In 10.8's workflow, the PCA step takes 2.95 s on 1 thread against scanpy's 1.92 s (1.54x), while PCA alone is at par (0.95x, 5.15). Find what the workflow step adds (the stream pass that holds the HVG-filtered input, the held copy) and cut it. (added Nov 20, 2026, from 10.8's measurement)
+  - Depends: 5.18
+  - Done when: `kyto_steps.py --threads 1` gives a PCA step (the `pca` prefix minus the `hvg` prefix) of at most 2.3 s (1.2x scanpy's warm 1.92 s); the embedding bit-identical to before; `performance.md` updated.
+- [ ] **5.24 The workflow's write on 1 thread.** In 10.8's workflow, kyto's `sink_zarr` adds 0.70 s on 1 thread to the run, against scanpy's 0.13 s `.h5ad` write (5.4x); on 4 and 10 threads the difference is inside the run-to-run spread. That is not equal work: kyto compresses the `counts` and `log1p` layers and also writes its tables, embeddings and graphs. First time scanpy writing an AnnData with the same content (both layers, `obsm`, `obsp`, the same compression); then cut kyto's write. (added Nov 20, 2026, from 10.8's measurement)
+  - Depends: 5.20
+  - Done when: `benchmarks/scanpy_workflow` times scanpy's equal-content write, and kyto's `write` step (`kyto_steps.py --with-write`, or a direct timing of the sink if the difference stays noisy) is at most 1.2x that on 1 thread and no slower on 4; stores byte-identical across thread counts (except `provenance.json`); `performance.md` updated.
 
 ## 6. Algorithms (`kyto-algo`)
 
@@ -101,6 +110,12 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see 
   - Depends: 6.5, 7.2, 5.3
   - Done when: on pbmc3k and the `benchmarks/scanpy_workflow` 50k data (PCA, 50 components), e-means at 3 epochs or fewer reaches a training MSE at most that of Lloyd with 25 iterations (scikit-learn `KMeans`, same k and random init) at k = n/50 and n/200; labels and centroids are bit-identical at 1, 4 and all threads; a plan without `metacells` gives the same `explain()`, `estimate()` and output as before the task (test); `explain()` shows the node when it is called.
   - Open: (1) the paper's step-size and batch-size laws (its Eq. 6 and 7) were fitted on DEEP (d = 96, k ≥ 256); refit or replace them for 50-component PCA and k ≈ n/50 before using their constants. (2) Which downstream steps take metacells as input (pseudobulk aggregation of counts, `neighbors`/`leiden` on centroids), and how the sinks store them, is undecided. (3) An IVF index trained by e-means for approximate `neighbors` on very large atlases (next to HNSW, 6.6; GPU, 9.4) is not part of this task; it would be a separate opt-in task if wanted.
+- [ ] **6.17 Approximate neighbours: no lost cells at 50k.** On 10.8's 50k data, `neighbors(search="approximate")` gives 986 of 49,888 cells (2.0%) recall 0 against the exact search: their HNSW neighbours lie in other clusters (neighbour purity 0.21), and Leiden misassigns 370 cells (ARI 0.983 against both scanpy and the true clusters, where exact search and scanpy give 1.0). The deviations row's recall >= 0.99 was measured only on pbmc3k (2.7k cells). Find why some queries end in the wrong region (entry point, `ef_search`, layer graph, insertion order) and fix it. (added Nov 20, 2026, from 10.8's measurement)
+  - Depends: 6.6
+  - Done when: a test on the 50k synthetic data (or a seeded generator of the same structure, small enough for the suite) asserts fewer than 0.1% of cells with recall below 0.5 against exact search, a mean recall of at least 0.99, and Leiden ARI of at least 0.999 against the exact search's labels; deviations.md's neighbours row states the measured recall at 50k.
+- [ ] **6.18 Neighbours on 1 thread at scanpy's time.** In 10.8's workflow, neighbours on 1 thread take 29.0 s with exact search (blocked brute force, O(n²)) and 20.9 s with HNSW, against pynndescent's 9.8 s warm (3.0x, 2.1x). HNSW is also slower than exact search from 4 threads up (14 s, flat: insertion is sequential for R11). Make one search, with recall of at least 0.99, reach scanpy's time on 1 thread without losing the exact search's 4 and 10 thread times. (added Nov 20, 2026, from 10.8's measurement)
+  - Depends: 6.17
+  - Done when: `kyto_steps.py` on the 50k data gives a neighbours step of at most 11.8 s on 1 thread (1.2x scanpy's warm 9.8 s) with mean recall of at least 0.99 against exact search and Leiden ARI of 1.0 against scanpy; neighbours on 4 and 10 threads no slower than 10.8's exact times (8.2 s, 4.6 s); results identical across thread counts (R11); `performance.md` and deviations.md updated.
 
 ## 7. Python API (`kyto-py`, `python/kyto`)
 
@@ -162,7 +177,7 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 
 Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels with a migration guide. 10.1–10.3 start with M1 and grow with each milestone.
 
-Done (10.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
+Done (10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
 
 - [ ] **10.1 Property tests.** `proptest` for storage and kernels; `hypothesis` for the Python API (random chains of valid methods must not crash).
   - Depends: 2.2, 7.2
@@ -182,9 +197,6 @@ Done (10.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Don
 - [ ] **10.6 Release.** abi3 wheels via maturin, PyPI trusted publishing, semantic versioning, and a stated policy for reading older `format_version` stores.
   - Depends: 1.4, 10.5
   - Done when: `pip install kyto` works on Linux, macOS and Windows from a tagged release.
-- [ ] **10.8 Full workflow against scanpy, re-measured.** Re-run `benchmarks/scanpy_workflow` end to end on the 10-core Mac: QC, filters, normalize, log1p, HVG, PCA, neighbours, Leiden, UMAP and the write, at 50k cells and at 1, 4 and 10 threads, beside scanpy, with peak RSS. Replace the stale Nov 14 table at the top of `performance.md` (2-core Linux box, before 5.12–5.20), and add a plan task for each step where kyto takes more than 1.2x scanpy's time. (added Nov 20, 2026, at the user's request)
-  - Depends: 5.18
-  - Done when: `performance.md` opens with a dated per-step table (time and peak memory, kyto and scanpy, load average stated), and the outputs are checked: the same number of Leiden clusters and the ARI against scanpy's labels recorded.
 
 ## 11. Milestones
 

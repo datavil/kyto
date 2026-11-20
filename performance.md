@@ -1,68 +1,127 @@
 # Performance
 
-kyto against scanpy on a basic clustering workflow. Measured Nov 14, 2026, at commit
-`3dfe804` (kyto built with `maturin develop --release`), scanpy 1.13.0 with
-`flavor="igraph"` Leiden.
+## The full workflow against scanpy (task 10.8)
 
-## Setup
+Measured Nov 20, 2026, at `808989f` (after tasks 5.12 to 5.20; release extension built
+by `uv sync`). It replaces the Nov 14 table (a 2-core Linux box, before 5.12), which is in
+git history.
 
-- **Machine:** cloud Linux container, 2 CPU cores, 7 GB RAM. Absolute times are slow; the
-  ratio between the tools is the useful number.
-- **Data:** synthetic, because public datasets could not be downloaded there. 20,000 genes,
-  8 clusters, clustered negative-binomial counts (gamma–Poisson, dispersion 2), about 7%
-  nonzero (~1,400 genes per cell), 13 `MT-` genes, seed 0. 10,000 and 50,000 cells.
+- **Machine:** Apple M4 Mac, 10 cores (4 performance + 6 efficiency), 16 GB RAM, macOS
+  27.2. A game client sat idle in the background. **1-minute load average:** 4.3 at the
+  start of kyto's exact runs and 5.3 at their end; 4.9 falling to 1.8 across scanpy's runs;
+  1.8 to 2.4 across kyto's approximate runs.
+- **Data:** `make_data.py 50000`, seeded synthetic counts, 50,000 cells x 20,000 genes,
+  71.2M nonzeros, 8 clusters. Filters keep 49,888 cells; 2,000 HVGs.
 - **Workflow, both tools:** QC (genes detected, percent mitochondrial), filters
   `200 <= n_genes < 2500` and `pct_mt < 5`, `normalize_total(1e4)`, `log1p`, 2,000 HVGs
-  (`seurat`), keep HVGs, PCA (50, seed 0), neighbours (15), Leiden (seed 0), UMAP (seed 0),
-  write the result.
-- **scanpy:** read `.h5ad` → … → write `.h5ad`, timed per step. `sc.settings.n_jobs = 2`.
-  Timings are from a warm second run; the first run spent 149 s in neighbours compiling
-  numba code.
-- **kyto:** `ky.convert` to a store, then one lazy plan run by `sink_zarr`, exact neighbour
-  search, no `memory_limit`. Per-step times come from running the plan cut after each step
-  and taking differences, so they are approximate.
-- **Peak memory:** `ru_maxrss` of the process.
-- Each configuration ran once.
+  (`seurat`), keep HVGs, PCA (50, seed 0), neighbours (15), Leiden (seed 0), UMAP
+  (seed 0), write.
+- **scanpy** 1.12.5 (anndata 0.13.4, numpy 2.5.4, numba 0.68.1, pynndescent 0.7.0,
+  umap-learn 0.5.12, igraph 0.11.9, leidenalg 0.10.2), from the dev environment.
+  `run_scanpy.py --threads N` caps numba and OpenMP (environment variables set before
+  import; numba reports N threads), threadpoolctl and `sc.settings.n_jobs`. numpy's BLAS
+  here is Accelerate, which neither caps nor lists, so scanpy's PCA (1.92 s at every
+  thread count) may use more than N cores. Read `.h5ad` → write `.h5ad`, timed
+  per step with `perf_counter`. Leiden is `flavor="igraph"`, `n_iterations=2`. Its
+  neighbours above 4,096 cells are pynndescent, **an approximate search**.
+  - **Warm:** `--warmup 6000` first runs the whole workflow in the same process on
+    6,000 cells, so numba is compiled. Median of 3 runs per thread count. The first warm
+    run still compiled part of pynndescent (neighbours 31.6 s against 9.8 s), which the
+    median drops.
+  - **Cold:** one run per thread count in a fresh process with an empty
+    `NUMBA_CACHE_DIR`.
+  - **Peak memory** is from the cold run. The warm runs peak 220 to 580 MB higher because of
+    what the warm-up leaves behind. Both sides include their interpreter and import baseline.
+- **kyto:** `ky.convert` (1.80 s, once; not a step: scanpy's matching cost is the earlier
+  `.h5ad` write), then one lazy plan from the store. Exact neighbour search (the default)
+  unless stated. `kyto_steps.py`: each plan prefix (QC + filters, + normalize/log1p,
+  + HVG, ..., + UMAP) runs in a fresh process, streamed to nowhere (`_execute`, every pass
+  and embedding computed, nothing written). Median of 3. Runs repeat within about 2% (QC at 4 and 10
+  threads within 0.02 s; one approximate-search UMAP run at 10 threads +7%), so
+  steps shorter than about 0.2 s (Leiden; write at 4 and 10 threads) are within noise,
+  marked `~`. A step's time is its prefix's median minus the previous one's, so it
+  includes the passes over the store that the step adds. `write` is the full plan run
+  by `sink_zarr` minus the UMAP prefix. **Peak memory** is the peak RSS of the process
+  running the plan up to that step. scanpy's is the process's peak RSS after the step.
+  Both are cumulative.
+- **Outputs checked** (`compare_labels.py`, by cell ID): both keep 49,888 cells and find
+  **8 Leiden clusters with the same sizes**. **ARI against scanpy = 1.0** (kyto exact,
+  at 1 and 10 threads; against scanpy's warm 1- and 10-thread and cold runs). Against
+  the generator's true clusters, scanpy and kyto exact both have ARI 1.0. kyto's
+  **approximate** search gives ARI 0.983 (8 clusters, 370 cells misassigned): see
+  finding 3.
 
-## Results
+### Per step, 50k cells (seconds; peak RSS in MB)
 
-| | 10k cells | 50k cells |
-|---|---|---|
-| scanpy, total (read → write) | 65 s | 72 s |
-| kyto, total (convert + run) | 72 s (1.8 + 70.2) | 181 s (5.4 + 175.6) |
-| Peak memory, scanpy / kyto | 0.77 / 0.93 GB | 2.02 / 1.70 GB |
-| Cells kept / Leiden clusters | 9,977 / 8 (both) | 49,888 / 8 (both) |
+Ratio = kyto / scanpy warm; **bold** where kyto takes more than 1.2x scanpy's time.
 
-### Per step, 50k cells
+| Step | 1 thread: scanpy warm (cold) | kyto | ratio | 4 threads: scanpy warm (cold) | kyto | ratio | 10 threads: scanpy warm (cold) | kyto | ratio |
+|---|---|---|---|---|---|---|---|---|---|
+| read (scanpy) / convert (kyto, once) | 0.11 | (1.80) | | 0.11 | (1.80) | | 0.11 | (1.80) | |
+| QC + filters | 0.41 (0.42) | 0.89 | **2.14** | 0.41 (0.42) | 0.29 | 0.70 | 0.42 (0.41) | 0.21 | 0.50 |
+| normalize + log1p | 0.21 (1.59) | 0.25 | 1.18 | 0.18 (1.24) | 0.09 | 0.53 | 0.17 (1.24) | 0.07 | 0.43 |
+| HVG + keep HVGs | 0.53 (1.17) | 1.68 | **3.15** | 0.45 (1.04) | 0.57 | **1.29** | 0.44 (1.00) | 0.45 | 1.01 |
+| PCA | 1.92 (5.10) | 2.95 | **1.54** | 1.92 (2.12) | 1.04 | 0.54 | 2.02 (2.12) | 0.75 | 0.37 |
+| neighbours (kyto exact) | 9.80 (38.16) | 29.03 | **2.96** | 9.30 (36.22) | 8.19 | 0.88 | 9.25 (36.10) | 4.58 | 0.50 |
+| neighbours (kyto approximate) | | 20.94 | **2.14** | | 13.95 | **1.50** | | 13.42 | **1.45** |
+| Leiden | 0.67 (0.87) | ~0.12 | ~0.2 | 0.66 (0.70) | ~0.13 | ~0.2 | 0.66 (0.71) | ~0.17 | ~0.3 |
+| UMAP | 14.16 (14.44) | 16.36 | 1.16 | 14.18 (14.45) | 16.28 | 1.15 | 14.21 (14.47) | 16.35 | 1.15 |
+| write | 0.13 (0.13) | 0.70 | **5.36** | 0.14 (0.13) | ~0.37 | (noise) | 0.13 (0.13) | ~0.04 | (noise) |
+| **total** (scanpy read → write; kyto run) | **28.07 (61.99)** | **51.98** | **1.85** | **27.40 (56.44)** | **26.96** | 0.98 | **27.41 (56.29)** | **22.61** | 0.82 |
 
-| Step | scanpy | kyto |
-|---|---|---|
-| Read (or convert), QC, normalize, log1p, HVG | 9.4 s | 6.0 s run (+ 5.4 s convert) |
-| PCA | 2.6 s | ~26 s |
-| Neighbours | 31.0 s (mostly numba compilation) | ~28 s (exact) |
-| Leiden | 1.6 s | ~3 s |
-| UMAP | 26.7 s | ~112 s |
+| Peak RSS through the step (MB) | 1 thread: scanpy | kyto | 4 threads: scanpy | kyto | 10 threads: scanpy | kyto |
+|---|---|---|---|---|---|---|
+| read | 913 | | 913 | | 913 | |
+| QC + filters | 2,689 | 353 | 2,689 | 590 | 2,690 | 572 |
+| normalize + log1p | 2,764 | 470 | 2,765 | 751 | 2,764 | 725 |
+| HVG | 3,496 | 471 | 3,497 | 859 | 3,496 | 763 |
+| PCA | 3,549 | 612 | 3,550 | 903 | 3,549 | 881 |
+| neighbours | 3,882 | 611 | 3,883 | 902 | 3,882 | 882 |
+| Leiden | 3,882 | 639 | 3,883 | 929 | 3,882 | 893 |
+| UMAP | 3,882 | 685 | 3,883 | 972 | 3,882 | 945 |
+| write (whole run) | **3,882** | **853** | **3,883** | **1,087** | **3,882** | **1,044** |
 
-### Per step, 10k cells
+The single plan run end to end (`run_kyto.py`, all 10 cores, exact): convert 1.80 s + run
+22.09 s, peak RSS 1,110 MB.
 
-| Step | scanpy | kyto |
-|---|---|---|
-| Read through Leiden | 49.1 s (40.5 s neighbours) | ~8.7 s |
-| UMAP | 15.5 s | ~56 s |
+### Findings
 
-kyto's `search="approximate"` at 10k gave the same total (69.5 s), so neighbour search is not
-where kyto loses time.
+1. **On 4 and 10 threads kyto's whole workflow is as fast as or faster than warm
+   scanpy (0.98x and 0.82x) and about 2x faster than cold scanpy, in 28% and 27% of
+   scanpy's peak memory** (1.09 / 1.04 GB against 3.88 GB). On 1 thread kyto takes 1.85x
+   warm scanpy's time (0.84x cold), mostly in exact neighbours.
+2. **Neighbours on 1 thread (2.96x):** kyto's exact search is blocked brute force,
+   O(n²); scanpy's pynndescent is approximate. Exact search scales with threads (29.0 →
+   8.2 → 4.6 s), and pynndescent barely does (9.8 → 9.3 s). scanpy's cold run spends about 27 s
+   compiling numba here, almost all of its 29 to 34 s cold-over-warm gap.
+3. **kyto's approximate search is broken at 50k cells** (a correctness bug, not a
+   difference from scanpy). Against kyto's exact neighbours, 986 of 49,888 cells (2.0%)
+   get recall 0 and 997 get recall below 0.5. Those cells' HNSW neighbours lie in
+   other clusters (neighbour purity 0.21), so Leiden misassigns 370 cells (ARI 0.983 against both
+   scanpy and the true clusters). scanpy's pynndescent has a lower mean recall (0.889)
+   but no such cells (ARI 1.0). The deviations row's recall >= 0.99 was measured on
+   pbmc3k (2.7k cells). HNSW is also slower than exact search from 4 threads up (14 s,
+   flat across threads: insertion is sequential for R11).
+4. **Preprocessing on 1 thread:** QC + filters 2.1x and HVG 3.2x scanpy's time (HVG
+   1.29x at 4 threads). kyto decodes the store on every pass; scanpy holds the matrix in
+   memory after a 0.11 s read (from the page cache). From 4 threads up QC and normalize are 0.4 to 0.7x, HVG
+   1.29x at 4 threads and 1.01x at 10.
+5. **PCA in the workflow on 1 thread (1.54x):** PCA alone is at par (0.95x, task 5.15).
+   The workflow step also holds the HVG-filtered input from a stream pass.
+6. **UMAP (1.15x)** is single-threaded on both sides and below the 1.2x line; task 6.15
+   (UMAP's `pow`) targets it.
+7. **write on 1 thread (5.4x):** not equal work. kyto writes the `counts`
+   and `log1p` layers compressed, plus the cell table, embeddings and graphs. scanpy
+   writes `X` (log1p) uncompressed with its `obsm` and `obsp`. On 4 and 10 threads
+   the difference (0.37 s, 0.04 s) is inside the UMAP prefix's run-to-run spread
+   (0.17 to 0.19 s), so it is not measured there.
+8. **Leiden is faster than scanpy's igraph Leiden** (0.1 to 0.4 s against 0.66 s), but
+   the step is a difference of two medians near the noise floor, so the ratio is not
+   measured precisely.
 
-## Findings
-
-1. **UMAP is the main gap:** about 4× slower than scanpy. Both run UMAP's SGD on one
-   thread (scanpy uses `parallel=False`), so the gap is in kyto's implementation (6.9).
-2. **PCA is about 10× slower** at 50k cells (6.5): the streaming randomized SVD against
-   scanpy's in-memory PCA on the 2,000 HVGs.
-3. **Preprocessing is faster** than scanpy, and peak memory is lower at 50k cells
-   (1.70 vs 2.02 GB) even without a memory limit.
-4. scanpy pays numba compilation on fresh processes (149 s cold, 31–40 s warm for
-   neighbours here); a long-lived session would narrow kyto's neighbour advantage.
+New tasks for the steps over 1.2x (added Nov 20, 2026, from this measurement): 5.22
+(preprocessing on 1 thread), 5.23 (PCA in the workflow on 1 thread), 5.24 (the write),
+6.17 (approximate search recall), 6.18 (neighbours on 1 thread).
 
 ## PCA with its input held in memory (task 5.12)
 

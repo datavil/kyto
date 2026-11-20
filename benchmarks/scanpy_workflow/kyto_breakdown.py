@@ -6,19 +6,24 @@ import json
 import shutil
 import sys
 import time
+from typing import Literal
 
 import kyto as ky
 from kyto import cell_column, gene_column, qc
 from kyto._kyto import Atlas
 
 
-def build_prefixes(store_path: str) -> dict[str, Atlas]:
+def build_prefixes(
+    store_path: str, search: Literal["exact", "approximate"] = "exact"
+) -> dict[str, Atlas]:
     """Return the workflow's plan cut after each step, in order.
 
     Parameters
     ----------
     store_path : str
         Converted kyto store.
+    search : {"exact", "approximate"}, default="exact"
+        Neighbour search.
 
     Returns
     -------
@@ -49,7 +54,7 @@ def build_prefixes(store_path: str) -> dict[str, Atlas]:
     prefixes["hvg"] = plan
     plan = plan.pca(layer="log1p", into="X_pca", n_components=50, seed=0)
     prefixes["pca"] = plan
-    plan = plan.neighbors("X_pca", n_neighbors=15, seed=0)
+    plan = plan.neighbors("X_pca", n_neighbors=15, search=search, seed=0)
     prefixes["neighbors"] = plan
     plan = plan.leiden(seed=0, into="leiden")
     prefixes["leiden"] = plan
