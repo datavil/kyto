@@ -364,6 +364,56 @@ last operator is the maps, where the old code dropped the same layers).
   10 threads is 45% of scanpy's, but this task did not lower it much: the first pass's RSS
   growth and the output's three full-width layers set it.
 
+## Parallel encoding in the output sink (task 5.17)
+
+Measured Nov 20, 2026, on the task 5.17 tree (base `fe194a8`, 5.16; release extensions built
+by `uv sync`), same machine, data and scripts as 5.12 to 5.16 above. **Not a quiet machine:**
+a game client ran throughout; the 1-minute load average was 6 to 10 during the timed runs.
+Base and 5.17 ran alternating, each a fresh process running PCA alone (the `isolated` plan of
+`pca_timing.py`) with a warm-up per thread count, then `embedding("X_pca").to_numpy()` and
+`_execute` (`pca_timing.py`'s `stage`) once each; the median of 5 such processes per build.
+"After the PCA" is end to end minus `_execute`: the handle terminal's temporary store, the
+final write and reading the embedding back. **Peak memory:** `ru_maxrss` of a fresh process
+running PCA alone end to end once at 10 threads, 3 alternating runs per build.
+
+- **Change:** each shard of a layer array (1M stored values of `indices` or `data`, or a cell
+  block's `indptr`) is now written by kyto: its 16 inner chunks are compressed with zstd in
+  parallel and placed in chunk order, then the index, the same bytes zarrs writes on one
+  thread. `indices` and `data` shards are written at once.
+- **Finding 1, three layers:** the temporary store behind `embedding()` holds every layer the
+  output carries: `counts`, `normalized` and `log1p` (8.7M stored values each), 54 shards,
+  about 0.4 to 0.5 s of zstd CPU time, although `embedding()` reads none of them (task 5.19).
+- **Finding 2, the sink is not on the run's pool:** `StoreWriter::push` runs on the sink's own
+  thread, so its parallel work goes to rayon's global pool (one thread per core) whatever
+  `threads` is. At `threads=1` the writes already overlap the stream on other cores: the time
+  after the PCA is about 0.11 to 0.13 s, not the 0.42 s the task assumed, and the task's first
+  target (2.5x from 1 to 10 threads, about 0.05 s at 10) lay below the final write's floor
+  (about 55 ms: tables, embedding, sync, rename). The user changed the target to "1.5x less
+  than 5.16's at 10 threads" (Nov 20, 2026). Running the writes on the run's pool (R7) is task
+  5.20; it will make 1 thread about 0.4 s slower.
+
+| Seconds (median of 5), base 5.16 / 5.17 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto PCA alone, end to end | 2.408 / 2.391 | 1.150 / **1.054** | 0.932 / **0.833** |
+| kyto PCA stage (`_execute`) | 2.285 / 2.276 | 0.877 / 0.881 | 0.650 / 0.652 |
+| after the PCA (end to end minus stage) | 0.131 / 0.109 | 0.273 / **0.176** | 0.281 / **0.181 (1.55x)** |
+| scanpy `pp.pca` (5.15, not re-run) | 1.95 | 1.94 | 1.94 |
+
+| Peak memory at 10 threads, MB (3 runs) | base 5.16 | 5.17 |
+|---|---|---|
+| kyto PCA alone, end to end | 471, 479, 450 | 451, 453, 446 |
+| kyto PCA alone, 5.15 (its run) | | 464 |
+
+- **Byte identity (R11):** `sink_zarr` of PCA alone at 1, 4 and 10 threads, base and 5.17: all
+  136 files identical except `provenance.json` (target path, timestamps). Unit tests compare
+  every file with zarrs' one-thread encoder on pools of 1, 3 and 8 threads.
+- **scanpy** has no step that writes a store in the middle of PCA; its `pp.pca` (matrix in
+  memory) is 5.15's number.
+- **Where kyto loses:** on 1 thread PCA alone takes 1.23x scanpy's `pp.pca` (kyto decodes the
+  stored layer and writes three layers it does not need to its temporary store); from 4
+  threads kyto is faster (0.43x scanpy's time at 10). At 10 threads the time after the PCA is
+  still 22% of the end-to-end time, mostly zstd on layers nobody reads (5.19).
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

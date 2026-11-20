@@ -15,8 +15,9 @@
 //! bytes). It never holds the whole layer.
 //!
 //! The bytes are those of [`crate::write_layer`] for the same matrix, however the rows
-//! were batched: chunk contents depend only on the tiles, and chunks are encoded on one
-//! thread (memory/zarrs_shard_determinism.md).
+//! were batched and on any thread count: chunk contents depend only on the tiles, and
+//! each shard's inner chunks are compressed in parallel on the current rayon pool but
+//! placed in inner chunk order (`store_shard`, memory/zarrs_shard_determinism.md).
 
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ use crate::tiling::{TileGrid, Tiling};
 use crate::value::LayerValue;
 use crate::write_options::LayerWriteOptions;
 use crate::zarr_arrays::{
-    LayerArrays, StoreArray, TILE_OFFSETS_CHUNK, store_1d, store_chunk, store_metadata,
+    LayerArrays, StoreArray, TILE_OFFSETS_CHUNK, store_1d, store_metadata, store_shard,
 };
 
 /// Largest number of cells (format.md §4.5); sizes the arrays chunks are written through.
@@ -124,6 +125,7 @@ impl<T: LayerValue> LayerStream<T> {
         for block in 0..full_blocks {
             self.encode(&grid, block)?;
         }
+
         // Keep only the rows after the last full block.
         let rows = (full_blocks * self.tiling.cell_block_size) as usize;
         let consumed = self.pending.indptr[rows];
@@ -141,7 +143,14 @@ impl<T: LayerValue> LayerStream<T> {
     fn encode(&mut self, grid: &TileGrid, block: u64) -> Result<(), KytoError> {
         let shard = encode_cell_block(&self.pending, grid, block, &mut self.entries);
         if grid.n_gene_blocks() > 0 {
-            store_chunk(&self.indptr, &[self.cell_blocks_written, 0, 0], &shard)?;
+            store_shard(
+                &self.storage,
+                &self.indptr,
+                &[self.cell_blocks_written, 0, 0],
+                &shard,
+                grid.indptr_len() as usize,
+                self.options.zstd_level,
+            )?;
         }
         self.cell_blocks_written += 1;
         let shard_len = self.options.nnz_shard_size as usize;
@@ -159,8 +168,25 @@ impl<T: LayerValue> LayerStream<T> {
         let mut data: Vec<T> = self.entries.data.drain(..len).collect();
         indices.resize(shard_len, 0);
         data.resize(shard_len, T::zero());
-        store_chunk(&self.indices, &[self.shards_written], &indices)?;
-        store_chunk(&self.data, &[self.shards_written], &data)?;
+        let shard = [self.shards_written];
+        let inner_len = self.options.nnz_chunk_size as usize;
+        let level = self.options.zstd_level;
+        // Both arrays at once; the first error in array order (R11).
+        let (indices, data) = rayon::join(
+            || {
+                store_shard(
+                    &self.storage,
+                    &self.indices,
+                    &shard,
+                    &indices,
+                    inner_len,
+                    level,
+                )
+            },
+            || store_shard(&self.storage, &self.data, &shard, &data, inner_len, level),
+        );
+        indices?;
+        data?;
         self.shards_written += 1;
         Ok(())
     }

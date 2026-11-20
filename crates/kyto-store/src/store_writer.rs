@@ -226,9 +226,9 @@ impl StoreWriter {
     /// [`StoreWriter::create`], over all genes of the store, so its `indices` are gene
     /// table positions. Blocks may have any number of rows, the same in every layer;
     /// they are re-blocked into cell blocks of `C` rows (format.md §10.2). Zeros are
-    /// dropped (§4.6). Layers are written in parallel on the current rayon pool; the
-    /// bytes do not depend on the thread count or on how rows are split into blocks
-    /// (§10.3, R11). The blocks are read, not kept.
+    /// dropped (§4.6). Layers, and each shard's inner chunks, are written in parallel on
+    /// the current rayon pool; the bytes do not depend on the thread count or on how rows
+    /// are split into blocks (§10.3, R11). The blocks are read, not kept.
     ///
     /// # Errors
     /// - `KY-E117`, before writing anything, if the number of blocks is not the number of

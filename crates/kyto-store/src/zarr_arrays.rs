@@ -10,13 +10,17 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use kyto_error::KytoError;
+use rayon::prelude::*;
 use zarrs::array::codec::{
-    ArrayToBytesCodecTraits, BytesCodec, CodecOptions, ShardingCodecBuilder, ShardingIndexLocation,
-    ZstdCodec,
+    ArrayToBytesCodecTraits, BytesCodec, CodecChain, CodecOptions, Crc32cCodec,
+    ShardingCodecBuilder, ShardingIndexLocation, ZstdCodec,
 };
-use zarrs::array::{Array, ArrayBuilder, ArrayMetadataOptions, DataType, Element};
+use zarrs::array::{
+    Array, ArrayBuilder, ArrayBytes, ArrayMetadataOptions, ChunkRepresentation, DataType, Element,
+};
 use zarrs::filesystem::FilesystemStore;
 use zarrs::group::GroupBuilder;
+use zarrs::storage::WritableStorageTraits;
 
 use crate::tiling::TileGrid;
 use crate::value::LayerValue;
@@ -199,4 +203,278 @@ pub(crate) fn store_chunk<T: Element>(
     array
         .store_chunk_elements_opt(chunk_indices, elements, &serial)
         .map_err(|error| store_io("write chunk of", array.path().as_str(), error))
+}
+
+/// Write one shard of a sharded array (format.md §4.4), compressing its inner chunks in
+/// parallel on the current rayon pool.
+///
+/// The bytes are those [`store_chunk`] writes (zarrs' sharding encoder on one thread):
+/// the encoded inner chunks that are not all fill value, in inner chunk order, then the
+/// index (offset and length of each inner chunk, `u64::MAX` twice for a skipped one) in
+/// `[bytes(little), crc32c]`. A shard that is all fill value is not stored. Each inner
+/// chunk is encoded on its own, with zstd on one thread, so nothing depends on the
+/// thread count (R11, memory/zarrs_shard_determinism.md).
+///
+/// The array's codec must be [`sharding`] with `zstd_level`, and its inner chunks must
+/// be runs of `inner_len` consecutive elements of the shard: true for every kyto layer
+/// array (1-D `indices` and `data`; `indptr`'s inner chunks span its last dimension).
+pub(crate) fn store_shard<T: Element>(
+    storage: &FilesystemStore,
+    array: &StoreArray,
+    chunk_indices: &[u64],
+    elements: &[T],
+    inner_len: usize,
+    zstd_level: i32,
+) -> Result<(), KytoError> {
+    let path = array.path().as_str();
+    let fail = |error: &dyn std::fmt::Display| store_io("write chunk of", path, error);
+    let bytes = T::into_array_bytes(array.data_type(), elements)
+        .and_then(|bytes| bytes.into_fixed().map_err(Into::into))
+        .map_err(|error| fail(&error))?;
+    let fill = array.fill_value();
+    if ArrayBytes::new_flen(&bytes[..]).is_fill_value(fill) {
+        return array
+            .erase_chunk(chunk_indices)
+            .map_err(|error| fail(&error));
+    }
+    let element_size = array.data_type().fixed_size().unwrap_or(1);
+    let inner_shape = non_zero(&[inner_len as u64])?;
+    // zarrs takes only whole shards; a short last inner chunk would encode other bytes.
+    if !elements.len().is_multiple_of(inner_len) {
+        return Err(fail(&format!(
+            "{} elements are not whole inner chunks of {inner_len}",
+            elements.len()
+        )));
+    }
+    let inner = ChunkRepresentation::new(inner_shape, array.data_type().clone(), fill.clone())
+        .map_err(|error| fail(&error))?;
+    let chain = CodecChain::new(
+        vec![],
+        Arc::new(BytesCodec::little()),
+        vec![Arc::new(ZstdCodec::new(zstd_level, false))],
+    );
+    let serial = CodecOptions::builder().concurrent_target(1).build();
+    // An indexed collect keeps inner chunk order on any thread count.
+    let encoded: Vec<Result<Option<Vec<u8>>, KytoError>> = bytes
+        .par_chunks(inner_len * element_size)
+        .map(|chunk| {
+            let chunk = ArrayBytes::new_flen(chunk);
+            if chunk.is_fill_value(fill) {
+                return Ok(None);
+            }
+            chain
+                .encode(chunk, &inner, &serial)
+                .map(|encoded| Some(encoded.into_owned()))
+                .map_err(|error| fail(&error))
+        })
+        .collect();
+    let mut index = vec![u64::MAX; 2 * encoded.len()];
+    let mut shard: Vec<u8> = Vec::new();
+    for (position, chunk) in encoded.into_iter().enumerate() {
+        if let Some(chunk) = chunk? {
+            index[2 * position] = shard.len() as u64;
+            index[2 * position + 1] = chunk.len() as u64;
+            shard.extend_from_slice(&chunk);
+        }
+    }
+    let index_shape = non_zero(&[(index.len() / 2) as u64, 2])?;
+    let index_representation = ChunkRepresentation::new(index_shape, DataType::UInt64, u64::MAX)
+        .map_err(|error| fail(&error))?;
+    let index_chain = CodecChain::new(
+        vec![],
+        Arc::new(BytesCodec::little()),
+        vec![Arc::new(Crc32cCodec::new())],
+    );
+    let index_bytes = index_chain
+        .encode(
+            ArrayBytes::new_flen(bytemuck::cast_slice::<u64, u8>(&index)),
+            &index_representation,
+            &serial,
+        )
+        .map_err(|error| fail(&error))?;
+    shard.extend_from_slice(&index_bytes);
+    storage
+        .set(&array.chunk_key(chunk_indices), shard.into())
+        .map_err(|error| fail(&error))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use zarrs::array::{ArrayBuilder, DataType, Element};
+    use zarrs::filesystem::FilesystemStore;
+
+    use super::{StoreArray, sharding, store_chunk, store_shard};
+
+    /// An array of `shard` shards with inner chunks `inner`, in a fresh store.
+    fn array(
+        storage: &Arc<FilesystemStore>,
+        data_type: DataType,
+        fill: impl Into<zarrs::array::FillValue>,
+        shape: Vec<u64>,
+        shard: Vec<u64>,
+        inner: &[u64],
+    ) -> StoreArray {
+        let mut builder = ArrayBuilder::new(shape, shard, data_type, fill.into());
+        builder.array_to_bytes_codec(sharding(inner, 3).unwrap());
+        builder.build(storage.clone(), "/a").unwrap()
+    }
+
+    /// The files of a store, by relative path.
+    fn files(root: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+        let mut found = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    let name = path.strip_prefix(root).unwrap().display().to_string();
+                    found.push((name, std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// Write every shard with `store_chunk` in one store and `store_shard` (on pools of
+    /// 1, 3 and 8 threads) in others; the files must be the same bytes.
+    fn same_bytes<T: Element + Copy + Sync>(
+        data_type: DataType,
+        fill: T,
+        shard_shape: &[u64],
+        inner: &[u64],
+        shards: &[Vec<T>],
+    ) where
+        zarrs::array::FillValue: From<T>,
+    {
+        let shard_len: u64 = shard_shape.iter().product();
+        let inner_len: u64 = inner.iter().product();
+        let mut shape = shard_shape.to_vec();
+        shape[0] *= shards.len() as u64;
+        let write = |parallel: Option<usize>| {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = Arc::new(FilesystemStore::new(dir.path()).unwrap());
+            let target = array(
+                &storage,
+                data_type.clone(),
+                fill,
+                shape.clone(),
+                shard_shape.to_vec(),
+                inner,
+            );
+            for (position, elements) in shards.iter().enumerate() {
+                assert_eq!(elements.len() as u64, shard_len);
+                let mut indices = vec![0; shard_shape.len()];
+                indices[0] = position as u64;
+                match parallel {
+                    None => store_chunk(&target, &indices, elements).unwrap(),
+                    Some(threads) => rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap()
+                        .install(|| {
+                            store_shard(
+                                &storage,
+                                &target,
+                                &indices,
+                                elements,
+                                inner_len as usize,
+                                3,
+                            )
+                        })
+                        .unwrap(),
+                }
+            }
+            files(dir.path())
+        };
+        let expected = write(None);
+        assert!(!expected.is_empty());
+        for threads in [1, 3, 8] {
+            assert_eq!(write(Some(threads)), expected, "{threads} threads");
+        }
+    }
+
+    /// Values from a fixed linear congruential sequence, zero where `zero(i)`.
+    fn values(len: usize, seed: u64, zero: impl Fn(usize) -> bool) -> Vec<u32> {
+        let mut state = seed;
+        (0..len)
+            .map(|position| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                if zero(position) {
+                    0
+                } else {
+                    ((state >> 40) % 1000) as u32
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn entries_shards_match_the_serial_encoder() {
+        let inner = 64_usize;
+        let len = 16 * inner;
+        // Mixed, inner chunks all fill (1, 7, 15), an all-fill shard, a padded last shard.
+        let shards = vec![
+            values(len, 1, |position| {
+                position / inner == 1 || position % 5 == 0
+            }),
+            values(len, 2, |position| [7, 15].contains(&(position / inner))),
+            vec![0; len],
+            values(len, 3, |position| position >= 3 * inner + 5),
+        ];
+        same_bytes(
+            DataType::UInt32,
+            0_u32,
+            &[len as u64],
+            &[inner as u64],
+            &shards,
+        );
+        // float32 with -0.0 (not the fill value's bytes) and NaN.
+        let floats: Vec<Vec<f32>> = shards
+            .iter()
+            .map(|shard| {
+                shard
+                    .iter()
+                    .enumerate()
+                    .map(|(position, &value)| match position % 97 {
+                        3 => -0.0,
+                        11 => f32::NAN,
+                        _ => value as f32 * 0.37,
+                    })
+                    .collect()
+            })
+            .collect();
+        same_bytes(
+            DataType::Float32,
+            0.0_f32,
+            &[len as u64],
+            &[inner as u64],
+            &floats,
+        );
+    }
+
+    #[test]
+    fn indptr_shards_match_the_serial_encoder() {
+        // `indptr`-like: shards [1, gene blocks, C + 1], inner chunks [1, 1, C + 1].
+        let row = 33_usize;
+        let gene_blocks = 5_usize;
+        let shards = vec![
+            values(gene_blocks * row, 4, |position| position / row == 2),
+            vec![0; gene_blocks * row],
+            values(gene_blocks * row, 5, |_| false),
+        ];
+        same_bytes(
+            DataType::UInt32,
+            0_u32,
+            &[1, gene_blocks as u64, row as u64],
+            &[1, 1, row as u64],
+            &shards,
+        );
+    }
 }
