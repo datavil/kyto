@@ -8,8 +8,18 @@ them as hidden `with_cells` columns (`__kyto_feature_<i>`, resolved with
 `columns`. Projection pushdown then reads only the layers the features read (a test
 deletes the other layer first), and nothing is written. Cell IDs come from the store's
 cell table gathered by position; gene results from `BlockStream::genes()` (a
-`with_genes` step always yields it). 7.3's terminals instead sink the whole output to a
+`with_genes` step always yields it). 7.3's terminals instead sink the output to a
 temporary store; this path is the cheaper one when a terminal reads a few members.
+
+**Works (task 5.19):** a handle terminal's temporary store holds only the member it reads.
+`materialize` sinks `Output::members(plan.sink(..), [member])`: a sink node reads nothing
+of its own (`node_reads`), so projection pushdown keeps only what feeds that member, and
+`SinkSpec::new(plan, output.reads())` writes those members plus the ID columns. A
+`sink_zarr`/`collect()` passes `Output::all`, which is every member, as before. On the 50k
+data, `embedding("X_pca").to_numpy()` stopped writing `counts`, `normalized` and `log1p`
+(54 zstd shards). Check that the temporary store really is smaller by walking `TMPDIR` from
+the progress callback (`os.walk`, since the writer's `.kyto-tmp-*` folders are hidden and
+`glob` skips them).
 
 **Works:** counts and IDs need no run when the plan knows them:
 `output_schema().n_cells()/n_genes()` are exact without a filter on data, and

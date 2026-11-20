@@ -9,6 +9,11 @@ Euclidean distances (numpy, brute force), ``connectivities`` is symmetric, the l
 are orthonormal, and a cell filter before the sink keeps the rows of the kept cells.
 The bit-exact checks against the executor's statistics are Rust's
 (``crates/kyto-exec/tests/it/embeddings_graphs.rs``).
+
+Task 5.19: each handle terminal of the analysis plan (every table, layer, embedding and
+graph) writes only its own member to its temporary store, and still returns exactly what
+reading that member from the whole plan's ``sink_zarr`` store returns, on 1 and 4
+threads.
 """
 
 # scipy and anndata ship without complete type information; strict pyright cannot see
@@ -117,3 +122,37 @@ def test_a_cell_filter_before_the_sink_keeps_the_kept_cells_rows(
     )
     expected = everything.obsp["connectivities"][rows][:, rows]
     assert abs(subset.obsp["connectivities"] - expected).max() == 0
+
+
+@pytest.mark.parametrize("threads", [1, 4])
+def test_every_handle_terminal_reads_what_the_whole_sink_holds(
+    tmp_path: Path, threads: int
+) -> None:
+    store = _store(tmp_path)
+    plan = _analysis(store)
+    whole = tmp_path / "whole.kyto"
+    plan.sink_zarr(whole, threads=threads)
+    sunk = _kyto.scan(whole)
+    schema = plan.schema()
+    for table in ("cells", "genes"):
+        ours = getattr(plan, table).to_polars(threads=threads)
+        assert ours.equals(getattr(sunk, table).to_polars()), table
+    for layer in schema["layers"]:
+        name = layer["name"]
+        ours = plan.layer(name).to_scipy(threads=threads)
+        theirs = sunk.layer(name).to_scipy()
+        assert ours.dtype == theirs.dtype, name
+        for part in ("indptr", "indices", "data"):
+            assert np.array_equal(getattr(ours, part), getattr(theirs, part)), name
+    for embedding in schema["embeddings"]:
+        name = embedding["name"]
+        ours = plan.embedding(name).to_numpy(threads=threads)
+        theirs = sunk.embedding(name).to_numpy()
+        assert ours.dtype == theirs.dtype, name
+        assert ours.tobytes() == theirs.tobytes(), name
+    for graph in schema["graphs"]:
+        name = graph["name"]
+        ours = plan.graph(name).to_scipy(threads=threads)
+        theirs = sunk.graph(name).to_scipy()
+        for part in ("indptr", "indices", "data"):
+            assert np.array_equal(getattr(ours, part), getattr(theirs, part)), name

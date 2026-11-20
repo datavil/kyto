@@ -11,7 +11,10 @@
 //! - embedding components are expression leaves of cell and gene steps;
 //! - a column a sink computed records lineage and recomputes to the same values on the
 //!   store it wrote, and to the metric over the genes present after a gene filter;
-//!   without a recipe it is `KY-E303`.
+//!   without a recipe it is `KY-E303`;
+//! - a sink whose output reads one member (a handle terminal's temporary store, task
+//!   5.19) writes that member alone (and the ID columns), the same bits as the whole
+//!   sink, on 1 and 4 threads; an embedding or a graph writes no layer.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -23,12 +26,12 @@ use std::sync::Arc;
 use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, QcMetric, Tiling};
 use kyto_exec::{CellGraph, ExecuteOptions, NodeStatistics, Pipeline, Statistics, cluster};
 use kyto_plan::{
-    Cluster, ClusterMethod, Metric, NeighborSearch, Neighbors, OptimizeOptions, Output,
+    Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, OptimizeOptions, Output,
     PhysicalOptions, Plan, Sink, Umap, loadings_name, physical_plan,
 };
 use kyto_store::{
     CellBlock, FloatValues, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype,
-    open_atlas_schema, read_embedding, read_graph, read_ids, read_table,
+    open_atlas_schema, read_embedding, read_graph, read_ids, read_layer, read_table,
 };
 use polars::prelude::{DataFrame, IntoColumn, NamedFrom, Series};
 
@@ -167,6 +170,23 @@ fn statistics(plan: &Arc<Plan>) -> Statistics {
 
 fn sink(plan: &Arc<Plan>, target: Sink) -> Result<u64, kyto_error::KytoError> {
     Pipeline::new(&physical(&plan.sink(target)?), 0)?.sink(options(), false)
+}
+
+/// Sink only `reads` of `plan`'s output, as a handle terminal does (task 5.19).
+fn sink_members(plan: &Arc<Plan>, target: &Path, reads: Vec<Member>, threads: usize) -> u64 {
+    let sink = plan.sink(zarr(target)).unwrap();
+    let output = Output::members(&sink, reads).unwrap();
+    let options = PhysicalOptions {
+        max_block_cells: NonZeroU64::new(16),
+        ..PhysicalOptions::default()
+    };
+    Pipeline::new(&physical_plan(&[output], OptimizeOptions::ALL, options), 0)
+        .unwrap()
+        .sink(
+            ExecuteOptions::new(NonZeroUsize::new(threads).unwrap()),
+            false,
+        )
+        .unwrap()
 }
 
 fn zarr(path: &Path) -> Sink {
@@ -806,4 +826,97 @@ fn lineage_needs_the_gene_set_columns_unchanged_at_the_sink() {
         .with_genes([("flag".to_owned(), flag("G15"))])
         .unwrap();
     assert_eq!(lineage_and_table(&redefined, "redefined").0, None);
+}
+
+#[test]
+fn a_sink_of_one_member_writes_that_member_alone() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let plan = analysis(&store);
+    let full = work.path().join("full.kyto");
+    sink(&plan, zarr(&full)).unwrap();
+    let full_schema = open_atlas_schema(&full).unwrap();
+    let full_cells = read_table(&full, TableAxis::Cells).unwrap();
+    let members = [
+        Member::Embedding("X_pca".to_owned()),
+        Member::Embedding(loadings_name("X_pca")),
+        Member::Embedding("X_umap".to_owned()),
+        Member::Graph("connectivities".to_owned()),
+        Member::Graph("distances".to_owned()),
+        Member::Layer("log1p".to_owned()),
+        Member::CellColumn("leiden".to_owned()),
+    ];
+    for member in members {
+        for threads in [1, 4] {
+            let out = work.path().join(format!("{member}-{threads}.kyto"));
+            let written = sink_members(&plan, &out, vec![member.clone()], threads);
+            assert_eq!(written, N_CELLS as u64, "{member}");
+            let schema = open_atlas_schema(&out).unwrap();
+            let layers: Vec<&str> = schema.layers.iter().map(|l| l.name.as_str()).collect();
+            let embeddings: Vec<&str> = schema.embeddings.iter().map(|e| e.name.as_str()).collect();
+            let graphs: Vec<&str> = schema.graphs.iter().map(|g| g.name.as_str()).collect();
+            let cell_columns: Vec<&str> = schema
+                .cells
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
+            let gene_columns: Vec<&str> = schema
+                .genes
+                .columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
+            assert_eq!(gene_columns, ["gene_id"], "{member}");
+            let none: [&str; 0] = [];
+            match &member {
+                Member::Embedding(name) => {
+                    assert_eq!(embeddings, [name.as_str()]);
+                    assert_eq!(read_embedding(&out, name), read_embedding(&full, name));
+                }
+                _ => assert_eq!(embeddings, none, "{member}"),
+            }
+            match &member {
+                Member::Graph(name) => {
+                    assert_eq!(graphs, [name.as_str()]);
+                    assert_eq!(read_graph(&out, name), read_graph(&full, name));
+                }
+                _ => assert_eq!(graphs, none, "{member}"),
+            }
+            match &member {
+                Member::Layer(name) => {
+                    assert_eq!(layers, [name.as_str()]);
+                    let read = |store: &Path| {
+                        read_layer::<f32>(store, name, N_CELLS as u64, N_GENES as u64, TILING)
+                            .unwrap()
+                    };
+                    assert_eq!(read(&out), read(&full));
+                }
+                // No layer is written, and no layer directory is left.
+                _ => {
+                    assert_eq!(layers, none, "{member}");
+                    assert!(!out.join("layers").join("counts").exists(), "{member}");
+                }
+            }
+            match &member {
+                Member::CellColumn(name) => {
+                    assert_eq!(cell_columns, ["cell_id", name.as_str()]);
+                    assert_eq!(
+                        read_table(&out, TableAxis::Cells).unwrap(),
+                        full_cells.select(["cell_id", name.as_str()]).unwrap()
+                    );
+                }
+                _ => {
+                    assert_eq!(cell_columns, ["cell_id"], "{member}");
+                    assert_eq!(
+                        read_table(&out, TableAxis::Cells).unwrap(),
+                        full_cells.select(["cell_id"]).unwrap()
+                    );
+                }
+            }
+            assert_eq!(schema.n_cells, full_schema.n_cells);
+            assert_eq!(schema.n_genes, full_schema.n_genes);
+        }
+    }
 }

@@ -17,7 +17,7 @@ use kyto_core::{
     LayerSchema, ModalitySchema, TableSchema,
 };
 use kyto_error::KytoError;
-use kyto_plan::{Estimate, Plan};
+use kyto_plan::{Estimate, Member, Plan};
 use kyto_store::{CsrMatrix, FloatValues, TableAxis};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -29,12 +29,14 @@ use crate::materialize::{Materialized, materialize};
 /// The temporary store of a `collect()`ed `Atlas`, shared by the handles taken from it.
 type Collected = Option<Arc<tempfile::TempDir>>;
 
-/// The store holding `plan`'s output, for the terminal `method`, with the shared run
-/// arguments.
+/// The store holding the members `reads` of `plan`'s output (task 5.19), for the
+/// terminal `method`, with the shared run arguments.
+#[allow(clippy::too_many_arguments)]
 fn run(
     py: Python<'_>,
     method: &str,
     plan: &Arc<Plan>,
+    reads: Vec<Member>,
     collected: &Collected,
     memory_limit: Option<&Bound<'_, PyAny>>,
     threads: Option<&Bound<'_, PyAny>>,
@@ -44,6 +46,7 @@ fn run(
         py,
         method,
         plan,
+        reads,
         collected.as_ref(),
         memory_limit,
         threads,
@@ -234,10 +237,19 @@ impl PyTable {
         threads: Option<&Bound<'_, PyAny>>,
         progress: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        // Every column of the table (the ID column always comes along).
+        let reads = kyto_plan::all_members(self.handle.plan().schema())
+            .into_iter()
+            .filter(|member| match self.handle.axis() {
+                Axis::Cells => matches!(member, Member::CellColumn(_)),
+                Axis::Genes => matches!(member, Member::GeneColumn(_)),
+            })
+            .collect();
         let store = run(
             py,
             method,
             self.handle.plan(),
+            reads,
             &self.collected,
             memory_limit,
             threads,
@@ -310,8 +322,8 @@ impl PyTable {
     ///
     /// The table after every step of the plan: its rows are the cells (or genes) the
     /// plan keeps, in store order, and its columns those of ``names()``, computed
-    /// columns included. A plan with steps is run into a temporary store first (as
-    /// ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+    /// columns included. A plan with steps is run first into a temporary store that
+    /// holds only this table; a plain ``scan`` is read in place. The GIL is released
     /// while the plan runs; Ctrl-C cancels it cleanly.
     ///
     /// Parameters
@@ -473,6 +485,7 @@ impl PyMatrix {
             py,
             method,
             self.handle.plan(),
+            vec![Member::Layer(self.handle.schema().name.clone())],
             &self.collected,
             memory_limit,
             threads,
@@ -573,8 +586,8 @@ impl PyMatrix {
     /// Run the plan and return the matrix as a SciPy CSR matrix.
     ///
     /// The layer after every step of the plan: the cells and genes the plan keeps, in
-    /// store order. A plan with steps is run into a temporary store first (as
-    /// ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+    /// store order. A plan with steps is run first into a temporary store that holds
+    /// only this layer; a plain ``scan`` is read in place. The GIL is released
     /// while the plan runs; Ctrl-C cancels it cleanly.
     ///
     /// Parameters
@@ -760,6 +773,7 @@ impl PyEmbedding {
             py,
             method,
             self.handle.plan(),
+            vec![Member::Embedding(self.handle.schema().name.clone())],
             &self.collected,
             memory_limit,
             threads,
@@ -995,6 +1009,7 @@ impl PyGraph {
             py,
             method,
             self.handle.plan(),
+            vec![Member::Graph(self.handle.schema().name.clone())],
             &self.collected,
             memory_limit,
             threads,

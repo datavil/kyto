@@ -2297,8 +2297,8 @@ class Table:
 
         The table after every step of the plan: its rows are the cells (or genes) the
         plan keeps, in store order, and its columns those of ``names()``, computed
-        columns included. A plan with steps is run into a temporary store first (as
-        ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+        columns included. A plan with steps is run first into a temporary store that
+        holds only this table; a plain ``scan`` is read in place. The GIL is released
         while the plan runs; Ctrl-C cancels it cleanly.
 
         Parameters
@@ -2454,8 +2454,8 @@ class Matrix:
         """Run the plan and return the matrix as a SciPy CSR matrix.
 
         The layer after every step of the plan: the cells and genes the plan keeps, in
-        store order. A plan with steps is run into a temporary store first (as
-        ``Atlas.collect``); a plain ``scan`` is read in place. The GIL is released
+        store order. A plan with steps is run first into a temporary store that holds
+        only this layer; a plain ``scan`` is read in place. The GIL is released
         while the plan runs; Ctrl-C cancels it cleanly.
 
         Parameters

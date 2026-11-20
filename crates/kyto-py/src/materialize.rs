@@ -1,9 +1,12 @@
 //! The store a handle terminal reads (task 7.3): the plan's output, written to disk
 //! when the plan has steps.
 //!
-//! Does: give the path of a kyto store holding exactly the plan's output. A bare scan
-//! (a `SCAN`, possibly under `WITH_DEFAULT_LAYER` steps, which change no data) is its
-//! own store and is read in place; any other plan is run into a temporary store
+//! Does: give the path of a kyto store holding the plan's output: the members the
+//! terminal reads (task 5.19: an embedding, a graph, a layer or a table's columns, the
+//! ID columns always; the optimizer leaves out the steps that feed nothing else). A
+//! bare scan (a `SCAN`, possibly under `WITH_DEFAULT_LAYER` steps, which change no
+//! data) is its own store and is read in place; any other plan is run into a temporary
+//! store
 //! (`kyto-terminal-*` in the system temporary directory, as 7.2's `collect()`; GIL,
 //! progress and Ctrl-C through 5.7's `run_plan`), deleted when the [`Materialized`]
 //! is dropped. A bare scan whose store changed since the scan is `KY-E127`. Also the sink that `Atlas.collect` and `sink_zarr` share ([`sink`]).
@@ -15,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use kyto_error::KytoError;
-use kyto_plan::{Plan, Sink};
+use kyto_plan::{Member, Output, Plan, Sink};
 use pyo3::prelude::*;
 
 use crate::errors::to_py_err;
@@ -63,6 +66,26 @@ pub fn sink(
     run_plan(py, &run.physical, run.threads, progress, overwrite).map(|_| ())
 }
 
+/// [`sink`] writing only `reads` of the plan's output (a new target, never replacing
+/// one).
+#[allow(clippy::too_many_arguments)]
+fn sink_members(
+    py: Python<'_>,
+    function: &str,
+    plan: &Arc<Plan>,
+    target: Sink,
+    reads: Vec<Member>,
+    memory_limit: Option<&Bound<'_, PyAny>>,
+    threads: Option<&Bound<'_, PyAny>>,
+    progress: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let plan = plan.sink(target).map_err(|error| to_py_err(py, &error))?;
+    let output = Output::members(&plan, reads).map_err(|error| to_py_err(py, &error))?;
+    let run =
+        terminal::output_run_arguments(py, function, output, memory_limit, threads, progress)?;
+    run_plan(py, &run.physical, run.threads, progress, false).map(|_| ())
+}
+
 /// A kyto store target at `path`.
 pub fn zarr(path: &Path) -> Sink {
     Sink::Zarr {
@@ -70,18 +93,23 @@ pub fn zarr(path: &Path) -> Sink {
     }
 }
 
-/// The store holding `plan`'s output, for the terminal `function` (`Class.method`).
+/// The store holding the members `reads` of `plan`'s output, for the terminal
+/// `function` (`Class.method`).
 ///
 /// A bare scan is read in place (the run arguments are still checked: `KY-E215`);
-/// any other plan is run into a temporary store first.
+/// any other plan is run into a temporary store first, holding only `reads` (and the
+/// ID columns) of its output (task 5.19).
 ///
 /// # Errors
 /// Those of [`sink`] (`KY-E215`, `KY-E401`, `KY-E502`, `KY-E601` for a step the
-/// executor does not run yet, a `KeyboardInterrupt`), and `KY-E110` if the temporary folder cannot be created.
+/// executor does not run yet, a `KeyboardInterrupt`), `KY-E109` for a member of `reads`
+/// the plan does not output, and `KY-E110` if the temporary folder cannot be created.
+#[allow(clippy::too_many_arguments)]
 pub fn materialize(
     py: Python<'_>,
     function: &str,
     plan: &Arc<Plan>,
+    reads: Vec<Member>,
     collected: Option<&Arc<tempfile::TempDir>>,
     memory_limit: Option<&Bound<'_, PyAny>>,
     threads: Option<&Bound<'_, PyAny>>,
@@ -122,12 +150,12 @@ pub fn materialize(
             to_py_err(py, &error)
         })?;
     let store = folder.path().join("atlas.kyto");
-    sink(
+    sink_members(
         py,
         function,
         plan,
         zarr(&store),
-        false,
+        reads,
         memory_limit,
         threads,
         progress,

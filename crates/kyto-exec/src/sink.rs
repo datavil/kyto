@@ -2,8 +2,11 @@
 //! `.h5ad` file.
 //!
 //! Does: [`SinkSpec`] is what a plan ending in `sink_zarr`/`sink_h5ad` writes, fixed
-//! when the pipeline is lowered: every layer the plan carries (name order, the dtype
-//! its schema declares), the cell and gene table columns of its schema in schema order
+//! when the pipeline is lowered: the members its output reads (every member for a
+//! `sink_zarr`, `sink_h5ad` or `collect()`; only the one a handle terminal reads for its
+//! temporary store, task 5.19, so the optimizer leaves out what feeds nothing else): the
+//! layers (name order, the dtype its schema declares), the cell and gene table columns
+//! of its schema in schema order, the ID columns always
 //! (stored columns at the kept cells, `with_cells`/`with_genes` columns added or
 //! replacing stored ones), with lineage carried for stored derived columns still valid,
 //! and stale ones (those a read would refuse with `KY-E301`, task 3.8) dropped.
@@ -18,7 +21,7 @@
 //! after the last block (while the tables are written, or during the `.h5ad` export)
 //! still leaves no target. Once the target is renamed into place the sink has
 //! finished: a later cancel changes nothing.
-//! Embeddings and graphs (task 5.11): every one the plan carries is written, from the
+//! Embeddings and graphs (task 5.11): every one the output reads is written, from the
 //! scanned store or from the statistics of the node that computed it (`pca`'s
 //! embedding and loadings, `umap`'s layout, `neighbors`' graphs), at the rows of the
 //! cells written (in their order) and of the genes present; a graph keeps the edges
@@ -38,7 +41,7 @@ use std::sync::Arc;
 
 use kyto_core::{Axis, CellExpr, ColumnDtype, ExprNode, GeneExpr, Lineage, Source};
 use kyto_error::KytoError;
-use kyto_plan::{Columns, Plan, Sink, Transform};
+use kyto_plan::{Columns, Member, Members, Plan, Sink, Transform, all_members};
 use kyto_store::{
     CellBlock, Embedding, Graph, LayerSpec, LayerWriteOptions, SinkH5adOptions, StoreWriter,
     TableAxis, Tiling, ValueDtype, read_table, sink_h5ad_checked,
@@ -84,18 +87,23 @@ pub(crate) struct SinkSpec {
 }
 
 impl SinkSpec {
-    /// The spec of the sink node `plan`.
+    /// The spec of the sink node `plan`, writing the members `reads` (its output's: a
+    /// handle terminal reads one, task 5.19). The ID columns are always written.
     ///
     /// # Errors
     /// None today; the `Result` keeps room for checks of the plan.
-    pub(crate) fn new(plan: &Plan) -> Result<Self, KytoError> {
+    pub(crate) fn new(plan: &Plan, reads: &Members) -> Result<Self, KytoError> {
         let Plan::Sink(node) = plan else {
             unreachable!("SinkSpec::new is called on sink nodes only")
         };
         let schema = plan.output_schema().atlas();
+        // A table column outside every member (the ID column) always comes along.
+        let members = all_members(schema);
+        let written = |member: Member| reads.contains(&member) || !members.contains(&member);
         let mut layers: Vec<LayerSpec> = schema
             .layers
             .iter()
+            .filter(|layer| written(Member::Layer(layer.name.clone())))
             .map(|layer| LayerSpec {
                 name: layer.name.clone(),
                 dtype: ValueDtype::from(layer.dtype),
@@ -107,8 +115,10 @@ impl SinkSpec {
             .default_layer()
             .filter(|name| layers.iter().any(|layer| layer.name == *name))
             .map(str::to_owned);
-        let cells = written_columns(plan, Axis::Cells, &layers);
-        let genes = written_columns(plan, Axis::Genes, &layers);
+        let mut cells = written_columns(plan, Axis::Cells, &layers);
+        cells.retain(|column| written(Member::column(Axis::Cells, column.name.clone())));
+        let mut genes = written_columns(plan, Axis::Genes, &layers);
+        genes.retain(|column| written(Member::column(Axis::Genes, column.name.clone())));
         Ok(Self {
             target: node.params().clone(),
             tiling: schema.tiling,
@@ -118,11 +128,13 @@ impl SinkSpec {
             embeddings: schema
                 .embeddings
                 .iter()
+                .filter(|embedding| written(Member::Embedding(embedding.name.clone())))
                 .map(|embedding| (embedding.name.clone(), None))
                 .collect(),
             graphs: schema
                 .graphs
                 .iter()
+                .filter(|graph| written(Member::Graph(graph.name.clone())))
                 .map(|graph| (graph.name.clone(), None))
                 .collect(),
             plan: serde_json::from_str(&plan.to_json()).ok(),
@@ -165,7 +177,17 @@ fn written_columns(plan: &Plan, axis: Axis, layers: &[LayerSpec]) -> Vec<Written
                     if stale {
                         return None;
                     }
-                    column.lineage.clone()
+                    // A layer the plan carries but this sink leaves out (a handle
+                    // terminal's store, task 5.19): no lineage naming a missing layer.
+                    column.lineage.clone().filter(|lineage| {
+                        layers.iter().any(|layer| layer.name == lineage.layer)
+                            || !plan
+                                .output_schema()
+                                .atlas()
+                                .layers
+                                .iter()
+                                .any(|layer| layer.name == lineage.layer)
+                    })
                 }
             };
             Some(WrittenColumn {

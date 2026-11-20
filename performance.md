@@ -414,6 +414,64 @@ running PCA alone end to end once at 10 threads, 3 alternating runs per build.
   threads kyto is faster (0.43x scanpy's time at 10). At 10 threads the time after the PCA is
   still 22% of the end-to-end time, mostly zstd on layers nobody reads (5.19).
 
+## Handle terminals write only what they read (task 5.19)
+
+Measured Nov 20, 2026, on the task 5.19 tree (base `bc43f8d`, 5.17; release extensions built
+by `uv sync`), same machine, data and scripts as 5.12 to 5.17 above. **Not a quiet machine:**
+a game client ran throughout; the 1-minute load average was 4 to 8 during the timed runs
+(stated per table). Base and 5.19 ran alternating, as in 5.17: each a fresh process running
+PCA alone (the `isolated` plan of `pca_timing.py`) with a warm-up per thread count, then
+`embedding("X_pca").to_numpy()` and `_execute` (`pca_timing.py`'s `stage`) once each; the
+median of 5 such processes per build. **Peak memory:** `ru_maxrss` of a fresh process running
+PCA alone end to end once, 5 alternating runs per build and thread count.
+
+- **Change:** a handle terminal's temporary store holds only the member it reads (an
+  embedding, a graph, a layer, or one table's columns) and the ID columns. Before, it held
+  the plan's whole output. The optimizer then leaves out every step that feeds nothing the
+  terminal reads, so after the PCA's passes, PCA alone's output stream reads no layer.
+  `sink_zarr`, `sink_h5ad`, `collect()` and `to_anndata` still write everything.
+- **Layers written** to `embedding("X_pca").to_numpy()`'s temporary store on the 50k data
+  (found by walking `TMPDIR` from the progress callback): base `counts`, `normalized`, `log1p`
+  (54 zstd shards); 5.19 none.
+- **"After the PCA" is now below zero.** End to end minus `_execute` was the time the handle
+  terminal added after the PCA's work. `_execute` still runs the whole output, and its
+  stream after the PCA decodes the store's three layers. The terminal's run no longer does
+  that work, so its end-to-end time is now shorter than `_execute`. The end-to-end time is
+  the honest comparison.
+
+| Seconds (median of 5), base 5.17 / 5.19, load 4.1 to 7.9 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto PCA alone, end to end | 2.409 / **1.879** | 1.056 / **0.769** | 0.837 / **0.585** |
+| kyto PCA stage (`_execute`, the whole output) | 2.281 / 2.306 | 0.883 / 0.902 | 0.652 / 0.664 |
+| end to end minus stage | 0.120 / **-0.427** | 0.176 / **-0.121** | 0.188 / **-0.079** |
+| scanpy `pp.pca` (re-run, load 4.8; matrix in memory) | 2.056 | 2.048 | 2.049 |
+
+| Peak memory, MB (5 runs, median) | base 5.17 | 5.19 |
+|---|---|---|
+| kyto PCA alone, end to end, 10 threads | 451 to 461 (**455**) | 322 to 327 (**326**) |
+| kyto PCA alone, end to end, 1 thread | 377 to 387 (**379**) | 276 to 282 (**279**) |
+
+`thread_scaling.py` (median of 5, one run per build, base then 5.19; load 3.8 to 6.6):
+
+| Seconds, base 5.17 / 5.19 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| preprocessing (`_execute`) | 2.894 / 2.890 | 1.058 / 1.074 | 0.820 / 0.819 |
+| QC through PCA (`embedding().to_numpy()`) | 5.983 / **5.588** | 2.384 / **2.142** | 1.837 / **1.621** |
+| PCA alone (`embedding().to_numpy()`) | 2.403 / **1.875** | 1.065 / **0.776** | 0.840 / **0.586** |
+
+- **Bit identity (R11):** the PCA-alone embedding, and QC through PCA's embedding and HVG
+  gene table, are bit-identical between base and 5.19 at 1, 4 and 10 threads, and across
+  thread counts (`thread_scaling.py` on both builds). Against scanpy (`pca_scanpy.py`): worst
+  relative difference of the first 10 columns 2.9e-5, largest angle 1.7e-5 rad, as before.
+- **Where kyto wins and loses:** PCA alone, end to end, is now faster than scanpy's `pp.pca`
+  on 1 thread too (0.91x scanpy's time), and takes 0.29x at 10 threads. Here scanpy has the
+  matrix in memory, while kyto decodes the stored layer. The PCA stage itself still takes
+  1.12x scanpy's time on 1 thread. Preprocessing on 1 thread is still 2.9x scanpy's (5.16).
+  PCA alone scales 3.2x from 1 to 10 threads end to end; the held read and the passes
+  (the stage) are what is left. The sink's writes still run on rayon's global pool, not the
+  run's (task 5.20); with no layer to write, PCA alone's sink now writes only the tables and
+  the embedding.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

@@ -5,7 +5,9 @@
 //! embedding, a graph), list every member of a schema, and say which members a logical
 //! node reads (its input layer, the leaves of its expressions, the lineage layer of a
 //! recomputed column) and which it writes (`into`, the HVG columns, the PCA loadings,
-//! the graph pair). A sink reads everything it writes out.
+//! the graph pair). A sink writes out what its output reads (every member for
+//! [`crate::Output::all`], a handle terminal's own for [`crate::Output::members`], task
+//! 5.19), so the sink node itself reads nothing more.
 //! Does not: say anything about axes (a filter or a selection reads no member but
 //! changes every member's rows; the rules ask [`crate::LogicalNode::changes_axis`]),
 //! or check that a member exists (the builders did, R6).
@@ -134,7 +136,12 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
     };
     let input = input.output_schema();
     match plan {
-        Plan::Scan(_) | Plan::WithDefaultLayer(_) | Plan::SelectGenes(_) | Plan::TakeCells(_) => {}
+        // A sink writes what its output reads (task 5.19), nothing of its own.
+        Plan::Scan(_)
+        | Plan::WithDefaultLayer(_)
+        | Plan::SelectGenes(_)
+        | Plan::TakeCells(_)
+        | Plan::Sink(_) => {}
         Plan::Filter(node) => match node.params().predicate() {
             Predicate::Cells(predicate) => expr_reads(predicate, input, &mut reads),
             Predicate::Genes(predicate) => expr_reads(predicate, input, &mut reads),
@@ -188,7 +195,6 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
         Plan::Umap(node) => {
             reads.insert(Member::Graph(node.params().graph.clone()));
         }
-        Plan::Sink(_) => reads = all_members(plan.schema()),
     }
     reads
 }

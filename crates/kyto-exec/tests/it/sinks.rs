@@ -9,6 +9,8 @@
 //! (3.8), and recorded for a column computed from one layer (5.11); an error or a cancel (`KY-E503`, 5.7), midway or after the last block while
 //! the target is finished, leaves no target and no temporary; a target that exists
 //! (without `overwrite`) or is the scanned store is refused before anything is read.
+//! A sink of one table column (a handle terminal's store, task 5.19) writes no layer and
+//! drops a carried lineage whose layer it leaves out.
 //! The scanpy parity of a sunk filter -> QC -> normalize/log1p plan is
 //! `filter_qc_parity.rs`.
 
@@ -24,7 +26,7 @@ use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Lineage, Literal, T
 use kyto_error::KytoError;
 use kyto_exec::{ExecuteOptions, Pipeline, RunControl};
 use kyto_plan::{
-    OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, Sink, physical_plan,
+    Member, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, Sink, physical_plan,
 };
 use kyto_store::{
     CellBlock, ColumnDtype, ConvertOptions, CsrMatrix, LayerSpec, LayerWriteOptions, StoreWriter,
@@ -723,4 +725,41 @@ fn a_recomputed_column_without_a_recipe_is_refused_before_reading() {
     assert_eq!(error.code(), "KY-E303", "{error}");
     assert!(error.to_string().contains("records no plan"), "{error}");
     assert_eq!(entries(work.path()), ["atlas.kyto"]);
+}
+
+#[test]
+fn a_sink_of_one_column_drops_lineage_naming_a_layer_it_leaves_out() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let plan = cell_steps(&scan(&store));
+    let target = work.path().join("column.kyto");
+    let sink_plan = plan
+        .sink(Sink::Zarr {
+            path: target.display().to_string(),
+        })
+        .unwrap();
+    let output = Output::members(&sink_plan, [Member::CellColumn("n_genes".to_owned())]).unwrap();
+    let physical_options = PhysicalOptions {
+        max_block_cells: NonZeroU64::new(BLOCK_CELLS),
+        ..PhysicalOptions::default()
+    };
+    Pipeline::new(
+        &physical_plan(&[output], OptimizeOptions::ALL, physical_options),
+        0,
+    )
+    .unwrap()
+    .sink(options(2, &RunControl::new()), false)
+    .unwrap();
+    let schema = open_atlas_schema(&target).unwrap();
+    assert!(schema.layers.is_empty());
+    let names: Vec<&str> = schema
+        .cells
+        .columns
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(names, ["cell_id", "n_genes"]);
+    // The whole sink keeps it (`sink_zarr_writes_the_stream`); here `counts` is not written.
+    assert_eq!(schema.cells.columns[1].lineage, None);
 }

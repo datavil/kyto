@@ -267,7 +267,7 @@ impl Pipeline {
                     }
                 }
                 Operation::Node(logical) if matches!(**logical, Plan::Sink(_)) => {
-                    sink = Some(SinkSpec::new(logical)?);
+                    sink = Some(SinkSpec::new(logical, output_entry.reads())?);
                 }
                 Operation::Node(logical) => {
                     if let Some(stage) = lower_node(logical, index, passes)? {
