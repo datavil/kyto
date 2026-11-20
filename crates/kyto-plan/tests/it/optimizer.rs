@@ -915,7 +915,7 @@ fn output(plan: &Arc<Plan>, mask: Option<u64>) -> Output {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(2048))]
+    #![proptest_config(crate::property_cases::config(2048))]
 
     /// Two outputs sharing a prefix (the second built on the first, or rebuilt from a
     /// fresh scan), random rules on: every output sees what the logical plan gives.

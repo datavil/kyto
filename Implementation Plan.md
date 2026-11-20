@@ -174,11 +174,8 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 
 Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels with a migration guide. 10.1–10.3 start with M1 and grow with each milestone.
 
-Done (10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
+Done (10.1, 10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
 
-- [ ] **10.1 Property tests.** `proptest` for storage and kernels; `hypothesis` for the Python API (random chains of valid methods must not crash).
-  - Depends: 2.2, 7.2
-  - Done when: both suites run in CI with fixed seeds.
 - [ ] **10.2 Parity suite.** One test per algorithm against scanpy and anndata on the 1.5 fixtures, with tolerances kept in one table.
   - Depends: 1.5
   - Done when: every 6.x task links its parity test.

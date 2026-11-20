@@ -130,6 +130,8 @@ fn schema() -> impl Strategy<Value = AtlasSchema> {
 }
 
 proptest! {
+    #![proptest_config(crate::property_cases::config(256))]
+
     #[test]
     fn json_round_trip_is_exact(schema in schema()) {
         for text in [

@@ -25,6 +25,8 @@ pub(crate) enum MomentKind {
 /// The moments of one group's cells, per gene, over the stored non-zero values.
 #[derive(Debug, Clone)]
 pub(crate) struct GroupMoments {
+    /// Kept, not read from `second`: with no genes both kinds have empty vectors.
+    kind: MomentKind,
     n_cells: u64,
     nonzero: Vec<u64>,
     /// Welford's running mean, or the sum.
@@ -36,6 +38,7 @@ pub(crate) struct GroupMoments {
 impl GroupMoments {
     pub(crate) fn new(kind: MomentKind, n_genes: usize) -> Self {
         Self {
+            kind,
             n_cells: 0,
             nonzero: vec![0; n_genes],
             first: vec![0.0; n_genes],
@@ -60,7 +63,7 @@ impl GroupMoments {
     /// `eliminate_zeros`).
     pub(crate) fn add_cell(&mut self, entries: impl Iterator<Item = (usize, f64)>) {
         self.n_cells += 1;
-        let welford = !self.second.is_empty();
+        let welford = self.kind == MomentKind::Welford;
         for (gene, value) in entries {
             if value == 0.0 {
                 continue;
@@ -85,11 +88,11 @@ impl GroupMoments {
     pub(crate) fn mean_var(&self) -> (Vec<f64>, Option<Vec<f64>>) {
         let n_genes = self.nonzero.len();
         if self.n_cells == 0 {
-            let variances = (!self.second.is_empty()).then(|| vec![0.0; n_genes]);
+            let variances = (self.kind == MomentKind::Welford).then(|| vec![0.0; n_genes]);
             return (vec![0.0; n_genes], variances);
         }
         let n = self.n_cells as f64;
-        if self.second.is_empty() {
+        if self.kind == MomentKind::Sums {
             return (self.first.iter().map(|sum| sum / n).collect(), None);
         }
         let mut means = vec![0.0; n_genes];
@@ -292,6 +295,18 @@ mod tests {
         sums.add_cell([(0, 2.0)].into_iter());
         assert_eq!(sums.mean_var(), (vec![1.5, 0.0], None));
         assert_eq!(sums.nonzero(), &[2, 0]);
+    }
+
+    /// Task 10.1: with no genes the t-test's moments still have (empty) variances; the
+    /// kind was read from the empty squared deviations, and `t_test` panicked.
+    #[test]
+    fn welford_without_genes_has_variances() {
+        let mut moments = GroupMoments::new(MomentKind::Welford, 0);
+        moments.add_cell(std::iter::empty());
+        assert_eq!(moments.mean_var(), (Vec::new(), Some(Vec::new())));
+        let statistics = GroupStatistics::new(&[&moments, &moments]);
+        assert_eq!(statistics.variances, Some(vec![Vec::new(), Vec::new()]));
+        assert_eq!(statistics.rest_variances(), vec![Vec::<f64>::new()]);
     }
 
     #[test]

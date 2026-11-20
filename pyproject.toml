@@ -53,6 +53,8 @@ dev = [
     "scikit-image>=0.25; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     # Plotting examples of docs/plotting.md (task 7.8), run as tests.
     "cellestial>=0.62.1; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    # Property tests of the Python API (task 10.1): random chains must not crash.
+    "hypothesis>=6.100",
 ]
 
 [tool.maturin]

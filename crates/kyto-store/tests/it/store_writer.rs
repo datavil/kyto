@@ -254,7 +254,7 @@ fn entries(dir: &Path) -> Vec<String> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+    #![proptest_config(crate::property_cases::config(48))]
 
     /// Done when (part): any batching of rows reads back exactly, zeros dropped.
     #[test]

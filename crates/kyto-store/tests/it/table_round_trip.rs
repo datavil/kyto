@@ -321,7 +321,7 @@ fn id_and_strings() -> impl Strategy<Value = (Vec<String>, Vec<Option<String>>)>
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    #![proptest_config(crate::property_cases::config(64))]
 
     #[test]
     fn random_string_tables_round_trip((ids, values) in id_and_strings()) {

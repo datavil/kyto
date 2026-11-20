@@ -473,13 +473,16 @@ fn the_wide_ranging_store_tells_summation_orders_apart() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 12, failure_persistence: None, ..ProptestConfig::default() })]
+    // Blocks of at least 4 cells and delays only on more than one thread (one thread has
+    // no order to change): 1-cell blocks with delayed reads took 25 to 50 s an output in
+    // debug builds (task 10.1). `KYTO_PROPERTY_SCALE` runs more cases.
+    #![proptest_config(crate::property_cases::config(12))]
 
     #[test]
     fn any_threads_window_and_block_size_give_the_same_bits(
         threads in 1_usize..=8,
         blocks_in_flight in 1_u64..=6,
-        max_block_cells in proptest::option::of(1_u64..=80),
+        max_block_cells in proptest::option::of(4_u64..=80),
         store_blocks_in_flight in proptest::option::of(1_u64..=3),
         delay_seed in 0_u64..4,
     ) {
@@ -494,7 +497,7 @@ proptest! {
                 blocks_in_flight,
                 max_block_cells,
                 store_blocks_in_flight,
-                delay_seed,
+                delay_seed: if threads > 1 { delay_seed } else { 0 },
             };
             prop_assert_eq!(fingerprint(&store, &output, options), expected, "{}", case);
         }

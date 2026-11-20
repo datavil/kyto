@@ -142,7 +142,7 @@ fn embedding(n: usize, width: usize, seed: u64) -> Vec<f32> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+    #![proptest_config(crate::property_cases::config(128))]
 
     #[test]
     fn exact_equals_brute_force(

@@ -630,7 +630,7 @@ fn chain(steps: Vec<Step>) -> Arc<Plan> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(crate::property_cases::config(256))]
 
     /// Random chains, random optimizer rules: the executor gives the reference's
     /// result, the same bits on 1 and 4 threads and any block size.

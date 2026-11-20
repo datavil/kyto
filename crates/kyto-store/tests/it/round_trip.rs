@@ -124,12 +124,7 @@ fn u32_values() -> impl Strategy<Value = u32> + Clone {
 }
 
 proptest! {
-    // No failure file: integration tests have no lib.rs for proptest to place it by.
-    #![proptest_config(ProptestConfig {
-        cases: 256,
-        failure_persistence: None,
-        ..ProptestConfig::default()
-    })]
+    #![proptest_config(crate::property_cases::config(256))]
 
     #[test]
     fn f32_layer_round_trip_is_exact((dense, tiling, options) in dense(f32_values())) {

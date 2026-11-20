@@ -248,6 +248,8 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(crate::property_cases::config(256))]
+
         #[test]
         fn the_shape_depends_only_on_the_number_of_leaves(n in 1_usize..300) {
             let leaves: Vec<String> = (0..n).map(|leaf| leaf.to_string()).collect();

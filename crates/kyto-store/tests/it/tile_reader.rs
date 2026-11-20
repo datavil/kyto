@@ -755,7 +755,7 @@ fn subset(n: u64, mask: &[bool]) -> Vec<u64> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+    #![proptest_config(crate::property_cases::config(48))]
 
     /// Any canonical selection gives the rows and columns of the whole layer.
     #[test]

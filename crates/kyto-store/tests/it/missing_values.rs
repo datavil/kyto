@@ -202,6 +202,8 @@ fn bad_requests_are_coded_errors() {
 }
 
 proptest! {
+    #![proptest_config(crate::property_cases::config(256))]
+
     /// Any block densifies to its entries at their positions and 0 elsewhere, and each
     /// gene's values equal that column of the dense block.
     #[test]

@@ -96,6 +96,8 @@ fn feature_leaves_an_unresolved_leaf() {
 }
 
 proptest! {
+    #![proptest_config(crate::property_cases::config(256))]
+
     /// Any name that parses renders back to the text it was parsed from.
     #[test]
     fn display_gives_the_parsed_text(text in "\\PC{0,12}(:\\PC{0,12}){0,2}") {

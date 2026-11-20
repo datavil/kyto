@@ -294,14 +294,14 @@ git working tree changed. Change a command here and CI follows; never copy one i
 uv sync                                   # dev env; builds and installs the extension into .venv
 uv sync --reinstall-package kyto          # force an extension rebuild (never mix in `maturin develop`)
 uv run cargo build --workspace --locked   # build all crates (uv run: PyO3 sees .venv python)
-uv run cargo test --workspace --locked    # Rust tests (Linux: libpython on LD_LIBRARY_PATH, see below)
+uv run cargo test --workspace --locked    # Rust tests, proptests with a fixed seed (Linux: libpython on LD_LIBRARY_PATH, see below)
 uv run python scripts/remote_store_tests.py   # tile reader suite on S3 in MinIO: native `minio` on PATH, else docker or podman (prints SKIPPED without any)
 uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lint
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run python scripts/error_registry.py --check   # errors.toml: generated code in sync, no unregistered error (R10)
-uv run pytest                             # Python tests (API, parity, property)
+uv run pytest                             # Python tests (API, parity, hypothesis properties with a fixed seed)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
 uv run pre-commit install                 # run the hooks on every git commit (once)
 uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before every commit
@@ -324,7 +324,15 @@ uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy
 uv run cargo test --release -p kyto-exec --test it -- thread_scaling:: --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
 uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (criterion, timings)
 uv run cargo test --release -p kyto-exec --test it -- kernels:: --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
+KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run cargo test --workspace   # 10.1 long proptest run: 20x the cases, other seed
+KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run pytest tests/test_properties.py   # 10.1 long hypothesis run
 ```
+
+- **Property tests (10.1):** every proptest takes its configuration from
+  `tests/property_cases.rs` (`crate::property_cases::config(cases)`: fixed seed, no
+  failure file) and the hypothesis suite is `tests/test_properties.py`; both read
+  `KYTO_PROPERTY_SCALE` (multiplies the cases) and `KYTO_PROPERTY_SEED` (draws other
+  cases). A new proptest uses `config`, never `ProptestConfig` directly.
 
 - **Bench:** only 5.3's kernel bench above (criterion, in `crates/kyto-exec/benches`). The
   suites against scanpy (`criterion`, `pytest-benchmark`) arrive with task 10.3, which adds

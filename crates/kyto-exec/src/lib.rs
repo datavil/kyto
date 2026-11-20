@@ -64,6 +64,10 @@ mod pca;
 mod pca_dense;
 mod pipeline;
 mod pipeline_block;
+/// Fixed seed and case count of the property tests (task 10.1), shared by every crate.
+#[cfg(test)]
+#[path = "../../../tests/property_cases.rs"]
+mod property_cases;
 mod qc;
 mod recipe;
 mod reduction;

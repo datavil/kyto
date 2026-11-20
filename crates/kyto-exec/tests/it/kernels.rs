@@ -168,7 +168,7 @@ fn factors() -> impl Strategy<Value = Vec<f64>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1024))]
+    #![proptest_config(crate::property_cases::config(1024))]
 
     #[test]
     fn f32_kernels_equal_their_scalar_version(rows in rows_of(any_f32()), factors in factors()) {

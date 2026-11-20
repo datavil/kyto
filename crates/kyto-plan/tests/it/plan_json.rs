@@ -1170,7 +1170,7 @@ fn apply(plan: &Arc<Plan>, step: Step) -> Result<Arc<Plan>, KytoError> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(crate::property_cases::config(256))]
 
     #[test]
     fn random_chains_round_trip_exactly(start in 0..4_usize, steps in proptest::collection::vec(step(), 0..16)) {
