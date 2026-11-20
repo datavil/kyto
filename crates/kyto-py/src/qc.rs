@@ -10,6 +10,7 @@
 
 use kyto_core::{CellExpr, GeneExpr, GeneQcMetric, QcMetric};
 use pyo3::prelude::*;
+use pyo3_stub_gen::derive::*;
 
 use crate::atlas::wrong_type;
 use crate::errors::to_py_err;
@@ -54,8 +55,10 @@ fn gene_set(py: Python<'_>, function: &str, genes: &Bound<'_, PyAny>) -> PyResul
 /// --------
 /// >>> total_counts(layer="counts") > 500
 /// total_counts(layer='counts') > 500
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn total_counts(py: Python<'_>, layer: Option<&str>) -> PyResult<PyCellExpr> {
     qc(py, layer, QcMetric::TotalCounts)
 }
@@ -80,8 +83,10 @@ pub fn total_counts(py: Python<'_>, layer: Option<&str>) -> PyResult<PyCellExpr>
 /// --------
 /// >>> genes_detected(layer="counts") >= 200
 /// genes_detected(layer='counts') >= 200
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn genes_detected(py: Python<'_>, layer: Option<&str>) -> PyResult<PyCellExpr> {
     qc(py, layer, QcMetric::GenesDetected)
 }
@@ -118,11 +123,16 @@ pub fn genes_detected(py: Python<'_>, layer: Option<&str>) -> PyResult<PyCellExp
 /// --------
 /// >>> total_counts_in(gene_column("symbol").str.starts_with("MT-"))
 /// total_counts_in(gene_column('symbol').str.starts_with('MT-'))
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (genes, /, *, layer = None))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn total_counts_in(
     py: Python<'_>,
-    genes: &Bound<'_, PyAny>,
+    #[gen_stub(override_type(type_repr = "_GeneExprBoolean", imports = ()))] genes: &Bound<
+        '_,
+        PyAny,
+    >,
     layer: Option<&str>,
 ) -> PyResult<PyCellExpr> {
     let genes = gene_set(py, "total_counts_in", genes)?;
@@ -163,11 +173,16 @@ pub fn total_counts_in(
 /// >>> mitochondrial = gene_column("symbol").str.starts_with("MT-")
 /// >>> percent_counts_in(mitochondrial, layer="counts") < 5
 /// percent_counts_in(gene_column('symbol').str.starts_with('MT-'), layer='counts') < 5
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (genes, /, *, layer = None))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn percent_counts_in(
     py: Python<'_>,
-    genes: &Bound<'_, PyAny>,
+    #[gen_stub(override_type(type_repr = "_GeneExprBoolean", imports = ()))] genes: &Bound<
+        '_,
+        PyAny,
+    >,
     layer: Option<&str>,
 ) -> PyResult<PyCellExpr> {
     let genes = gene_set(py, "percent_counts_in", genes)?;
@@ -201,8 +216,10 @@ fn gene_qc(layer: Option<&str>, metric: GeneQcMetric) -> PyGeneExpr {
 /// --------
 /// >>> cells_detected(layer="counts") >= 3
 /// cells_detected(layer='counts') >= 3
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn cells_detected(layer: Option<&str>) -> PyGeneExpr {
     gene_qc(layer, GeneQcMetric::CellsDetected)
 }
@@ -229,8 +246,10 @@ pub fn cells_detected(layer: Option<&str>) -> PyGeneExpr {
 /// --------
 /// >>> gene_total_counts(layer="counts").log1p()
 /// gene_total_counts(layer='counts').log1p()
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn gene_total_counts(layer: Option<&str>) -> PyGeneExpr {
     gene_qc(layer, GeneQcMetric::TotalCounts)
 }
@@ -258,8 +277,10 @@ pub fn gene_total_counts(layer: Option<&str>) -> PyGeneExpr {
 /// --------
 /// >>> gene_mean_counts(layer="counts") > 0.1
 /// gene_mean_counts(layer='counts') > 0.1
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn gene_mean_counts(layer: Option<&str>) -> PyGeneExpr {
     gene_qc(layer, GeneQcMetric::MeanCounts)
 }
@@ -286,8 +307,10 @@ pub fn gene_mean_counts(layer: Option<&str>) -> PyGeneExpr {
 /// --------
 /// >>> percent_dropout(layer="counts") < 99
 /// percent_dropout(layer='counts') < 99
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (*, layer = None))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn percent_dropout(layer: Option<&str>) -> PyGeneExpr {
     gene_qc(layer, GeneQcMetric::PercentDropout)
 }

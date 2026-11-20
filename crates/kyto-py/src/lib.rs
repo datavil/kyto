@@ -27,6 +27,15 @@ pub mod to_anndata;
 /// The package version, taken from the workspace `Cargo.toml` (the single source).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+// Stub entries no `#[gen_stub_*]` annotation makes (task 7.6): the version, and the
+// expression classes written by hand in `crates/kyto-py/stubs/expressions.pyi`, so the
+// stub's `__all__` lists every public name of the module.
+pyo3_stub_gen::module_variable!("kyto._kyto", "__version__", &str);
+pyo3_stub_gen::export_verbatim!("kyto._kyto", "CellExpr");
+pyo3_stub_gen::export_verbatim!("kyto._kyto", "GeneExpr");
+pyo3_stub_gen::export_verbatim!("kyto._kyto", "CellStringNamespace");
+pyo3_stub_gen::export_verbatim!("kyto._kyto", "GeneStringNamespace");
+
 /// The compiled extension module, imported by Python as `kyto._kyto`.
 #[pymodule]
 fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -67,6 +76,18 @@ fn _kyto(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(errors::error_example_text, module)?)?;
     module.add_function(wrap_pyfunction!(handoff::handoff_example, module)?)?;
     Ok(())
+}
+
+/// What `pyo3-stub-gen` gathered from the `#[gen_stub_*]` annotations, read by the
+/// `stub_gen` binary that writes `python/kyto/_kyto.pyi` (task 7.6). It must live in this
+/// crate: the annotations register through `inventory` in the library.
+///
+/// # Errors
+///
+/// When the repository's `pyproject.toml` cannot be read or parsed.
+pub fn stub_info() -> pyo3_stub_gen::Result<pyo3_stub_gen::StubInfo> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    pyo3_stub_gen::StubInfo::from_pyproject_toml(root.join("pyproject.toml"))
 }
 
 #[cfg(test)]

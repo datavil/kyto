@@ -4,8 +4,9 @@
 off), so `atlas.rs` holds thin methods that build a node through `Atlas::derive` (which
 also carries `collect()`'s temporary store) and leave parsing to `chain.rs` and the
 shared terminal arguments (`memory_limit`, `threads`, `progress`) to `terminal.rs`. A
-new chain method is one method there, its stub in `_kyto.pyi` (same docstring), and a
-line in `tests/test_chain.py`'s method list (its doctests run from both sources).
+new chain method is one method there (its stub is generated from it since 7.6:
+`pyo3_stub_gen.md`), and a line in `tests/test_chain.py`'s method list (its doctests run
+from both sources).
 
 **Works:** a result that is a frame, not a plan member (6.10's DE), stays lazy through
 `pl.defer(function, schema=...)` with a `PyCFunction::new_closure` that runs the

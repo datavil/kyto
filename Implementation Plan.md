@@ -118,11 +118,11 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see 
 
 Goal: a small, chainable surface where every method has one return type and a typed stub.
 
-Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.7, 7.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
+Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
 
-- [ ] **7.6 Stubs.** `.pyi` files generated with `pyo3-stub-gen`, NumPy docstrings, `@overload` on `filter` for `CellExpr` and `GeneExpr`.
-  - Depends: 7.2, 7.3
-  - Done when: `pyright --strict` passes on all doc examples; CI fails if stubs drift from bindings.
+- [ ] **7.9 SciPy types in the docstring examples.** Add `scipy-stubs` to the dev group, fix the errors it shows (8 in `tests/fixtures/make_reference.py`, which hands anndata objects to `csr_matrix`), and drop the `to_scipy` entries of `_UNTYPED_THIRD_PARTY` in `tests/test_doc_examples_typecheck.py`, so those examples type-check without exemption. (added by 7.6, Nov 20, 2026)
+  - Depends: 7.6
+  - Done when: `tests/test_doc_examples_typecheck.py` passes with only `Atlas.to_anndata` exempt (anndata ships no stubs), and `uv run pyright` passes.
 
 ## 8. Agent-friendliness
 

@@ -301,6 +301,7 @@ cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run python scripts/error_registry.py --check   # errors.toml: generated code in sync, no unregistered error (R10)
+uv run python scripts/stubs.py --check    # python/kyto/_kyto.pyi is what the bindings generate (R12; drop --check to regenerate)
 uv run pytest                             # Python tests (API, parity, hypothesis properties with a fixed seed)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
 uv run pre-commit install                 # run the hooks on every git commit (once)

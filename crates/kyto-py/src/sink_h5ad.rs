@@ -10,10 +10,12 @@ use std::path::PathBuf;
 
 use kyto_store::SinkH5adOptions;
 use pyo3::prelude::*;
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 
 /// Export the store at `store` as an `.h5ad` file at `target`.
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (store, target, /, *, x_layer, overwrite))]
 pub fn sink_h5ad(

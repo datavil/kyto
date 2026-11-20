@@ -26,6 +26,7 @@ use kyto_plan::{
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
 use pyo3::{IntoPyObjectExt, PyAny};
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 use crate::expr::{PyCellExpr, PyGeneExpr};
@@ -49,6 +50,7 @@ use crate::{chain, handoff, rank_genes, terminal};
 /// SCAN "..." (2 cells x 3 genes)
 /// >>> atlas
 /// <Atlas plan: 1 node · cells: 2 · genes: 3 · layers: counts>
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Atlas")]
 pub struct Atlas {
     plan: Arc<Plan>,
@@ -90,6 +92,7 @@ impl Atlas {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl Atlas {
     /// Set the layer that short gene names refer to.
@@ -170,7 +173,15 @@ impl Atlas {
     /// >>> atlas.resolve(feature("meta:cell_id").str.starts_with("AAA"))
     /// cell_column('cell_id').str.starts_with('AAA')
     #[pyo3(signature = (expression, /))]
-    fn resolve(&self, py: Python<'_>, expression: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    #[gen_stub(override_return_type(type_repr = "GeneExpr[_D]", imports = ()))]
+    fn resolve(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "GeneExpr[_D]", imports = ()))] expression: &Bound<
+            '_,
+            PyAny,
+        >,
+    ) -> PyResult<Py<PyAny>> {
         if let Ok(expression) = expression.cast::<PyCellExpr>() {
             let resolved = self
                 .plan
@@ -231,7 +242,14 @@ impl Atlas {
     /// FILTER_CELLS total_counts(layer='counts') >= 6
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (predicate, /))]
-    fn filter(&self, py: Python<'_>, predicate: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn filter(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "_GeneExprBoolean", imports = ()))] predicate: &Bound<
+            '_,
+            PyAny,
+        >,
+    ) -> PyResult<Self> {
         let plan = if let Ok(predicate) = predicate.cast::<PyCellExpr>() {
             self.plan.filter_cells(predicate.get().core())
         } else if let Ok(predicate) = predicate.cast::<PyGeneExpr>() {
@@ -273,7 +291,12 @@ impl Atlas {
     /// SELECT_GENES ['ENSG03', 'ENSG01']
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (gene_ids, /))]
-    fn select_genes(&self, py: Python<'_>, gene_ids: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn select_genes(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "collections.abc.Sequence[builtins.str]", imports = ("collections.abc",)))]
+        gene_ids: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
         let gene_ids = chain::strings(py, "select_genes", "gene_ids", gene_ids)?;
         self.derive(py, self.plan.select_genes(gene_ids))
     }
@@ -308,7 +331,12 @@ impl Atlas {
     /// TAKE_CELLS ['AAAG-1']
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (cell_ids, /))]
-    fn take_cells(&self, py: Python<'_>, cell_ids: &Bound<'_, PyAny>) -> PyResult<Self> {
+    fn take_cells(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "collections.abc.Sequence[builtins.str]", imports = ("collections.abc",)))]
+        cell_ids: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
         let cell_ids = chain::strings(py, "take_cells", "cell_ids", cell_ids)?;
         self.derive(py, self.plan.take_cells(cell_ids))
     }
@@ -344,7 +372,13 @@ impl Atlas {
     /// WITH_CELLS "n_counts" = total_counts(layer='counts')
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (**columns))]
-    fn with_cells(&self, py: Python<'_>, columns: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn with_cells(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "CellExpr[ExprDtype]", imports = ()))] columns: Option<
+            &Bound<'_, PyDict>,
+        >,
+    ) -> PyResult<Self> {
         let mut named = Vec::new();
         for (name, value) in columns.into_iter().flatten() {
             let Ok(expression) = value.cast::<PyCellExpr>() else {
@@ -390,7 +424,13 @@ impl Atlas {
     /// WITH_GENES "is_cd3e" = gene_column('symbol') == 'CD3E'
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (**columns))]
-    fn with_genes(&self, py: Python<'_>, columns: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn with_genes(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "GeneExpr[ExprDtype]", imports = ()))] columns: Option<
+            &Bound<'_, PyDict>,
+        >,
+    ) -> PyResult<Self> {
         let mut named = Vec::new();
         for (name, value) in columns.into_iter().flatten() {
             let Ok(expression) = value.cast::<PyGeneExpr>() else {
@@ -428,7 +468,8 @@ impl Atlas {
     ///
     /// Examples
     /// --------
-    /// >>> scan(store).with_embedding("X_scvi", None)
+    /// >>> import numpy as np
+    /// >>> scan(store).with_embedding("X_scvi", np.zeros((2, 10), np.float32))
     /// Traceback (most recent call last):
     /// ...
     /// kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not implemented yet...
@@ -437,6 +478,7 @@ impl Atlas {
         &self,
         py: Python<'_>,
         name: &str,
+        #[gen_stub(override_type(type_repr = "numpy.typing.NDArray[numpy.float32 | numpy.float64]", imports = ("numpy.typing", "numpy")))]
         values: &Bound<'_, PyAny>,
     ) -> PyResult<Self> {
         let _ = (name, values);
@@ -488,6 +530,7 @@ impl Atlas {
     fn normalize_total(
         &self,
         py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         target_sum: Option<&Bound<'_, PyAny>>,
         layer: Option<&str>,
         into: &str,
@@ -574,6 +617,7 @@ impl Atlas {
         layer: Option<&str>,
         into: &str,
         zero_center: bool,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         max_value: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let max_value = chain::optional_float(py, "scale", "max_value", max_value)?;
@@ -628,7 +672,9 @@ impl Atlas {
         &self,
         py: Python<'_>,
         layer: Option<&str>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"seurat\", \"cell_ranger\", \"seurat_v3\"]", imports = ("typing",)))]
         flavor: &str,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_top_genes: Option<&Bound<'_, PyAny>>,
         batch_key: Option<&str>,
     ) -> PyResult<Self> {
@@ -704,8 +750,13 @@ impl Atlas {
         py: Python<'_>,
         layer: Option<&str>,
         into: &str,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_components: Option<&Bound<'_, PyAny>>,
-        seed: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
+        #[gen_stub(override_type(type_repr = "_GeneExprBoolean | None", imports = ()))]
         genes: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let n_components =
@@ -787,11 +838,17 @@ impl Atlas {
         &self,
         py: Python<'_>,
         embedding: &str,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_neighbors: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_components: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"euclidean\", \"cosine\"]", imports = ("typing",)))]
         metric: &str,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"exact\", \"approximate\"]", imports = ("typing",)))]
         search: &str,
-        seed: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))] seed: Option<
+            &Bound<'_, PyAny>,
+        >,
         into: Option<&str>,
     ) -> PyResult<Self> {
         let n_neighbors =
@@ -855,8 +912,12 @@ impl Atlas {
         &self,
         py: Python<'_>,
         graph: &str,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         resolution: Option<&Bound<'_, PyAny>>,
-        seed: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
         into: &str,
     ) -> PyResult<Self> {
         self.cluster(py, ClusterMethod::Leiden, graph, resolution, seed, into)
@@ -901,8 +962,12 @@ impl Atlas {
         &self,
         py: Python<'_>,
         graph: &str,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         resolution: Option<&Bound<'_, PyAny>>,
-        seed: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
         into: &str,
     ) -> PyResult<Self> {
         self.cluster(py, ClusterMethod::Louvain, graph, resolution, seed, into)
@@ -977,15 +1042,28 @@ impl Atlas {
         py: Python<'_>,
         graph: &str,
         into: &str,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_components: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         min_dist: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         spread: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_epochs: Option<&Bound<'_, PyAny>>,
-        alpha: Option<&Bound<'_, PyAny>>,
-        gamma: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))] alpha: Option<
+            &Bound<'_, PyAny>,
+        >,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))] gamma: Option<
+            &Bound<'_, PyAny>,
+        >,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         negative_sample_rate: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"spectral\", \"random\"]", imports = ("typing",)))]
         init: &str,
-        seed: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
     ) -> PyResult<Self> {
         let defaults = Umap::default();
         let float = |parameter: &str, value, default: f64| {
@@ -1096,13 +1174,22 @@ impl Atlas {
         py: Python<'_>,
         layer: Option<&str>,
         batch_key: Option<&str>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         sim_doublet_ratio: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         expected_doublet_rate: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         stdev_doublet_rate: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_prin_comps: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_neighbors: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         threshold: Option<&Bound<'_, PyAny>>,
-        seed: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
         into: Option<(String, String)>,
     ) -> PyResult<Self> {
         let defaults = Scrublet::default();
@@ -1220,17 +1307,23 @@ impl Atlas {
         threads = None
     ))]
     #[allow(clippy::too_many_arguments)]
+    #[gen_stub(override_return_type(type_repr = "polars.LazyFrame", imports = ("polars",)))]
     fn rank_genes_groups<'py>(
         &self,
         py: Python<'py>,
         groupby: &str,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"t-test\", \"wilcoxon\"]", imports = ("typing",)))]
         method: &str,
         layer: Option<String>,
+        #[gen_stub(override_type(type_repr = "collections.abc.Sequence[builtins.str] | None", imports = ("collections.abc",)))]
         groups: Option<&Bound<'_, PyAny>>,
         reference: Option<String>,
-        n_genes: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))] n_genes: Option<
+            &Bound<'_, PyAny>,
+        >,
         rankby_abs: bool,
         tie_correct: bool,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"benjamini-hochberg\", \"bonferroni\"]", imports = ("typing",)))]
         correction: &str,
         threads: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -1290,7 +1383,12 @@ impl Atlas {
     /// >>> scan(store).on(device="cpu").estimate()["device"]
     /// 'cpu'
     #[pyo3(signature = (*, device))]
-    fn on(&self, py: Python<'_>, device: &str) -> PyResult<Self> {
+    fn on(
+        &self,
+        py: Python<'_>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"cpu\", \"auto\", \"cuda\", \"wgpu\", \"metal\"]", imports = ("typing",)))]
+        device: &str,
+    ) -> PyResult<Self> {
         self.derive(py, chain::device(device).map(|()| Arc::clone(&self.plan)))
     }
 
@@ -1644,6 +1742,7 @@ impl Atlas {
     /// >>> list(pca.to_anndata().obsm)
     /// ['X_pca']
     #[pyo3(signature = (*, var_names = None, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "anndata.AnnData", imports = ("anndata",)))]
     fn to_anndata<'py>(
         &self,
         py: Python<'py>,
@@ -1871,9 +1970,11 @@ impl Atlas {
     /// >>> atlas.pull(gene_column("symbol")).to_list()
     /// ['CD3E', 'CD4', 'MS4A1']
     #[pyo3(signature = (feature, /, *, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.Series", imports = ("polars",)))]
     fn pull<'py>(
         &self,
         py: Python<'py>,
+        #[gen_stub(override_type(type_repr = "builtins.str | CellExpr[ExprDtype] | GeneExpr[ExprDtype]", imports = ()))]
         feature: &Bound<'py, PyAny>,
         memory_limit: Option<&Bound<'py, PyAny>>,
         threads: Option<&Bound<'py, PyAny>>,
@@ -1956,13 +2057,18 @@ impl Atlas {
     /// >>> frame.rows()
     /// [('AAAC-1', 5, 6.0), ('AAAG-1', 0, 7.0)]
     #[pyo3(signature = (*features, memory_limit = None, threads = None, progress = None, **named))]
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn select<'py>(
         &self,
         py: Python<'py>,
-        features: &Bound<'py, PyTuple>,
+        #[gen_stub(override_type(type_repr = "builtins.str", imports = ()))] features: &Bound<
+            'py,
+            PyTuple,
+        >,
         memory_limit: Option<&Bound<'py, PyAny>>,
         threads: Option<&Bound<'py, PyAny>>,
         progress: Option<&Bound<'py, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.str | CellExpr[ExprDtype]", imports = ()))]
         named: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let mut columns = Vec::new();
@@ -2050,11 +2156,14 @@ impl Atlas {
         genes, /, *, layer = None, by = "id", memory_limit = None, threads = None, progress = None
     ))]
     #[allow(clippy::too_many_arguments)]
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn pull_genes<'py>(
         &self,
         py: Python<'py>,
+        #[gen_stub(override_type(type_repr = "collections.abc.Sequence[builtins.str]", imports = ("collections.abc",)))]
         genes: &Bound<'py, PyAny>,
         layer: Option<&str>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"id\", \"symbol\"]", imports = ("typing",)))]
         by: &str,
         memory_limit: Option<&Bound<'py, PyAny>>,
         threads: Option<&Bound<'py, PyAny>>,
@@ -2115,6 +2224,7 @@ impl Atlas {
     /// ['meta:cell_id', 'counts:ENSG01', 'counts:ENSG02', 'counts:ENSG03']
     /// >>> frame.row(1)
     /// ('counts:ENSG01', 'gene', 'CD3E')
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn features<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let frame = feature_access::features(&self.plan).map_err(|error| {
             let error = KytoError::CorruptTable {
@@ -2161,6 +2271,7 @@ impl Atlas {
     /// >>> kept = scan(store).filter(cell_column("cell_id") != "AAAC-1")
     /// >>> kept.schema()["n_cells"] is None
     /// True
+    #[gen_stub(override_return_type(type_repr = "AtlasSchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         crate::handles::atlas_schema_dict(py, &self.plan)
     }
@@ -2210,10 +2321,13 @@ impl Atlas {
     /// ...
     /// kyto.errors.PlanError: KY-E219: peek() reads metadata only, but this plan's cell table needs 'layer:counts', which 'with_cells' reads...
     #[pyo3(signature = (n = None, /))]
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn peek<'py>(
         &self,
         py: Python<'py>,
-        n: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))] n: Option<
+            &Bound<'_, PyAny>,
+        >,
     ) -> PyResult<Bound<'py, PyAny>> {
         let n = chain::optional_integer(py, "peek", "n", n, 0)?.unwrap_or(5);
         feature_access::peek(py, &self.plan, usize::try_from(n).unwrap_or(usize::MAX))
@@ -2255,6 +2369,7 @@ impl Atlas {
     /// >>> scan(store).filter(total_counts(layer="counts") > 6).cell_ids().to_list()
     /// ['AAAG-1']
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.Series", imports = ("polars",)))]
     fn cell_ids<'py>(
         &self,
         py: Python<'py>,
@@ -2305,6 +2420,7 @@ impl Atlas {
     /// >>> scan(store).select_genes(["ENSG03", "ENSG01"]).gene_ids().to_list()
     /// ['ENSG03', 'ENSG01']
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.Series", imports = ("polars",)))]
     fn gene_ids<'py>(
         &self,
         py: Python<'py>,
@@ -2451,6 +2567,7 @@ impl Atlas {
     /// --------
     /// >>> scan(store).metadata()["source"]["kind"]
     /// 'mtx'
+    #[gen_stub(override_return_type(type_repr = "dict[builtins.str, typing.Any]", imports = ("typing",)))]
     fn metadata<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let text = feature_access::provenance(py, &self.plan)?;
         py.import("json")?.call_method1("loads", (text,))
@@ -2552,9 +2669,11 @@ impl Atlas {
     /// >>> scan(store).explain(format="json", threads=10)["optimized"]["nodes"][0]["block_cells"]
     /// 820
     #[pyo3(signature = (*, format = "text", threads = None))]
+    #[gen_stub(override_return_type(type_repr = "builtins.str", imports = ()))]
     fn explain<'py>(
         &self,
         py: Python<'py>,
+        #[gen_stub(override_type(type_repr = "typing.Literal[\"text\"]", imports = ("typing",)))]
         format: &str,
         threads: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -2620,6 +2739,7 @@ impl Atlas {
     /// {'passes': 1, 'bytes_read': 16428, 'peak_memory': 1048592, 'held_memory': 0,
     ///  'passes_saved': 0, 'device': 'cpu'}
     #[pyo3(signature = (*, threads = None))]
+    #[gen_stub(override_return_type(type_repr = "CostEstimate", imports = ()))]
     fn estimate<'py>(
         &self,
         py: Python<'py>,
@@ -2709,6 +2829,29 @@ impl Atlas {
     /// Nothing is read or computed.
     fn __repr__(&self) -> String {
         format!("<Atlas {}>", self.plan.summary())
+    }
+}
+
+// The overloads the Rust signatures above cannot say (task 7.6): `pyo3-stub-gen` writes
+// these beside the generated `filter`, `resolve` and `explain`, all as `@overload`. A
+// `CellExpr` predicate filters cells, a `GeneExpr` genes; `resolve` keeps the axis and
+// dtype kind; `explain(format="json")` returns a dict.
+pyo3_stub_gen::inventory::submit! {
+    gen_methods_from_python! {
+        r#"
+        import builtins
+        import typing
+
+        class Atlas:
+            @typing.overload
+            def filter(self, predicate: _CellExprBoolean, /) -> Atlas: ...
+            @typing.overload
+            def resolve(self, expression: CellExpr[_D], /) -> CellExpr[_D]: ...
+            @typing.overload
+            def explain(
+                self, *, format: typing.Literal["json"], threads: builtins.int | None = None
+            ) -> Explanation: ...
+        "#
     }
 }
 
@@ -2820,6 +2963,7 @@ pub(crate) fn wrong_type(operation: &str, accepted: &str, value: &Bound<'_, PyAn
 /// Traceback (most recent call last):
 ///     ...
 /// kyto.errors.PlanError: KY-E218: the plan JSON has version 2, but this kyto reads only version 1...
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (text, /))]
 pub fn from_json(py: Python<'_>, text: &str) -> PyResult<Atlas> {
@@ -2880,6 +3024,7 @@ pub fn from_json(py: Python<'_>, text: &str) -> PyResult<Atlas> {
 /// Traceback (most recent call last):
 ///     ...
 /// kyto.errors.CorruptStoreError: KY-E116: ...
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (store, /))]
 pub fn scan(py: Python<'_>, store: PathBuf) -> PyResult<Atlas> {

@@ -29,6 +29,7 @@ use polars::prelude::{
 use polars_arrow::ffi::export_iterator;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyDict};
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 
@@ -269,7 +270,9 @@ pub fn edges(graph: kyto_store::Graph) -> Result<DataFrame, KytoError> {
 /// Test hook: a frame built in Rust (`x` `Float64`, `n` `UInt32`, `s` `String`, 1000
 /// rows) handed to Polars as the terminals do, with the addresses of the frame's value
 /// buffers of `x` and `n`, so a test can check that Python sees the same memory.
+#[gen_stub_pyfunction]
 #[pyfunction]
+#[gen_stub(override_return_type(type_repr = "tuple[polars.DataFrame, builtins.int, builtins.int]", imports = ("polars",)))]
 pub fn handoff_example(py: Python<'_>) -> PyResult<(Bound<'_, PyAny>, usize, usize)> {
     let values: Vec<f64> = (0..1000).map(f64::from).collect();
     let integers: Vec<u32> = (0..1000).collect();

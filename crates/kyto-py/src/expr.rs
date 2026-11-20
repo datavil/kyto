@@ -22,6 +22,7 @@ use kyto_error::KytoError;
 use pyo3::basic::CompareOp;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString, PyType};
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 
@@ -141,6 +142,8 @@ macro_rules! expr_class {
     (
         $(#[$class_doc:meta])*
         class $class:ident ($name:literal, $axis:ty, $core:ty);
+        // The constructor of a column of this axis, for the examples.
+        column $column:literal;
         $(#[$namespace_doc:meta])*
         namespace $namespace:ident ($namespace_name:literal);
     ) => {
@@ -371,7 +374,7 @@ macro_rules! expr_class {
                 dtype_class(py, self.expr.dtype())
             }
 
-            /// String functions.
+            /// String functions; only on ``String`` (or ``Unknown``) expressions.
             #[getter]
             fn str(&self) -> $namespace {
                 $namespace { expr: self.expr.clone() }
@@ -416,12 +419,18 @@ macro_rules! expr_class {
             ///
             /// Returns
             /// -------
-            /// The same expression class, of dtype ``Boolean``. Nothing is read.
+            #[doc = concat!(" ", $name, "[Boolean]")]
+            ///     A new expression. Nothing is read.
             ///
             /// Raises
             /// ------
             /// ExpressionError
             ///     ``KY-E205``: the expression is not a string expression.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("symbol").str.starts_with("MT-")"#)]
+            #[doc = concat!(" ", $column, "('symbol').str.starts_with('MT-')")]
             fn starts_with(&self, py: Python<'_>, prefix: &str) -> PyResult<$class> {
                 self.call(py, StrFunction::StartsWith(prefix.to_owned()))
             }
@@ -435,12 +444,18 @@ macro_rules! expr_class {
             ///
             /// Returns
             /// -------
-            /// The same expression class, of dtype ``Boolean``. Nothing is read.
+            #[doc = concat!(" ", $name, "[Boolean]")]
+            ///     A new expression. Nothing is read.
             ///
             /// Raises
             /// ------
             /// ExpressionError
             ///     ``KY-E205``: the expression is not a string expression.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("name").str.ends_with("-1")"#)]
+            #[doc = concat!(" ", $column, "('name').str.ends_with('-1')")]
             fn ends_with(&self, py: Python<'_>, suffix: &str) -> PyResult<$class> {
                 self.call(py, StrFunction::EndsWith(suffix.to_owned()))
             }
@@ -451,9 +466,11 @@ macro_rules! expr_class {
 expr_class! {
     /// An expression with one value per cell.
     ///
-    /// Built with ``cell_column``, ``gene_expression``, ``cell_embedding`` or
-    /// ``feature`` and combined with operators; it records what to compute and reads
-    /// nothing. Combining it with a ``GeneExpr`` raises
+    /// Built with ``cell_column``, ``gene_expression``, ``cell_embedding`` or ``feature``
+    /// and combined with operators; it records what to compute and reads nothing. The type
+    /// parameter is the dtype kind (``kyto.dtypes``): ``.str`` exists only on ``String``
+    /// (and ``Unknown``) expressions, ``&``, ``|`` and ``~`` only on ``Boolean`` ones,
+    /// arithmetic only on ``Numeric`` ones. Combining it with a ``GeneExpr`` raises
     /// ``AxisError`` (``KY-E202``, R5).
     ///
     /// Examples
@@ -461,6 +478,7 @@ expr_class! {
     /// >>> cell_column("n_genes") > 200
     /// cell_column('n_genes') > 200
     class PyCellExpr ("CellExpr", kyto_core::CellAxis, CellExpr);
+    column "cell_column";
     /// String functions of a ``CellExpr`` (``CellExpr.str``).
     ///
     /// Examples
@@ -473,15 +491,19 @@ expr_class! {
 expr_class! {
     /// An expression with one value per gene.
     ///
-    /// Built with ``gene_column``, ``cell_profile`` or ``gene_embedding`` and combined
-    /// with operators; it records what to compute and reads nothing. Combining it with a ``CellExpr`` raises
-    /// ``AxisError`` (``KY-E202``, R5).
+    /// Built with ``gene_column``, ``cell_profile`` or ``gene_embedding`` and combined with
+    /// operators; it records what to compute and reads nothing. The type parameter is the
+    /// dtype kind (``kyto.dtypes``): ``.str`` exists only on ``String`` (and ``Unknown``)
+    /// expressions, ``&``, ``|`` and ``~`` only on ``Boolean`` ones, arithmetic only on
+    /// ``Numeric`` ones. Combining it with a ``CellExpr`` raises ``AxisError``
+    /// (``KY-E202``, R5).
     ///
     /// Examples
     /// --------
     /// >>> gene_column("symbol").str.starts_with("MT-")
     /// gene_column('symbol').str.starts_with('MT-')
     class PyGeneExpr ("GeneExpr", kyto_core::GeneAxis, GeneExpr);
+    column "gene_column";
     /// String functions of a ``GeneExpr`` (``GeneExpr.str``).
     ///
     /// Examples
@@ -489,6 +511,22 @@ expr_class! {
     /// >>> gene_column("symbol").str.starts_with("MT-")
     /// gene_column('symbol').str.starts_with('MT-')
     namespace PyGeneStringNamespace ("GeneStringNamespace");
+}
+
+// The expression classes are generic in the stub (`CellExpr[Boolean]`), which
+// `pyo3-stub-gen` cannot express: they are written by hand in
+// `crates/kyto-py/stubs/expressions.pyi` (task 7.6). A function returning one names the
+// dtype kind with `override_return_type`; this is the fallback.
+impl pyo3_stub_gen::PyStubType for PyCellExpr {
+    fn type_output() -> pyo3_stub_gen::TypeInfo {
+        pyo3_stub_gen::TypeInfo::unqualified("CellExpr[Unknown]")
+    }
+}
+
+impl pyo3_stub_gen::PyStubType for PyGeneExpr {
+    fn type_output() -> pyo3_stub_gen::TypeInfo {
+        pyo3_stub_gen::TypeInfo::unqualified("GeneExpr[Unknown]")
+    }
 }
 
 impl MixCheck<kyto_core::CellAxis> for PyCellExpr {
@@ -522,6 +560,7 @@ impl MixCheck<kyto_core::GeneAxis> for PyGeneExpr {
 /// --------
 /// >>> cell_column("n_genes") > 200
 /// cell_column('n_genes') > 200
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (name, /))]
 pub fn cell_column(name: &str) -> PyCellExpr {
@@ -547,6 +586,7 @@ pub fn cell_column(name: &str) -> PyCellExpr {
 /// --------
 /// >>> gene_column("symbol").str.starts_with("MT-")
 /// gene_column('symbol').str.starts_with('MT-')
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (name, /))]
 pub fn gene_column(name: &str) -> PyGeneExpr {
@@ -625,12 +665,15 @@ fn component(constructor: &str, name: &str, value: &Bound<'_, PyAny>) -> Result<
 /// <class 'kyto.dtypes.Numeric'>
 /// >>> gene_expression("CD3E", by="symbol")
 /// gene_expression('CD3E', by='symbol')
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (gene_id, /, *, layer = None, by = "id"))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn gene_expression(
     py: Python<'_>,
     gene_id: &str,
     layer: Option<&str>,
+    #[gen_stub(override_type(type_repr = "typing.Literal[\"id\", \"symbol\"]", imports = ("typing",)))]
     by: &str,
 ) -> PyResult<PyCellExpr> {
     let layer = layer.map(str::to_owned);
@@ -669,8 +712,10 @@ pub fn gene_expression(
 /// --------
 /// >>> cell_profile("AAACATACAACCAC-1", layer="counts") > 0
 /// cell_profile('AAACATACAACCAC-1', layer='counts') > 0
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (cell_id, /, *, layer = None))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn cell_profile(cell_id: &str, layer: Option<&str>) -> PyGeneExpr {
     PyGeneExpr {
         expr: GeneExpr::profile(layer.map(str::to_owned), cell_id),
@@ -701,12 +746,17 @@ pub fn cell_profile(cell_id: &str, layer: Option<&str>) -> PyGeneExpr {
 /// --------
 /// >>> cell_embedding("pca", 0) * 2
 /// cell_embedding('pca', 0) * 2
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (name, component, /))]
+#[gen_stub(override_return_type(type_repr = "CellExpr[Numeric]", imports = ()))]
 pub fn cell_embedding(
     py: Python<'_>,
     name: &str,
-    component: &Bound<'_, PyAny>,
+    #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] component: &Bound<
+        '_,
+        PyAny,
+    >,
 ) -> PyResult<PyCellExpr> {
     let component = self::component("cell_embedding", name, component)
         .map_err(|error| to_py_err(py, &error))?;
@@ -739,12 +789,17 @@ pub fn cell_embedding(
 /// --------
 /// >>> gene_embedding("loadings", 1) > 0
 /// gene_embedding('loadings', 1) > 0
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (name, component, /))]
+#[gen_stub(override_return_type(type_repr = "GeneExpr[Numeric]", imports = ()))]
 pub fn gene_embedding(
     py: Python<'_>,
     name: &str,
-    component: &Bound<'_, PyAny>,
+    #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] component: &Bound<
+        '_,
+        PyAny,
+    >,
 ) -> PyResult<PyGeneExpr> {
     let component = self::component("gene_embedding", name, component)
         .map_err(|error| to_py_err(py, &error))?;
@@ -786,6 +841,7 @@ pub fn gene_embedding(
 /// Traceback (most recent call last):
 ///     ...
 /// kyto.errors.ResolutionError: KY-E208: invalid feature name 'log1p:'...
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (name, /))]
 pub fn feature(py: Python<'_>, name: &str) -> PyResult<PyCellExpr> {

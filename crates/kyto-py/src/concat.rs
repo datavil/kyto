@@ -9,10 +9,12 @@ use std::path::PathBuf;
 
 use kyto_store::{ConcatOptions, ConvertOptions, Join, OnDuplicateIds};
 use pyo3::prelude::*;
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 
 /// Combine `sources` into a new kyto store at `target`.
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (sources, target, /, *, label, keys, join, layer, on_duplicate_ids, overwrite))]
 #[allow(clippy::too_many_arguments)]

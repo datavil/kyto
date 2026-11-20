@@ -21,6 +21,7 @@ use kyto_plan::{Estimate, Member, Plan};
 use kyto_store::{CsrMatrix, FloatValues, TableAxis};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use pyo3_stub_gen::derive::*;
 
 use crate::errors::to_py_err;
 use crate::handoff;
@@ -215,6 +216,7 @@ fn estimate_dict<'py>(py: Python<'py>, estimate: Estimate) -> PyResult<Bound<'py
 /// >>> atlas = scan(store)
 /// >>> atlas.cells
 /// <Table cells: 2 rows x 1 columns>
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Table")]
 pub struct PyTable {
     handle: kyto_plan::Table,
@@ -266,6 +268,7 @@ impl PyTable {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyTable {
     /// The column names, ID column first, in stored order.
@@ -296,6 +299,7 @@ impl PyTable {
     /// --------
     /// >>> scan(store).cells.schema()
     /// {'columns': [{'name': 'cell_id', 'dtype': 'String'}]}
+    #[gen_stub(override_return_type(type_repr = "TableSchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         table_dict(py, self.handle.schema())
     }
@@ -314,6 +318,7 @@ impl PyTable {
     /// --------
     /// >>> scan(store).genes.estimate()
     /// {'n_rows': 3, 'n_columns': 3, 'nnz': None, 'dense_bytes': None}
+    #[gen_stub(override_return_type(type_repr = "Estimate", imports = ()))]
     fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         estimate_dict(py, self.handle.estimate())
     }
@@ -361,6 +366,7 @@ impl PyTable {
     /// >>> scan(store).genes.to_polars()["gene_id"].to_list()
     /// ['ENSG01', 'ENSG02', 'ENSG03']
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn to_polars<'py>(
         &self,
         py: Python<'py>,
@@ -410,6 +416,7 @@ impl PyTable {
     /// >>> scan(store).cells.lazy().select("cell_id").collect()["cell_id"].to_list()
     /// ['AAAC-1', 'AAAG-1']
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.LazyFrame", imports = ("polars",)))]
     fn lazy<'py>(
         &self,
         py: Python<'py>,
@@ -450,6 +457,7 @@ fn count(value: Option<u64>) -> String {
 /// --------
 /// >>> scan(store).layer("counts")
 /// <Matrix 'counts': 2 cells x 3 genes, nnz 3, uint32>
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Matrix")]
 pub struct PyMatrix {
     handle: kyto_plan::Matrix,
@@ -530,6 +538,7 @@ impl PyMatrix {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyMatrix {
     /// The column names: the gene IDs, in stored order.
@@ -561,6 +570,7 @@ impl PyMatrix {
     /// --------
     /// >>> scan(store).layer("counts").schema()
     /// {'name': 'counts', 'dtype': 'uint32', 'nnz': 3}
+    #[gen_stub(override_return_type(type_repr = "LayerSchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         layer_dict(py, self.handle.schema())
     }
@@ -579,6 +589,7 @@ impl PyMatrix {
     /// --------
     /// >>> scan(store).layer("counts").estimate()
     /// {'n_rows': 2, 'n_columns': 3, 'nnz': 3, 'dense_bytes': 24}
+    #[gen_stub(override_return_type(type_repr = "Estimate", imports = ()))]
     fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         estimate_dict(py, self.handle.estimate())
     }
@@ -627,6 +638,7 @@ impl PyMatrix {
     /// >>> matrix.shape, matrix.dtype, matrix.nnz
     /// ((2, 3), dtype('uint32'), 3)
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "scipy.sparse.csr_matrix", imports = ("scipy.sparse",)))]
     fn to_scipy<'py>(
         &self,
         py: Python<'py>,
@@ -691,10 +703,14 @@ impl PyMatrix {
     /// ...
     /// kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
     #[pyo3(signature = (*, max_bytes, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "numpy.typing.NDArray[numpy.float32 | numpy.uint32]", imports = ("numpy.typing", "numpy")))]
     fn to_dense<'py>(
         &self,
         py: Python<'py>,
-        max_bytes: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] max_bytes: &Bound<
+            '_,
+            PyAny,
+        >,
         memory_limit: Option<&Bound<'_, PyAny>>,
         threads: Option<&Bound<'_, PyAny>>,
         progress: Option<&Bound<'_, PyAny>>,
@@ -747,6 +763,7 @@ impl PyMatrix {
 /// --------
 /// >>> scan(store_with_members).embedding("X_pca")
 /// <Embedding 'X_pca': 2 cells x 2 components, float32>
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Embedding")]
 pub struct PyEmbedding {
     handle: kyto_plan::Embedding,
@@ -791,6 +808,7 @@ impl PyEmbedding {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyEmbedding {
     /// The column names: ``<embedding>:<component>`` for each component, from 0.
@@ -822,6 +840,7 @@ impl PyEmbedding {
     /// --------
     /// >>> scan(store_with_members).embedding("X_pca").schema()
     /// {'name': 'X_pca', 'axis': 'cells', 'width': 2, 'dtype': 'float32'}
+    #[gen_stub(override_return_type(type_repr = "EmbeddingSchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         embedding_dict(py, self.handle.schema())
     }
@@ -839,6 +858,7 @@ impl PyEmbedding {
     /// --------
     /// >>> scan(store_with_members).embedding("X_pca").estimate()
     /// {'n_rows': 2, 'n_columns': 2, 'nnz': None, 'dense_bytes': 16}
+    #[gen_stub(override_return_type(type_repr = "Estimate", imports = ()))]
     fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         estimate_dict(py, self.handle.estimate())
     }
@@ -884,6 +904,7 @@ impl PyEmbedding {
     /// >>> array.shape, array.dtype
     /// ((2, 1), dtype('float32'))
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "numpy.typing.NDArray[numpy.float32 | numpy.float64]", imports = ("numpy.typing", "numpy")))]
     fn to_numpy<'py>(
         &self,
         py: Python<'py>,
@@ -983,6 +1004,7 @@ impl PyEmbedding {
 /// --------
 /// >>> scan(store_with_members).graph("connectivities")
 /// <Graph 'connectivities': 2 x 2 cells, nnz 3, float32>
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Graph")]
 pub struct PyGraph {
     handle: kyto_plan::Graph,
@@ -1021,6 +1043,7 @@ impl PyGraph {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyGraph {
     /// The column names of its edge list (``to_edges()``).
@@ -1050,6 +1073,7 @@ impl PyGraph {
     /// --------
     /// >>> scan(store_with_members).graph("connectivities").schema()
     /// {'name': 'connectivities', 'axis': 'cells', 'dtype': 'float32', 'nnz': 3}
+    #[gen_stub(override_return_type(type_repr = "GraphSchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         graph_dict(py, self.handle.schema())
     }
@@ -1067,6 +1091,7 @@ impl PyGraph {
     /// --------
     /// >>> scan(store_with_members).graph("connectivities").estimate()
     /// {'n_rows': 2, 'n_columns': 2, 'nnz': 3, 'dense_bytes': 16}
+    #[gen_stub(override_return_type(type_repr = "Estimate", imports = ()))]
     fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         estimate_dict(py, self.handle.estimate())
     }
@@ -1109,6 +1134,7 @@ impl PyGraph {
     /// >>> graph.shape, graph.dtype
     /// ((2, 2), dtype('float32'))
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "scipy.sparse.csr_matrix", imports = ("scipy.sparse",)))]
     fn to_scipy<'py>(
         &self,
         py: Python<'py>,
@@ -1186,6 +1212,7 @@ impl PyGraph {
     /// >>> atlas.graph("distances").to_edges().columns
     /// ['source', 'target', 'weight']
     #[pyo3(signature = (*, memory_limit = None, threads = None, progress = None))]
+    #[gen_stub(override_return_type(type_repr = "polars.DataFrame", imports = ("polars",)))]
     fn to_edges<'py>(
         &self,
         py: Python<'py>,
@@ -1226,6 +1253,7 @@ impl PyGraph {
 /// Traceback (most recent call last):
 /// ...
 /// kyto.errors.MissingMemberError: KY-E109: no modality named 'adt' in the store at '...'...
+#[gen_stub_pyclass(module = "kyto._kyto")]
 #[pyclass(frozen, module = "kyto", name = "Modality")]
 pub struct PyModality {
     handle: kyto_plan::Modality,
@@ -1238,6 +1266,7 @@ impl PyModality {
     }
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyModality {
     /// The names of its layers.
@@ -1257,6 +1286,7 @@ impl PyModality {
     /// dict
     ///     A new dict with ``name``, ``n_features``, ``features`` (a table entry) and
     ///     ``layers`` (layer entries). Changing it changes nothing else.
+    #[gen_stub(override_return_type(type_repr = "ModalitySchema", imports = ()))]
     fn schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         modality_dict(py, self.handle.schema())
     }
@@ -1268,6 +1298,7 @@ impl PyModality {
     /// dict
     ///     A new dict: ``n_rows`` (cells), ``n_columns`` (features), ``nnz`` and
     ///     ``dense_bytes`` (``None``).
+    #[gen_stub(override_return_type(type_repr = "Estimate", imports = ()))]
     fn estimate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         estimate_dict(py, self.handle.estimate())
     }

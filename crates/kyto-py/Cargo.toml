@@ -42,3 +42,6 @@ numpy = "0.30.0"
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 # The temporary store `Atlas.collect()` writes (task 7.2).
 tempfile = "3.27.0"
+# Generates `python/kyto/_kyto.pyi` from these bindings (task 7.6, `src/bin/stub_gen.rs`,
+# run by `scripts/stubs.py`). `infer_signature` writes real defaults (`= None`), not `...`.
+pyo3-stub-gen = { version = "0.23.3", default-features = false, features = ["infer_signature"] }

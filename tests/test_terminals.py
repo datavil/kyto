@@ -33,15 +33,16 @@ from kyto.qc import total_counts, total_counts_in
 COUNTS = np.array([[5, 0, 1], [0, 7, 0]], dtype=np.uint32)
 
 # The return type each terminal declares in the stub (R3: one type).
+# Spelled as the generated stub writes them, fully qualified (task 7.6).
 STUB_RETURNS = {
-    ("Table", "to_polars"): "pl.DataFrame",
-    ("Table", "lazy"): "pl.LazyFrame",
+    ("Table", "to_polars"): "polars.DataFrame",
+    ("Table", "lazy"): "polars.LazyFrame",
     ("Matrix", "to_scipy"): "scipy.sparse.csr_matrix",
-    ("Matrix", "to_dense"): "npt.NDArray[np.float32 | np.uint32]",
-    ("Embedding", "to_numpy"): "npt.NDArray[np.float32 | np.float64]",
-    ("Embedding", "to_torch"): "Any",
+    ("Matrix", "to_dense"): "numpy.typing.NDArray[numpy.float32 | numpy.uint32]",
+    ("Embedding", "to_numpy"): "numpy.typing.NDArray[numpy.float32 | numpy.float64]",
+    ("Embedding", "to_torch"): "typing.Any",
     ("Graph", "to_scipy"): "scipy.sparse.csr_matrix",
-    ("Graph", "to_edges"): "pl.DataFrame",
+    ("Graph", "to_edges"): "polars.DataFrame",
 }
 
 

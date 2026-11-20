@@ -7,6 +7,7 @@
 use kyto_plan::{PLAN_JSON_SCHEMA, validate_plan_json};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3_stub_gen::derive::*;
 
 /// Check a plan JSON and list what is wrong with it, without raising.
 ///
@@ -42,8 +43,10 @@ use pyo3::types::PyDict;
 /// 'KY-E218'
 /// >>> validate_plan("not json")[0]["message"]
 /// 'the plan JSON is invalid at line 1 column 2: expected ident'
+#[gen_stub_pyfunction]
 #[pyfunction]
 #[pyo3(signature = (text, /))]
+#[gen_stub(override_return_type(type_repr = "list[PlanDiagnostic]", imports = ()))]
 pub fn validate_plan<'py>(py: Python<'py>, text: &str) -> PyResult<Vec<Bound<'py, PyDict>>> {
     let diagnostics = py.detach(|| validate_plan_json(text));
     diagnostics
@@ -78,6 +81,7 @@ pub fn validate_plan<'py>(py: Python<'py>, text: &str) -> PyResult<Vec<Bound<'py
 /// 'https://json-schema.org/draft/2020-12/schema'
 /// >>> schema["title"]
 /// 'kyto plan JSON, version 1'
+#[gen_stub_pyfunction]
 #[pyfunction]
 pub fn plan_json_schema() -> &'static str {
     PLAN_JSON_SCHEMA

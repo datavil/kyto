@@ -243,7 +243,7 @@ def test_stub_handles_expose_no_mutation() -> None:
     classes = _stub_classes()
     assert set(classes) == set(HANDLES)
     for name, node in classes.items():
-        assert _decorator_names_of_class(node) == ["final"], name
+        assert _decorator_names_of_class(node) == ["typing.final"], name
         members: set[str] = set()
         for statement in node.body:
             if isinstance(statement, ast.Expr) and isinstance(

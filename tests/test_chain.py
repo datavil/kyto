@@ -102,7 +102,7 @@ def test_filter_takes_cell_and_gene_predicates(store: Path) -> None:
     assert str(genes).splitlines()[0].startswith("FILTER_GENES ")
     for wrong in (1, "symbol", cell_column("cell_id")):
         with pytest.raises(kyto.ExpressionError) as raised:
-            atlas.filter(wrong)  # pyright: ignore[reportArgumentType]
+            atlas.filter(wrong)  # pyright: ignore[reportCallIssue, reportArgumentType]
         assert raised.value.code == "KY-E205"
 
 
@@ -370,11 +370,10 @@ def _docstrings() -> dict[str, tuple[str | None, str | None]]:
         for node in tree.body
         if isinstance(node, ast.ClassDef) and node.name == "Atlas"
     )
-    stubs = {
-        item.name: ast.get_docstring(item)
-        for item in atlas.body
-        if isinstance(item, ast.FunctionDef)
-    }
+    stubs: dict[str, str | None] = {}
+    for item in atlas.body:
+        if isinstance(item, ast.FunctionDef):  # of overloads, the documented one (7.6)
+            stubs[item.name] = stubs.get(item.name) or ast.get_docstring(item)
     return {
         name: (getattr(_kyto.Atlas, name).__doc__, stubs.get(name)) for name in methods
     }

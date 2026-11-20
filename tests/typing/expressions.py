@@ -91,9 +91,9 @@ def lineage(atlas: Atlas, numeric: CellExpr[Numeric], flag: GeneExpr[Boolean]) -
     filtered: Atlas = atlas.filter(flag)
     _ = (again, filtered)
     _ = atlas.filter(numeric > 1)  # a cell filter (7.2)
-    _ = atlas.filter(numeric)  # pyright: ignore[reportArgumentType]
+    _ = atlas.filter(numeric)  # pyright: ignore[reportCallIssue, reportArgumentType]
     _ = atlas.filter(gene_column("highly_variable"))  # Unknown until resolved
-    _ = atlas.filter(gene_column("n_cells") + 1)  # pyright: ignore[reportArgumentType]
+    _ = atlas.filter(gene_column("n_cells") + 1)  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def gene_symbols(atlas: Atlas) -> None:

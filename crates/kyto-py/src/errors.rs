@@ -8,6 +8,7 @@
 use kyto_error::{FieldValue, KytoError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+use pyo3_stub_gen::derive::*;
 
 /// Convert a Rust error into its `kyto.errors` exception, ready to return to Python.
 ///
@@ -43,6 +44,7 @@ fn example(code: &str) -> Option<KytoError> {
 /// Test hook: raise the registered example error for `code` as its Python class.
 ///
 /// Returns `False` (raises nothing) if `code` is not registered.
+#[gen_stub_pyfunction]
 #[pyfunction]
 pub fn raise_error_example(py: Python<'_>, code: &str) -> PyResult<bool> {
     match example(code) {
@@ -54,6 +56,7 @@ pub fn raise_error_example(py: Python<'_>, code: &str) -> PyResult<bool> {
 /// Test hook: the Rust `Display` text and hint of the example error for `code`.
 ///
 /// Returns `None` if `code` is not registered.
+#[gen_stub_pyfunction]
 #[pyfunction]
 pub fn error_example_text(code: &str) -> Option<(String, String)> {
     example(code).map(|error| (error.to_string(), error.hint()))
