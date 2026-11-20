@@ -182,6 +182,9 @@ Done (10.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Don
 - [ ] **10.6 Release.** abi3 wheels via maturin, PyPI trusted publishing, semantic versioning, and a stated policy for reading older `format_version` stores.
   - Depends: 1.4, 10.5
   - Done when: `pip install kyto` works on Linux, macOS and Windows from a tagged release.
+- [ ] **10.8 Full workflow against scanpy, re-measured.** Re-run `benchmarks/scanpy_workflow` end to end on the 10-core Mac: QC, filters, normalize, log1p, HVG, PCA, neighbours, Leiden, UMAP and the write, at 50k cells and at 1, 4 and 10 threads, beside scanpy, with peak RSS. Replace the stale Nov 14 table at the top of `performance.md` (2-core Linux box, before 5.12–5.20), and add a plan task for each step where kyto takes more than 1.2x scanpy's time. (added Nov 20, 2026, at the user's request)
+  - Depends: 5.18
+  - Done when: `performance.md` opens with a dated per-step table (time and peak memory, kyto and scanpy, load average stated), and the outputs are checked: the same number of Leiden clusters and the ARI against scanpy's labels recorded.
 
 ## 11. Milestones
 
