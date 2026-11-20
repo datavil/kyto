@@ -120,8 +120,8 @@ fn blocks_in_flight_scale_the_blocks_up_to_the_cell_blocks() {
         plan.physical(options).estimate()
     };
     // One block in flight over 3: while the last is read, the consumer holds the one
-    // before and the pool keeps the first.
-    assert_eq!(with(1).block_memory(), SCAN_BLOCK + 2 * HELD_BLOCK);
+    // before, and the read takes the first's buffers back from the pool (task 5.18).
+    assert_eq!(with(1).block_memory(), SCAN_BLOCK + HELD_BLOCK);
     assert_eq!(with(3).block_memory(), 3 * SCAN_BLOCK);
     // Only 3 cell blocks exist.
     assert_eq!(with(8).block_memory(), 3 * SCAN_BLOCK);
@@ -275,9 +275,9 @@ fn split_blocks_hold_fewer_cells() {
     assert!(joining > reading);
     let held = 262_144 * 8 + 1_025 * 8;
     let small = with(1_024);
-    // 12 blocks (3 cell blocks of 4 parts): the consumer's block and the pool's two
-    // (its most, `(1 + 1)` blocks of 1 layer; the reader allocates every block anew).
-    assert_eq!(small.block_memory(), joining + 3 * held);
+    // 12 blocks (3 cell blocks of 4 parts): the consumer's block; the read takes the
+    // pool's buffers (task 5.18: the stream allocates 2 blocks' buffers, no more).
+    assert_eq!(small.block_memory(), joining + held);
     // Each block reads its tiles' whole `indptr`: 4 x the indptr bytes of whole blocks.
     assert_eq!(
         small.bytes_read(),
@@ -428,12 +428,13 @@ fn nodes_writing_layers_hold_an_output_block() {
     let scaled = estimate_all(&scan().scale(Some("counts"), "scaled", true, None).unwrap());
     let dense = 4_096 * N_GENES * 8 + 4_097 * 8;
     assert!(HELD_BLOCK + dense > SCAN_BLOCK);
-    // While the last block is computed: one block's work, the consumer's block of both
-    // layers (the dense one at its capacity, 2^23 entries, is `dense`) and the pool's
-    // dense buffer.
+    // While the last block is read: its tiles, the consumer's block of both layers (the
+    // dense one at its capacity, 2^23 entries, is `dense`), the pool's other buffer (at
+    // most `dense`), and the read's buffer taken from the pool, which may be the dense
+    // one the consumer gave back last (task 5.18: `dense` instead of `HELD_BLOCK`).
     assert_eq!(
         scaled.block_memory(),
-        (HELD_BLOCK + dense) + (HELD_BLOCK + dense) + dense
+        SCAN_BLOCK - HELD_BLOCK + dense + (HELD_BLOCK + dense) + dense
     );
     // Its statistics: a mean and a variance per gene, and while its statistics pass
     // runs, the same per leaf of its reduction (task 5.6): 2 blocks in flight and the
@@ -693,15 +694,13 @@ fn a_filter_copies_the_blocks_it_rewrites() {
     let copy = 819_200 * 8 + 4_097 * 8;
     let per_block = HELD_BLOCK + 2 * copy;
     assert!(per_block > SCAN_BLOCK);
-    // While the last block is computed: its work, the consumer's block of both layers
-    // and 1 pooled buffer. A block holds at most 2 buffers at once (the joined block
-    // and its copy, then the copy and `log1p`, which takes the joined block's buffers
-    // back, task 5.16): the first window allocated 4, the consumer holds 2, the last
-    // block takes 1 back.
-    assert_eq!(
-        estimate_all(&plan).block_memory(),
-        per_block + 2 * HELD_BLOCK + HELD_BLOCK
-    );
+    // The first window's two blocks at once: more than the last block's work with the
+    // consumer's block of both layers. A block holds at most 2 buffers at once (the
+    // joined block and its copy, then the copy and `log1p`, which takes the joined
+    // block's buffers back, task 5.16): the first window allocated 4, the consumer
+    // holds 2 and the last block takes the other 2 back, its read too (task 5.18).
+    assert!(2 * per_block > per_block + 2 * HELD_BLOCK);
+    assert_eq!(estimate_all(&plan).block_memory(), 2 * per_block);
     // A second filter copies into the buffers the first gave back: no more memory.
     let gene_filter = GeneExpr::column("gene_id")
         .str(kyto_core::StrFunction::StartsWith("MT-".to_owned()))
@@ -717,10 +716,13 @@ fn a_filter_copies_the_blocks_it_rewrites() {
         estimate_all(&twice).block_memory(),
         estimate_all(&plan).block_memory()
     );
-    // After `log1p` a filter copies both layers.
+    // After `log1p` a filter copies both layers: a block holds 4 buffers at once, the
+    // first window allocated 8. While the last block is read (task 5.18: it takes 1
+    // back), the consumer holds 2 and the pool keeps 5, more than while it computes.
     let after = plan.filter_genes(&gene_filter).unwrap();
+    assert!(SCAN_BLOCK + 5 * HELD_BLOCK > (per_block + copy) + 2 * HELD_BLOCK);
     assert_eq!(
         estimate_all(&after).block_memory(),
-        (per_block + copy) + 2 * HELD_BLOCK + 3 * HELD_BLOCK
+        SCAN_BLOCK + 2 * HELD_BLOCK + 5 * HELD_BLOCK
     );
 }

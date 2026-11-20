@@ -16,12 +16,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::backends::{Backend, Storage, backends, storage};
 use kyto_store::{
-    AxisSelection, CellValues, CsrMatrix, LayerReader, LayerValue, LayerWriteOptions,
-    SelectedBlock, TileGrid, Tiling, read_layer, write_layer,
+    AxisSelection, BlockBuffers, CellBlockParts, CellData, CellValues, CsrMatrix, LayerReader,
+    LayerValue, LayerWriteOptions, SelectedBlock, TileGrid, Tiling, ValueDtype, read_layer,
+    write_layer,
 };
 use proptest::prelude::*;
 use zarrs::filesystem::FilesystemStore;
@@ -109,6 +111,27 @@ fn dense(n_cells: u64, n_genes: u64) -> CsrMatrix<f32> {
         matrix.indptr.push(matrix.indices.len() as u64);
     }
     matrix
+}
+
+/// Block buffers for [`kyto_store::CellBlocks::with_buffers`] (task 5.18) that come
+/// dirty: values left in them, the data of the other dtype, so the reader must clear
+/// them. Counts the takes.
+#[derive(Default)]
+struct DirtyBuffers {
+    taken: AtomicUsize,
+}
+
+impl BlockBuffers for DirtyBuffers {
+    fn take(&self, _dtype: ValueDtype) -> CellBlockParts {
+        self.taken.fetch_add(1, Ordering::Relaxed);
+        let mut parts = CellBlockParts::new(ValueDtype::U32);
+        parts.indptr.extend_from_slice(&[7; 33]);
+        parts.indices.extend_from_slice(&[9; 100]);
+        if let CellData::U32(values) = &mut parts.data {
+            values.extend_from_slice(&[5; 100]);
+        }
+        parts
+    }
 }
 
 fn open<S: ?Sized + ReadableStorageTraits + 'static>(
@@ -809,6 +832,29 @@ proptest! {
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
+            // Joined into buffers taken from a source (task 5.18), dirty ones too: the
+            // same blocks bit for bit, every one joined into buffers it took.
+            let buffers = DirtyBuffers::default();
+            let pooled = reader
+                .cell_blocks_in_parts(
+                    &cell_selection,
+                    &gene_selection,
+                    NonZeroU64::new(max_rows).unwrap(),
+                    NonZeroU64::new(part_rows).unwrap(),
+                    NonZeroUsize::new(in_flight).unwrap(),
+                )
+                .unwrap()
+                .with_buffers(&buffers)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            prop_assert_eq!(buffers.taken.load(Ordering::Relaxed), parts.len());
+            prop_assert_eq!(pooled.len(), parts.len());
+            for (pooled, part) in pooled.iter().zip(&parts) {
+                prop_assert_eq!(
+                    (pooled.cell_block, &pooled.cells, &pooled.block),
+                    (part.cell_block, &part.cells, &part.block)
+                );
+            }
             let smallest = max_rows.min(part_rows);
             prop_assert!(parts.iter().all(|block| block.cells.len() as u64 <= smallest));
             prop_assert_eq!(join(&parts, genes.len() as u64), expected.clone(), "{:?}", backend);

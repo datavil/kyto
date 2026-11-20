@@ -698,20 +698,31 @@ fn a_held_pca_reads_the_store_once_and_a_tight_limit_streams() {
     };
     let held_pca = pca_statistics(&held_statistics);
 
-    // A limit below the smallest plan holding the input (one block of one cell in
-    // flight), at the smallest streaming one: only streaming fits.
+    // A limit below the smallest plan holding the input, at the smallest streaming one:
+    // only streaming fits. The smallest of each over the shapes the fit tries (1 or 2
+    // blocks in flight, every halving of the blocks): a held input costs some bytes per
+    // block, so its smallest plan need not be at one cell (task 5.18).
     let smallest = |hold_inputs: bool| {
-        PhysicalPlan::new(
-            optimized.clone(),
-            PhysicalOptions {
-                blocks_in_flight: Bytes::MIN,
-                max_block_cells: Some(Bytes::MIN),
-                hold_inputs,
-                ..options()
-            },
-        )
-        .estimate()
-        .peak_memory()
+        let mut cells = Some(4_096_u64);
+        let mut smallest = u64::MAX;
+        while let Some(block_cells) = cells {
+            for in_flight in [1, 2] {
+                let peak = PhysicalPlan::new(
+                    optimized.clone(),
+                    PhysicalOptions {
+                        blocks_in_flight: Bytes::new(in_flight).unwrap(),
+                        max_block_cells: Bytes::new(block_cells),
+                        hold_inputs,
+                        ..options()
+                    },
+                )
+                .estimate()
+                .peak_memory();
+                smallest = smallest.min(peak);
+            }
+            cells = (block_cells > 1).then_some(block_cells / 2);
+        }
+        smallest
     };
     let streamed_peak = smallest(false);
     assert!(streamed_peak < smallest(true));

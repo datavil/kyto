@@ -8,7 +8,10 @@
 //! order, whatever the thread count (R11).
 //! [`LayerReader::cell_blocks_of_rows`] splits each cell block into blocks of at most a
 //! given number of selected rows, reading only those rows' entries of each tile (task
-//! 5.5's smaller blocks).
+//! 5.5's smaller blocks). A stream given [`BlockBuffers`] ([`CellBlocks::with_buffers`],
+//! kyto-exec's block pool) joins its blocks into buffers taken from them, so a stream
+//! whose consumer gives its blocks back allocates no new block buffers once they have
+//! grown (task 5.18).
 //! Does not: resolve names, evaluate predicates, plan or choose a block size for a
 //! memory limit (tasks 3.x, 4.x, 5.5); it takes plain, canonical position selections.
 //! Never writes.
@@ -24,7 +27,7 @@ use zarrs::array_subset::ArraySubset;
 use zarrs::storage::ReadableStorageTraits;
 
 use crate::aligned_buffer::AlignedBuffer;
-use crate::cell_block::{CellBlock, CellData};
+use crate::cell_block::{CellBlock, CellBlockParts, CellData};
 use crate::layer_open::{OpenedLayer, ValueDtype, open_layer};
 use crate::selection::{AxisSelection, BlockPick, block_picks};
 use crate::store_version::check_format_version;
@@ -33,6 +36,15 @@ use crate::tile_decode::{check_tile_indptr, check_tile_rows};
 use crate::tiling::TileGrid;
 use crate::value::LayerValue;
 use crate::zarr_arrays::store_io;
+
+/// Where a [`CellBlocks`] stream takes the empty buffers it joins its blocks into
+/// (task 5.18): kyto-exec's `CellBlockPool`, which gets back the blocks a stream is
+/// done with. Without one, every block is joined into new buffers.
+pub trait BlockBuffers: Sync {
+    /// Empty buffers for a block of `dtype` values (they may keep the capacity of
+    /// blocks given back before).
+    fn take(&self, dtype: ValueDtype) -> CellBlockParts;
+}
 
 /// A reader of one layer that reads only the tiles a selection touches.
 ///
@@ -198,6 +210,7 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
             next: 0,
             blocks_in_flight: blocks_in_flight.get(),
             ready: VecDeque::new(),
+            buffers: None,
         })
     }
 
@@ -210,10 +223,11 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         gene_picks: &[BlockPick],
         n_genes: u64,
         part_rows: usize,
+        buffers: Option<&dyn BlockBuffers>,
     ) -> Vec<Result<SelectedBlock, KytoError>> {
         let block = match self.layer.dtype {
             ValueDtype::F32 => self
-                .read_parts_of::<f32>(cell_pick, *split, gene_picks, part_rows)
+                .read_parts_of::<f32>(cell_pick, *split, gene_picks, part_rows, buffers)
                 .map(|parts| {
                     parts
                         .into_iter()
@@ -224,7 +238,7 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
                         .collect::<Vec<_>>()
                 }),
             ValueDtype::U32 => self
-                .read_parts_of::<u32>(cell_pick, *split, gene_picks, part_rows)
+                .read_parts_of::<u32>(cell_pick, *split, gene_picks, part_rows, buffers)
                 .map(|parts| {
                     parts
                         .into_iter()
@@ -263,6 +277,7 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         split: bool,
         gene_picks: &[BlockPick],
         part_rows: usize,
+        buffers: Option<&dyn BlockBuffers>,
     ) -> Result<Vec<JoinedPart<T>>, KytoError> {
         // Collect every result in gene block order, then take the first error, so the
         // error reported does not depend on the thread count (R11).
@@ -276,7 +291,10 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> LayerReader<S> {
         // An indexed parallel collect keeps the parts in cell order (R11).
         Ok(rows
             .par_chunks(part_rows.max(1))
-            .map(|rows| (rows.to_vec(), join_rows(rows, gene_picks, &tiles)))
+            .map(|rows| {
+                let empty = empty_joined(buffers);
+                (rows.to_vec(), join_rows(rows, gene_picks, &tiles, empty))
+            })
             .collect())
     }
 
@@ -363,17 +381,45 @@ type Joined<T> = (AlignedBuffer<u64>, AlignedBuffer<u32>, AlignedBuffer<T>);
 /// A part's local rows and its joined block.
 type JoinedPart<T> = (Vec<u32>, Joined<T>);
 
-/// Join `rows` (local rows of the tiles' cell block) from the read `tiles`, in
-/// increasing gene block, entries of unselected genes dropped (format.md §4.8).
+/// Empty buffers to join a block into: taken from `buffers` (their capacity kept,
+/// task 5.18), else new ones that allocate only when filled.
+fn empty_joined<T: LayerValue>(buffers: Option<&dyn BlockBuffers>) -> Joined<T> {
+    let Some(buffers) = buffers else {
+        return (
+            AlignedBuffer::new(),
+            AlignedBuffer::new(),
+            AlignedBuffer::new(),
+        );
+    };
+    let CellBlockParts {
+        indptr,
+        indices,
+        data,
+    } = buffers.take(ValueDtype::U32);
+    // One allocation serves any value type (AlignedBuffer::into_cleared).
+    let data: AlignedBuffer<u32> = match data {
+        CellData::F32(values) => values.into_cleared(),
+        CellData::U32(values) => values,
+    };
+    (
+        indptr.into_cleared(),
+        indices.into_cleared(),
+        data.into_cleared(),
+    )
+}
+
+/// Join `rows` (local rows of the tiles' cell block) from the read `tiles` into the
+/// `empty` buffers, in increasing gene block, entries of unselected genes dropped
+/// (format.md §4.8).
 fn join_rows<T: LayerValue>(
     rows: &[u32],
     gene_picks: &[BlockPick],
     tiles: &[Option<Tile<T>>],
+    (mut indptr, mut indices, mut data): Joined<T>,
 ) -> Joined<T> {
-    // Joined arrays grow by push, as 4.6's estimate models (its Open (2)).
-    let mut indptr = AlignedBuffer::with_capacity(rows.len() + 1);
-    let mut indices = AlignedBuffer::new();
-    let mut data = AlignedBuffer::new();
+    // Joined arrays grow by push, as 4.6's estimate models (its Open (2)); buffers
+    // taken from a pool start with the capacity they had.
+    indptr.reserve(rows.len() + 1);
     indptr.push(0);
     for &row in rows {
         let row = row as usize;
@@ -419,6 +465,18 @@ pub struct CellBlocks<'a, S: ?Sized> {
     next: usize,
     blocks_in_flight: usize,
     ready: VecDeque<Result<SelectedBlock, KytoError>>,
+    /// Where blocks are joined into, if given (task 5.18).
+    buffers: Option<&'a dyn BlockBuffers>,
+}
+
+impl<'a, S: ?Sized> CellBlocks<'a, S> {
+    /// Join every block into buffers taken from `buffers` (task 5.18) instead of new
+    /// ones. The values and their bits are the same.
+    #[must_use]
+    pub fn with_buffers(mut self, buffers: &'a dyn BlockBuffers) -> Self {
+        self.buffers = Some(buffers);
+        self
+    }
 }
 
 impl<S: ?Sized + ReadableStorageTraits + 'static> Iterator for CellBlocks<'_, S> {
@@ -428,11 +486,13 @@ impl<S: ?Sized + ReadableStorageTraits + 'static> Iterator for CellBlocks<'_, S>
         if self.ready.is_empty() && self.next < self.cell_picks.len() {
             let end = (self.next + self.blocks_in_flight).min(self.cell_picks.len());
             let (reader, gene_picks, n_genes) = (self.reader, &self.gene_picks, self.n_genes);
-            let part_rows = self.part_rows;
+            let (part_rows, buffers) = (self.part_rows, self.buffers);
             // An indexed parallel collect keeps cell order on any thread count (R11).
             let window: Vec<_> = self.cell_picks[self.next..end]
                 .par_iter()
-                .map(|cell_pick| reader.read_parts(cell_pick, gene_picks, n_genes, part_rows))
+                .map(|cell_pick| {
+                    reader.read_parts(cell_pick, gene_picks, n_genes, part_rows, buffers)
+                })
                 .collect::<Vec<_>>()
                 .into_iter()
                 .flatten()

@@ -42,9 +42,10 @@
 //! largest. A stream longer than its window adds, while a later window (`later =
 //! min(window, blocks - window)` blocks) is computed, the block its consumer holds
 //! (each output's layers) and the free buffers of the block pool (task 5.10): the
-//! first window allocates every buffer its blocks hold, a later block only its
-//! reader's (written layers and copies come from the pool); free are those the
-//! consumer does not hold and the later window does not take, at most the pool's
+//! stream allocates every buffer a window's blocks hold at once plus those the consumer
+//! holds, and later blocks take theirs from the pool (written layers, copies, and the
+//! reads since task 5.18); free are those the consumer does not hold and the later
+//! window has not taken (while it reads, only its reads' buffers), at most the pool's
 //! `(window + 1) x entries` (one entry per scanned layer and per operator: a node
 //! writing layers, a cell step, a gene selection), each at most the largest layer
 //! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) +
@@ -288,6 +289,9 @@ impl PhysicalPlan {
         let mut n_blocks = 0_u128;
         let mut pool_entries = 0_u128;
         let mut largest_layer_block = 0_u128;
+        // The largest block a read joins (task 5.18: a read takes pooled buffers,
+        // which may have the capacity of a larger layer's block).
+        let mut largest_read_block = 0_u128;
         // The layers a block carries so far (name, nnz, dtype, bytes in a block), and
         // the most a step that rewrites its rows or genes copies (task 5.10). A layer
         // leaves once no later node or output reads it (task 5.16), and a block holds at
@@ -353,6 +357,7 @@ impl PhysicalPlan {
                         scanned_buffers += 1;
                         pool_entries += 1;
                         largest_layer_block = largest_layer_block.max(joined);
+                        largest_read_block = largest_read_block.max(joined);
                         pass_bytes += read.pass_bytes();
                         resident += read.tile_offsets_bytes();
                         opening = OPEN_LAYER_BYTES;
@@ -453,20 +458,38 @@ impl PhysicalPlan {
         if n_blocks > window {
             let later = window.min(n_blocks - window);
             let (held, held_layers) = self.held_blocks(&schemas);
-            // The buffers the blocks before allocated: the first window every buffer
-            // it holds, each later block only its reader's (the rest come from the
-            // pool). Free are those the consumer does not hold and the later window
-            // does not take back (task 5.10). A block holds at most `step_buffers` at
-            // once (task 5.16), and never more than every buffer it writes or copies.
+            // The buffers the stream allocates: a window's blocks every buffer they hold
+            // at once. Later blocks take theirs from the pool, their reads too (task
+            // 5.18), but not those the consumer holds: the second window allocates
+            // that many more, free in the pool for the windows after it. A block holds
+            // at most `step_buffers` at once (task 5.16), and never more than every
+            // buffer it reads, writes or copies.
             let taken =
                 (taken_buffers + rewrite_buffers).min(step_buffers.saturating_sub(scanned_buffers));
-            let allocated =
-                window * (scanned_buffers + taken) + (n_blocks - later - window) * scanned_buffers;
-            let recycled = allocated
-                .saturating_sub(held_layers + later * taken)
-                .min((window + 1) * pool_entries);
-            let pool = recycled * largest_layer_block;
-            block = block.max((later * per_block).max(whole) + held + pool);
+            let buffers = scanned_buffers + taken;
+            let allocated = window * buffers
+                + if n_blocks > 2 * window {
+                    held_layers
+                } else {
+                    0
+                };
+            // Free are those the consumer does not hold and the later window has not
+            // taken (task 5.10), at most the pool's cap: while it reads, only its
+            // reads' buffers have left the pool; while it computes, all of them.
+            let free = |taking: u128| {
+                allocated
+                    .saturating_sub(held_layers + later * taking)
+                    .min((window + 1) * pool_entries)
+                    * largest_layer_block
+            };
+            // The pool hands out the buffers given back last: a read may take a larger
+            // layer's (a dense `scale` block's), holding its capacity while the step
+            // that writes that layer grows another.
+            let inflated =
+                later * scanned_buffers * largest_layer_block.saturating_sub(largest_read_block);
+            let reading = (later * scan_reading).max(whole) + free(scanned_buffers);
+            let computing = later * joined_and_written + free(buffers);
+            block = block.max(reading.max(computing) + inflated + held);
         }
         block += once;
 

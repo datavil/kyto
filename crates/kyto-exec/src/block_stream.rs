@@ -299,13 +299,17 @@ impl<'a, S: ?Sized + ReadableStorageTraits + 'static> Windows<'a, S> {
             .readers
             .iter()
             .map(|reader| {
-                reader.cell_blocks_in_parts(
-                    &AxisSelection::All,
-                    &AxisSelection::All,
-                    source.read_cells,
-                    source.block_cells,
-                    source.read_window(),
-                )
+                reader
+                    .cell_blocks_in_parts(
+                        &AxisSelection::All,
+                        &AxisSelection::All,
+                        source.read_cells,
+                        source.block_cells,
+                        source.read_window(),
+                    )
+                    // Reads take the pool's buffers, which get every block back: no
+                    // new block buffers once they have grown (task 5.18).
+                    .map(|stream| stream.with_buffers(pool))
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {

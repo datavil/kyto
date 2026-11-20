@@ -78,12 +78,11 @@ Done (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7): see [Implementation Plan - Done.md](Im
 
 Goal: any plan runs within a memory limit, uses every core, and gives the same answer on 1 or 64 threads.
 
-Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15, 5.16, 5.17, 5.19, 5.20): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
+Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15, 5.16, 5.17, 5.18, 5.19, 5.20): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.18 Memory growth across the first pass.** On the 50k data at 10 threads, QC through PCA's first pass (the HVG statistics stream) raises the process's peak RSS steadily, from about 445 MB after its first window to about 950 MB at its end (about 100 MB every two windows of blocks), although a window's blocks and reads hold about 400 MB and the block pool recycles their buffers. Profile where the growth comes from (suspected: the allocator keeping freed decode and join buffers of varying sizes, task 5.14's whole reads cut into parts, or something held across windows), fix the cause, and keep the bits (R11). (added Nov 19, 2026, at the user's request, from 5.16's measurement: freeing dead layers early barely moved the peak, about 1,300 MB, set by this growth and the output's last stream)
-  - Depends: 5.16
-  - Done when: on the 50k data at 10 threads, the first pass's RSS stops growing after its first windows (the profile and the before/after RSS trace by pass go in performance.md), and QC through PCA peaks at least 10% lower than 5.16's with no slower run (within 2%); outputs bit-identical at 1, 4 and all threads; the estimate stays within 25% of the measured allocations on the fixtures (`estimate_fixtures.rs`).
-  - Notes: a candidate, not a task of its own: shrink a layer to the HVG genes as soon as its last full-width reader is done (`counts` and `normalized` right after the maps, before the HVG gene filter in the output's last stream), about one full-width layer less per block, about 90 MB of heap at 10 blocks in flight.
+- [ ] **5.21 The estimate reads a short stream's last block as whole.** The pool term (task 5.18) counts every later block at the full block size, so a stream of few blocks whose last one is small is estimated high: pbmc3k at 1,024-cell blocks (3 blocks, the last of 652 cells) with 1 block in flight is +24.1% on `estimate_fixtures.rs`, next to its 25% bound. Size the later window's blocks by the cells left (the last block's rows), keeping the bound for long streams. (added Nov 20, 2026, from 5.18's measurement)
+  - Depends: 5.18
+  - Done when: whole blocks on the fixtures within 15% of the measured heap; `memory_limit.rs` and the estimate tests pass.
 
 ## 6. Algorithms (`kyto-algo`)
 

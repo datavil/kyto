@@ -538,6 +538,93 @@ alternating runs per build and thread count.
   sized by `POLARS_MAX_THREADS`, not by `threads`. It is not rayon's global pool, and the
   Parquet table I/O of every run (not only the sink's) can use it.
 
+## Every block buffer through the stream's pool (task 5.18)
+
+Measured Nov 20, 2026, on the task 5.18 tree (base `bc3852f`, 5.20; release extensions built
+by `uv sync`, the base in a worktree of its own), same machine, data and scripts as 5.12 to
+5.20 above. **Not a quiet machine:** a game client ran throughout; the 1-minute load average
+was 3.6 to 6.5 during the runs (stated per table). Base and 5.18 ran alternating, each a
+fresh process: for time, a warm-up and then one timed run; for peak, one run and its
+`ru_maxrss`; 5 rounds, the median of 5 per build, case and thread count.
+
+- **Profile.** RSS traced on every progress call of QC through PCA at 10 threads (resident
+  and `reusable` from `task_info(TASK_VM_INFO)`; `reusable` counts pages the allocator freed
+  but kept). RSS grew about 95 MB per window inside each streaming pass and fell back at the
+  pass's end, and `reusable` stayed at 0 to 2 MB: the growth was live heap, not allocator
+  retention or fragmentation. The cause: the store's reader joined every block into new
+  buffers, the consumer gave every block back to the stream's `CellBlockPool`, and only the
+  operators took buffers from it. The pool keeps up to `(window + 1) x (layers + operators)`
+  blocks' buffers, so each window parked about one window of read buffers in it, while the
+  next window's reads allocated new ones, until the cap or the pass's end. The same happened
+  in the output's last stream.
+- **Change:** `kyto_store::BlockBuffers` (implemented by `CellBlockPool`) and
+  `CellBlocks::with_buffers`: every stream's reader joins its blocks into buffers taken from
+  the stream's pool, so a block's buffers go round (read, operators, consumer, pool, the next
+  read) and no stream allocates block buffers after its first window. The values written
+  are the same, so the bits are too. `estimate()`'s pool term changed to match: later
+  blocks take their reads' buffers from the pool too.
+- **Not used:** the plan's candidate (shrink layers to the HVG genes after their last
+  full-width reader). Since 5.19 the handle terminal's last stream reads no layer, and the
+  first pass now stays flat, so there is no full-width stream left for it to shrink.
+
+RSS by pass, QC through PCA at 10 threads (MB at the pass's first progress call -> its
+highest; 14 passes: the HVG statistics, the HVG filter's, the held PCA read and passes, the
+output; load 4.8):
+
+| pass | 1 (HVG statistics) | 2 | 3 to 13 | 14 (output) | peak |
+|---|---|---|---|---|---|
+| base 5.20 | 55 -> **972** (459, 579, 682, 779, 882, 972 by window) | 580 -> 1,022 | 580 to 637, flat | 718 -> **1,146** | 1,147 |
+| 5.18 | 54 -> **500** (454, 479, 485, 499, 499, 500 by window) | 506 -> 542 | 542 to 598, flat | 617 -> 627 | **628** |
+
+| Peak memory, MB (5 runs, median [range]), load 3.6 to 6.0 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| QC through PCA, base 5.20 | 1,014 [1,013-1,016] | 1,080 [1,064-1,085] | 1,135 [1,113-1,156] |
+| QC through PCA, 5.18 | **512** [511-514] | **670** [664-672] | **646** [631-660] |
+| preprocessing (`_execute`), base / 5.18 | 903 / **461** | 1,185 / **777** | 1,129 / **710** |
+| PCA alone, base / 5.18 | 278 / 278 | 323 / 305 | 321 / 306 |
+| scanpy read through PCA (re-run, 3 runs, load 4.8) | | | 2,455 / 2,851 / 2,811 |
+
+At 10 threads QC through PCA peaks 43% below base and 50% below 5.16's 1,290 MB (the
+Done-when's reference); it is 23% of scanpy's peak for the same workflow.
+
+| Seconds (median of 5), base 5.20 / 5.18, load 3.6 to 6.5 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| QC through PCA (`embedding().to_numpy()`) | 5.518 / 5.540 (+0.4%) | 2.107 / 2.095 | 1.588 / **1.542** (-2.9%) |
+| preprocessing (`_execute`) | 2.864 / 2.852 | 1.060 / 1.033 | 0.814 / **0.776** (-4.7%) |
+| PCA alone (`embedding("X_pca").to_numpy()`) | 1.854 / 1.874 (+1.1%) | 0.761 / **0.781 (+2.6%)** | 0.579 / 0.583 (+0.7%) |
+
+- **PCA alone at 4 threads is 2.3 to 2.6% slower than the base build** (this table, and 8
+  alternating rounds at load 5.8: base 0.853, 5.18 0.873 s). The time is lost in the PCA's
+  passes over the held blocks, not in the held read (progress traced, the read at 0.047 s in
+  both), and the passes do not touch the reader or the pool. The same 5.18 build with the
+  reads' pool switched off (a temporary environment switch, removed) took 0.865 s (minimum
+  0.843 against 0.844 with the pool): the gap is between the two builds (code layout), not
+  what the change does at run time. Above the Done-when's 2%: the user accepted the gap
+  and the commit with it (Nov 20, 2026).
+- **Bit identity (R11):** the QC-through-PCA and PCA-alone embeddings and the
+  preprocessing HVG gene table are byte-identical between base and 5.18 at 1, 4 and 10
+  threads, and across thread counts on 5.18.
+- **Estimate:** on the fixtures (`estimate_fixtures.rs`) whole blocks are within -6.4% to
+  +24.1% of the measured heap (the high end: pbmc3k at 1024-cell blocks, whose third and
+  last block holds 652 cells, read as if whole), split and cut blocks never below -2.5%.
+  The test's consumer now keeps each block until the next one arrives (a slow terminal,
+  the case the estimate bounds): a consumer that gives a block back at once races the next
+  block's read for its buffers, and the measured peak of one row moved between +6% and +26%
+  from run to run.
+- **Memory limit (`memory_limit.rs`):** a first version of the new pool term counted
+  only the buffers a window holds at once, as if later blocks took them all back at once;
+  it fell 25 to 37% below the measured heap on the test's 84,000-cell store, the fit chose
+  2,048-cell blocks, and peak RSS rose from 42.4 MB (base, 512 x 2 blocks) to 56.3 MB
+  (6 runs each, release), over 64 MB in debug builds. The term now counts the buffers the
+  consumer holds (a later block allocates as many again; counted once the stream runs past
+  its second window), splits the later window into reading (only its reads' buffers have
+  left the pool) and computing, and counts a read's pooled buffer at the largest pooled
+  layer (LIFO: it may be a dense `scale` block's). Estimate against the measured heap on
+  that store: -1% to -11% at 512 x 2, 1,024 x 1 and x 2, 2,048 x 1 (base +13% to +20%);
+  the fit now chooses 1,024 x 1 and peak RSS is 38.1 to 38.5 MB.
+- **Where kyto loses:** preprocessing on 1 thread is still 2.9x scanpy's time (5.16), and
+  PCA alone's 4-thread gap above.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

@@ -4,14 +4,17 @@
 //! blocks recycled before ([`CellBlockPool::take`]), and take finished blocks back
 //! ([`CellBlockPool::recycle`]), so a stream of blocks stops allocating once its buffers
 //! have grown to the largest block (the Done-when check of 5.1). One buffer serves
-//! `float32` and `uint32` values alike. Thread-safe (`&self`), for 5.2's operators.
+//! `float32` and `uint32` values alike. Thread-safe (`&self`), for 5.2's operators and
+//! the store's reads ([`BlockBuffers`], task 5.18): a stream's reads join their blocks
+//! into the pool's buffers, so the buffers its blocks give back are taken again instead
+//! of piling up in the pool while each window's reads allocate new ones.
 //! Does not: bound the bytes it keeps by itself (it keeps at most `max_blocks` blocks'
 //! buffers, each as large as the largest block it held), size buffers ahead (the producer
 //! reserves what it knows), or decide block sizes (the physical plan, task 4.5).
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use kyto_store::{AlignedBuffer, CellBlock, CellBlockParts, CellData, ValueDtype};
+use kyto_store::{AlignedBuffer, BlockBuffers, CellBlock, CellBlockParts, CellData, ValueDtype};
 
 /// Reusable buffers for [`CellBlock`]s.
 ///
@@ -102,6 +105,13 @@ impl CellBlockPool {
     /// push or pop is whole), so a poisoned lock is used as it is.
     fn lock(&self) -> MutexGuard<'_, FreeBuffers> {
         self.free.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The store's readers join blocks into the pool's buffers (task 5.18).
+impl BlockBuffers for CellBlockPool {
+    fn take(&self, dtype: ValueDtype) -> CellBlockParts {
+        CellBlockPool::take(self, dtype)
     }
 }
 

@@ -5,7 +5,8 @@
 //! "Measured" is a whole run of a plan's stream: `Pipeline::run` (task 5.2) opening the
 //! layer, reading every block and, for the second plan, mapping it
 //! (`normalize_total(1e4)` then `log1p`, one fused pass), with a consumer that recycles
-//! each block as a terminal would (so the stream's pool fills). A peak-tracking global
+//! each block as a slow terminal would, once it has the next one (task 5.18: so the
+//! stream's pool fills and the peak does not depend on a race). A peak-tracking global
 //! allocator (`peak_alloc`: a realloc allocates, copies, then frees, so a moving buffer
 //! counts twice while it moves) measures the heap bytes held at most. `tests/fixtures`
 //! writes each fixture (synthetic, pbmc3k) as `.h5ad`; it is converted at the writer's
@@ -79,10 +80,20 @@ fn measured_peak(plan: &PhysicalPlan) -> u64 {
     ALLOCATOR.reset_peak_usage();
     let mut stream = pipeline.run(options).unwrap();
     let mut entries = 0;
+    // The consumer holds each block until the next one arrives, as a slow terminal (a
+    // sink writing it) does, the case the estimate bounds: with the reads taking the
+    // pool's buffers (task 5.18), a consumer giving a block back at once races the
+    // next block's read for its buffers, and the peak would depend on that race.
+    let mut held = None;
     while let Some(block) = stream.next() {
         let block = block.unwrap();
         entries += block.layers.values().map(|layer| layer.nnz()).sum::<u64>();
-        stream.recycle(block);
+        if let Some(previous) = held.replace(block) {
+            stream.recycle(previous);
+        }
+    }
+    if let Some(last) = held {
+        stream.recycle(last);
     }
     drop(stream);
     let peak = ALLOCATOR.peak_usage() - before;
