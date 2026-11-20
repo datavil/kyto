@@ -133,11 +133,8 @@ Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8): see [Implementation Plan - Done.m
 
 Goal: an agent can inspect data, write a pipeline, check it and fix its own mistakes without reading the matrix or the source code.
 
-Done (8.1, 8.2, 8.3, 8.4, 8.5): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
+Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
 
-- [ ] **8.6 Machine-readable docs.** `llms.txt`, one runnable example per method, doctests in CI.
-  - Depends: 7.6
-  - Done when: every public method appears in `llms.txt` and its example passes.
 - [ ] **8.7 Reproducibility test.** Same input, plan and seed give a byte-identical store (R11).
   - Depends: 8.5, 5.6, 5.12
   - Done when: CI writes a reference pipeline twice and compares checksums.

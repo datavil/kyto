@@ -246,7 +246,9 @@ def test_stub_docstring_examples_run() -> None:
                     )
                     runner.run(test)
     assert runner.failures == 0
-    assert runner.tries == 12  # 3.8 added CellExpr.recompute and GeneExpr.recompute
+    # 3.8 added the recompute examples; 8.6 those of is_null, is_not_null, log1p,
+    # dtype (two) and str, on both classes.
+    assert runner.tries == 24
 
 
 def test_deep_trees_are_ky_e207_not_a_crash() -> None:

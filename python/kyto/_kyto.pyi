@@ -3812,7 +3812,15 @@ class CellExpr(Generic[_D_co]):
 
     @property
     def dtype(self) -> type[_D_co]:
-        """The dtype kind: a class from ``kyto.dtypes``."""
+        """The dtype kind: a class from ``kyto.dtypes``.
+
+        Examples
+        --------
+         >>> cell_column("total_counts").dtype
+         <class 'kyto.dtypes.Unknown'>
+         >>> (cell_column("total_counts") > 0).dtype
+         <class 'kyto.dtypes.Boolean'>
+        """
 
     def __class_getitem__(cls, item: object) -> object:
         """Subscripting the class, as in ``CellExpr[Numeric]``, gives a
@@ -3946,6 +3954,11 @@ class CellExpr(Generic[_D_co]):
         ------
         ExpressionError
             ``KY-E207``: the expression would be too deep.
+
+        Examples
+        --------
+         >>> cell_column("label").is_null()
+         cell_column('label').is_null()
         """
 
     def is_not_null(self) -> CellExpr[Boolean]:
@@ -3962,6 +3975,11 @@ class CellExpr(Generic[_D_co]):
         ------
         ExpressionError
             ``KY-E207``: the expression would be too deep.
+
+        Examples
+        --------
+         >>> cell_column("label").is_not_null()
+         cell_column('label').is_not_null()
         """
 
     def log1p(self: _CellExprNumeric) -> CellExpr[Numeric]:
@@ -3981,6 +3999,11 @@ class CellExpr(Generic[_D_co]):
         ExpressionError
             ``KY-E205``: the expression is not numeric. ``KY-E207``: the
             expression would be too deep.
+
+        Examples
+        --------
+         >>> cell_column("total_counts").log1p()
+         cell_column('total_counts').log1p()
         """
 
     def recompute(self) -> CellExpr[_D_co]:
@@ -4012,7 +4035,13 @@ class CellExpr(Generic[_D_co]):
 
     @property
     def str(self: _CellExprString) -> CellStringNamespace:
-        """String functions; only on ``String`` (or ``Unknown``) expressions."""
+        """String functions; only on ``String`` (or ``Unknown``) expressions.
+
+        Examples
+        --------
+         >>> cell_column("label").str.starts_with("MT-")
+         cell_column('label').str.starts_with('MT-')
+        """
 
 @final
 class CellStringNamespace:
@@ -4097,7 +4126,15 @@ class GeneExpr(Generic[_D_co]):
 
     @property
     def dtype(self) -> type[_D_co]:
-        """The dtype kind: a class from ``kyto.dtypes``."""
+        """The dtype kind: a class from ``kyto.dtypes``.
+
+        Examples
+        --------
+         >>> gene_column("total_counts").dtype
+         <class 'kyto.dtypes.Unknown'>
+         >>> (gene_column("total_counts") > 0).dtype
+         <class 'kyto.dtypes.Boolean'>
+        """
 
     def __class_getitem__(cls, item: object) -> object:
         """Subscripting the class, as in ``CellExpr[Numeric]``, gives a
@@ -4231,6 +4268,11 @@ class GeneExpr(Generic[_D_co]):
         ------
         ExpressionError
             ``KY-E207``: the expression would be too deep.
+
+        Examples
+        --------
+         >>> gene_column("label").is_null()
+         gene_column('label').is_null()
         """
 
     def is_not_null(self) -> GeneExpr[Boolean]:
@@ -4247,6 +4289,11 @@ class GeneExpr(Generic[_D_co]):
         ------
         ExpressionError
             ``KY-E207``: the expression would be too deep.
+
+        Examples
+        --------
+         >>> gene_column("label").is_not_null()
+         gene_column('label').is_not_null()
         """
 
     def log1p(self: _GeneExprNumeric) -> GeneExpr[Numeric]:
@@ -4266,6 +4313,11 @@ class GeneExpr(Generic[_D_co]):
         ExpressionError
             ``KY-E205``: the expression is not numeric. ``KY-E207``: the
             expression would be too deep.
+
+        Examples
+        --------
+         >>> gene_column("total_counts").log1p()
+         gene_column('total_counts').log1p()
         """
 
     def recompute(self) -> GeneExpr[_D_co]:
@@ -4297,7 +4349,13 @@ class GeneExpr(Generic[_D_co]):
 
     @property
     def str(self: _GeneExprString) -> GeneStringNamespace:
-        """String functions; only on ``String`` (or ``Unknown``) expressions."""
+        """String functions; only on ``String`` (or ``Unknown``) expressions.
+
+        Examples
+        --------
+         >>> gene_column("label").str.starts_with("MT-")
+         gene_column('label').str.starts_with('MT-')
+        """
 
 @final
 class GeneStringNamespace:

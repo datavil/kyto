@@ -25,24 +25,62 @@ __all__ = ["Boolean", "ExprDtype", "Numeric", "String", "Unknown"]
 
 
 class ExprDtype:
-    """Base class of the dtype kinds; ``CellExpr[ExprDtype]`` is any cell expression."""
+    """Base class of the dtype kinds; ``CellExpr[ExprDtype]`` is any cell expression.
+
+    Examples
+    --------
+    >>> from kyto.dtypes import ExprDtype, Numeric
+    >>> issubclass(Numeric, ExprDtype)
+    True
+    """
 
 
 @final
 class Boolean(ExprDtype):
-    """``True`` / ``False``: comparisons, ``&``, ``|``, ``~`` and ``str`` predicates."""
+    """``True`` / ``False``: comparisons, ``&``, ``|``, ``~`` and ``str`` predicates.
+
+    Examples
+    --------
+    >>> from kyto import cell_column
+    >>> from kyto.dtypes import Boolean
+    >>> (cell_column("n_genes") > 200).dtype is Boolean
+    True
+    """
 
 
 @final
 class Numeric(ExprDtype):
-    """Integers and floats: matrix values, embeddings and arithmetic."""
+    """Integers and floats: matrix values, embeddings and arithmetic.
+
+    Examples
+    --------
+    >>> from kyto import gene_expression
+    >>> from kyto.dtypes import Numeric
+    >>> gene_expression("CD3E").dtype is Numeric
+    True
+    """
 
 
 @final
 class String(ExprDtype):
-    """Text: the ID column and categorical columns."""
+    """Text: the ID column and categorical columns.
+
+    Examples
+    --------
+    >>> from kyto import cell_column, scan
+    >>> scan(store).resolve(cell_column("cell_id")).dtype
+    <class 'kyto.dtypes.String'>
+    """
 
 
 @final
 class Unknown(ExprDtype):
-    """Not known until the plan is built: a column not yet resolved (task 3.5)."""
+    """Not known until the plan is built: a column not yet resolved (task 3.5).
+
+    Examples
+    --------
+    >>> from kyto import cell_column
+    >>> from kyto.dtypes import Unknown
+    >>> cell_column("n_genes").dtype is Unknown
+    True
+    """

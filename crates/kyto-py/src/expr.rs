@@ -297,6 +297,11 @@ macro_rules! expr_class {
             /// ------
             /// ExpressionError
             ///     ``KY-E207``: the expression would be too deep.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("label").is_null()"#)]
+            #[doc = concat!(" ", $column, "('label').is_null()")]
             fn is_null(&self, py: Python<'_>) -> PyResult<Self> {
                 self.null_test(py, NullTest::IsNull)
             }
@@ -314,6 +319,11 @@ macro_rules! expr_class {
             /// ------
             /// ExpressionError
             ///     ``KY-E207``: the expression would be too deep.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("label").is_not_null()"#)]
+            #[doc = concat!(" ", $column, "('label').is_not_null()")]
             fn is_not_null(&self, py: Python<'_>) -> PyResult<Self> {
                 self.null_test(py, NullTest::IsNotNull)
             }
@@ -334,6 +344,11 @@ macro_rules! expr_class {
             /// ExpressionError
             ///     ``KY-E205``: the expression is not numeric. ``KY-E207``: the
             ///     expression would be too deep.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("total_counts").log1p()"#)]
+            #[doc = concat!(" ", $column, "('total_counts').log1p()")]
             fn log1p(&self, py: Python<'_>) -> PyResult<Self> {
                 self.expr.log1p().map(|expr| Self { expr }).map_err(|error| to_py_err(py, &error))
             }
@@ -369,12 +384,24 @@ macro_rules! expr_class {
             }
 
             /// The dtype kind: a class from ``kyto.dtypes``.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("total_counts").dtype"#)]
+            #[doc = concat!(" <class 'kyto.dtypes.Unknown'>")]
+            #[doc = concat!(" >>> (", $column, r#"("total_counts") > 0).dtype"#)]
+            #[doc = concat!(" <class 'kyto.dtypes.Boolean'>")]
             #[getter]
             fn dtype<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
                 dtype_class(py, self.expr.dtype())
             }
 
             /// String functions; only on ``String`` (or ``Unknown``) expressions.
+            ///
+            /// Examples
+            /// --------
+            #[doc = concat!(" >>> ", $column, r#"("label").str.starts_with("MT-")"#)]
+            #[doc = concat!(" ", $column, "('label').str.starts_with('MT-')")]
             #[getter]
             fn str(&self) -> $namespace {
                 $namespace { expr: self.expr.clone() }

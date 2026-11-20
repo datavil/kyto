@@ -204,6 +204,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
 | `docs/` | `format.md` store format spec (2.1); docs site sources (not yet: task 10.5) |
 | `errors.toml` | the error registry (codes, classes, templates, hints, docs links) |
+| `llms.txt`, `llms-full.txt` | the public API for agents: signatures, summaries, examples (generated from the stubs, 8.6) |
 | `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
 | `memory/` | lessons learned (indexed) |
 | `.github/workflows/` | CI (`ci.yml`) |
@@ -302,6 +303,7 @@ uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
 uv run python scripts/error_registry.py --check   # errors.toml: generated code in sync, no unregistered error (R10)
 uv run python scripts/stubs.py --check    # python/kyto/_kyto.pyi is what the bindings generate (R12; drop --check to regenerate)
+uv run python scripts/llms_txt.py --check  # llms.txt and llms-full.txt are what the stubs say (8.6; drop --check to regenerate)
 uv run pytest                             # Python tests (API, parity, hypothesis properties with a fixed seed)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
 uv run pre-commit install                 # run the hooks on every git commit (once)
