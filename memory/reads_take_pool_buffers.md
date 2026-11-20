@@ -32,3 +32,17 @@ page faults). Same bits: only where the values are written changed.
   that store). With reads from the pool, count the buffers the consumer holds (later
   blocks allocate as many again), the reading phase (only the reads have left the pool),
   and a read taking a larger layer's pooled buffer (the pool is LIFO).
+
+**Pricing a short last window (task 5.21):** `estimate()` prices the reading phase window by
+window: second window (only what the first allocated), a full window without the last
+block (only if a fourth window exists), and the window holding the last block (read at its
+own rows). What the bug hunt found in the first version, and how to check:
+- Every per-read term must scale with the window's reads. The `inflated` term (a read
+  holding a larger layer's pooled buffer) left at a full window's count made a shorter last
+  window price *higher* (`scale`, +13 to +23%) and the estimate non-monotonic in stream
+  length: fewer reads also leave more buffers free in the pool.
+- A read joins into a pooled buffer (no growth) only if the pool has one for it: with the
+  consumer holding the only one (2 blocks, 1 in flight) it allocates and grows.
+- Reads cut from whole blocks (5.14) are not per block: keep their pool term.
+- The fixtures have at most 3 blocks; to check a window-model change, convert pbmc3k at 512
+  and 256 cells a block (temporarily) and probe `estimate()` old vs new over many shapes.

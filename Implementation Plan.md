@@ -78,11 +78,8 @@ Done (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7): see [Implementation Plan - Done.md](Im
 
 Goal: any plan runs within a memory limit, uses every core, and gives the same answer on 1 or 64 threads.
 
-Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15, 5.16, 5.17, 5.18, 5.19, 5.20): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
+Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15, 5.16, 5.17, 5.18, 5.19, 5.20, 5.21): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.21 The estimate reads a short stream's last block as whole.** The pool term (task 5.18) counts every later block at the full block size, so a stream of few blocks whose last one is small is estimated high: pbmc3k at 1,024-cell blocks (3 blocks, the last of 652 cells) with 1 block in flight is +24.1% on `estimate_fixtures.rs`, next to its 25% bound. Size the later window's blocks by the cells left (the last block's rows), keeping the bound for long streams. (added Nov 20, 2026, from 5.18's measurement)
-  - Depends: 5.18
-  - Done when: whole blocks on the fixtures within 15% of the measured heap; `memory_limit.rs` and the estimate tests pass.
 - [ ] **5.22 Preprocessing on 1 thread at scanpy's time.** In 10.8's workflow at 50k cells, kyto's QC + filters take 0.89 s against scanpy's 0.41 s (2.1x), and its HVG step takes 1.68 s against 0.53 s (3.2x; 1.29x at 4 threads). kyto decodes the store on every pass; scanpy holds the matrix after a 0.11 s read. Profile the passes on 1 thread (decode, QC, the HVG statistics pass) and cut the largest cost. (added Nov 20, 2026, from 10.8's measurement)
   - Depends: 5.18
   - Done when: `kyto_steps.py --threads 1,4` on the 50k data gives a `hvg` prefix (QC through HVG, cumulative) of at most 1.5 s on 1 thread (1.2x scanpy's warm read through HVG, 1.26 s) and an HVG step of at most 1.2x scanpy's at 4 threads; outputs bit-identical across thread counts (R11); `performance.md` updated.

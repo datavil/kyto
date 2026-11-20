@@ -49,7 +49,12 @@
 //! `(window + 1) x entries` (one entry per scanned layer and per operator: a node
 //! writing layers, a cell step, a gene selection), each at most the largest layer
 //! block; a held or pooled layer block is `capacity(e) x (4 + value bytes) +
-//! (rows + 1) x 8`. Blocks smaller than the scan's reads, on many threads (task 5.14,
+//! (rows + 1) x 8`. The reading phase is counted window by window (task 5.21): the
+//! second window finds what the first allocated, the windows after it also the
+//! buffers the second allocated for the consumer's block, and the window holding the
+//! stream's last block reads it at its own rows (the last store cell block's last
+//! part) into a full block's pooled buffers, so a short stream is not priced at full
+//! blocks. Blocks smaller than the scan's reads, on many threads (task 5.14,
 //! [`crate::PhysicalOptions::store_blocks_in_flight`]), are cut in memory from reads of
 //! `R` cells (the store's `C`, or `max_block_cells`): a window reads `max(1, window x
 //! B / R)` of them at once, each holding the scan's reading (its row below, sized for
@@ -277,6 +282,11 @@ impl PhysicalPlan {
         // Per block in flight: the scan's reading of its tiles, then the joined
         // layers with every layer the streamed nodes write (task 5.5: not at once).
         let mut scan_reading = 0_u128;
+        // The same for the stream's last block (task 5.21: a short stream's last block
+        // may hold far fewer cells), joined into a full block's pooled buffers when the
+        // pool has them, else into buffers it allocates and grows.
+        let mut last_pooled = 0_u128;
+        let mut last_fresh = 0_u128;
         // Blocks cut in memory from cell blocks read whole (task 5.14): what reading one
         // whole block takes, and how many are read at once.
         let mut whole_reading = 0_u128;
@@ -353,6 +363,10 @@ impl PhysicalPlan {
                             whole_reading += read.block_bytes();
                         } else {
                             scan_reading += read.block_bytes();
+                            let last = ScanLayer::new(&sizes.last_block(), layer);
+                            last_pooled +=
+                                last.pooled_block_bytes(vec_capacity(sizes.entries(layer.nnz)));
+                            last_fresh += last.block_bytes();
                         }
                         scanned_buffers += 1;
                         pool_entries += 1;
@@ -476,20 +490,54 @@ impl PhysicalPlan {
             // Free are those the consumer does not hold and the later window has not
             // taken (task 5.10), at most the pool's cap: while it reads, only its
             // reads' buffers have left the pool; while it computes, all of them.
-            let free = |taking: u128| {
+            let free_after = |allocated: u128, taking: u128, blocks: u128| {
                 allocated
-                    .saturating_sub(held_layers + later * taking)
+                    .saturating_sub(held_layers + blocks * taking)
                     .min((window + 1) * pool_entries)
                     * largest_layer_block
             };
+            let free = |taking: u128| free_after(allocated, taking, later);
             // The pool hands out the buffers given back last: a read may take a larger
             // layer's (a dense `scale` block's), holding its capacity while the step
             // that writes that layer grows another.
-            let inflated =
-                later * scanned_buffers * largest_layer_block.saturating_sub(largest_read_block);
-            let reading = (later * scan_reading).max(whole) + free(scanned_buffers);
+            let inflated = |blocks: u128| {
+                blocks * scanned_buffers * largest_layer_block.saturating_sub(largest_read_block)
+            };
+            // Reading, window by window after the first (task 5.21): the second window
+            // (`later` blocks) finds only what the first allocated; the windows after
+            // it also the buffers the second allocated for the consumer's block. A
+            // window holding the stream's last block reads it at its own rows (a short
+            // stream's last block may be small), into a pooled buffer only if the pool
+            // has one for every read of the window (else it allocates and grows its
+            // own); a full window reads full blocks. Each read may hold a larger pooled
+            // buffer (`inflated`), so a window of fewer reads is never priced above a
+            // full one. Reads cut from whole store blocks (task 5.14) are not per
+            // block: their pool is priced as a full window's.
+            let reads = |blocks: u128, last: bool, allocated: u128| {
+                let taking = if whole > 0 { later } else { blocks };
+                let pooled = allocated
+                    .saturating_sub(held_layers)
+                    .min((window + 1) * pool_entries)
+                    >= blocks * scanned_buffers;
+                let last_reading = if pooled { last_pooled } else { last_fresh };
+                let tiles = if last {
+                    (blocks - 1) * scan_reading + last_reading
+                } else {
+                    blocks * scan_reading
+                };
+                tiles.max(whole) + free_after(allocated, scanned_buffers, taking) + inflated(taking)
+            };
+            let mut reading = reads(later, n_blocks <= 2 * window, window * buffers);
+            if n_blocks > 2 * window {
+                // A full window without the last block: a fourth window exists.
+                if n_blocks > 3 * window {
+                    reading = reading.max(reads(window, false, allocated));
+                }
+                let last_window = n_blocks - (n_blocks.div_ceil(window) - 1) * window;
+                reading = reading.max(reads(last_window, true, allocated));
+            }
             let computing = later * joined_and_written + free(buffers);
-            block = block.max(reading.max(computing) + inflated + held);
+            block = block.max(reading.max(computing + inflated(later)) + held);
         }
         block += once;
 
@@ -743,6 +791,17 @@ impl BlockSizes {
         (u128::from(nnz) * self.rows).div_ceil(self.n_cells)
     }
 
+    /// The stream's last block (task 5.21): the rows the last store cell block leaves
+    /// for its last part, at most a full block's.
+    fn last_block(&self) -> Self {
+        let last_cells = self.n_cells - (self.n_cell_blocks.max(1) - 1) * self.cell_block_size;
+        let rows = match self.rows {
+            0 => 0,
+            rows => (last_cells.max(1) - 1) % rows + 1,
+        };
+        Self { rows, ..*self }
+    }
+
     /// Bytes of one tile's `indptr`.
     fn tile_indptr_bytes(&self) -> u128 {
         (self.cell_block_size + 1) * 4
@@ -795,6 +854,23 @@ impl ScanLayer {
             + capacity * 4
             + capacity * self.value_bytes
             + capacity / 2 * self.value_bytes;
+        reading.max(joining)
+    }
+
+    /// Bytes per block in flight of a later block, whose reads join into pooled
+    /// buffers (task 5.18) of a full block's `capacity` entries (task 5.21): the larger
+    /// of reading its tiles and joining them, with no buffer growing.
+    fn pooled_block_bytes(&self, capacity: u128) -> u128 {
+        if self.nnz == 0 {
+            return 0;
+        }
+        let tiles =
+            self.n_gene_blocks * self.tile_indptr_bytes + self.entries * (4 + self.value_bytes);
+        let reading = tiles + self.n_gene_blocks * 2 * u128::from(ASSUMED_NNZ_CHUNK_SIZE) * 4;
+        let joining = tiles
+            + self.rows * 4
+            + (self.rows + 1) * 8
+            + capacity.max(vec_capacity(self.entries)) * (4 + self.value_bytes);
         reading.max(joining)
     }
 

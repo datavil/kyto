@@ -79,6 +79,13 @@ const PASS_BYTES: u64 = 2_000_000 * 8 + 6 * 4_097 * 4 + 7 * 8;
 /// (tiles + `2 x 2 x 65 536 x 4`).
 const SCAN_BLOCK: u64 = (2 * 4_097 * 4 + 819_200 * 8) + 4_096 * 4 + 4_097 * 8 + 1_048_576 * 10;
 
+/// The scan's last block (task 5.21): 10 000 cells leave 1 808 rows for the third
+/// block, 361 600 entries on average. Its tiles are `2 x 4 097 x 4 + 361 600 x 8`
+/// bytes; joining them adds the row positions (`1 808 x 4`), the `indptr` (`1 809 x 8`)
+/// and `indices`/`data` in a full block's pooled buffers (`1 048 576 x (4 + 4)`, none
+/// growing), more than reading (tiles + `2 x 2 x 65 536 x 4`).
+const LAST_READ: u64 = (2 * 4_097 * 4 + 361_600 * 8) + 1_808 * 4 + 1_809 * 8 + 1_048_576 * 8;
+
 /// A joined block of `counts` (or one mapped from it) as the consumer holds it and the
 /// pool keeps it: `indices` and values at the capacity pushing reaches, and `indptr`.
 const HELD_BLOCK: u64 = 1_048_576 * 8 + 4_097 * 8;
@@ -421,20 +428,21 @@ fn nodes_writing_layers_hold_an_output_block() {
     // `indptr`) is held with the joined block, less than reading it; but while the last
     // block is read the consumer holds a block of both layers and the pool keeps one
     // buffer: of the 4 the first window allocated, the consumer holds 2 and the last
-    // block's `log1p` takes one back (task 5.10).
+    // block's `log1p` takes one back (task 5.10). The last block holds 1 808 cells,
+    // read at its own rows (task 5.21).
     const { assert!(HELD_BLOCK + 819_200 * 8 + 4_097 * 8 < SCAN_BLOCK) };
-    assert_eq!(log1p, SCAN_BLOCK + 3 * HELD_BLOCK);
+    assert_eq!(log1p, LAST_READ + 3 * HELD_BLOCK);
     // Centred `scale` is dense: every gene of every row, with the joined block.
     let scaled = estimate_all(&scan().scale(Some("counts"), "scaled", true, None).unwrap());
     let dense = 4_096 * N_GENES * 8 + 4_097 * 8;
     assert!(HELD_BLOCK + dense > SCAN_BLOCK);
-    // While the last block is read: its tiles, the consumer's block of both layers (the
+    // While the last block (1 808 cells, task 5.21) is read: its tiles, the consumer's block of both layers (the
     // dense one at its capacity, 2^23 entries, is `dense`), the pool's other buffer (at
     // most `dense`), and the read's buffer taken from the pool, which may be the dense
     // one the consumer gave back last (task 5.18: `dense` instead of `HELD_BLOCK`).
     assert_eq!(
         scaled.block_memory(),
-        SCAN_BLOCK - HELD_BLOCK + dense + (HELD_BLOCK + dense) + dense
+        LAST_READ - HELD_BLOCK + dense + (HELD_BLOCK + dense) + dense
     );
     // Its statistics: a mean and a variance per gene, and while its statistics pass
     // runs, the same per leaf of its reduction (task 5.6): 2 blocks in flight and the
@@ -718,11 +726,12 @@ fn a_filter_copies_the_blocks_it_rewrites() {
     );
     // After `log1p` a filter copies both layers: a block holds 4 buffers at once, the
     // first window allocated 8. While the last block is read (task 5.18: it takes 1
-    // back), the consumer holds 2 and the pool keeps 5, more than while it computes.
+    // back, at its own 1 808 rows, task 5.21), the consumer holds 2 and the pool keeps
+    // 5, more than while it computes.
     let after = plan.filter_genes(&gene_filter).unwrap();
-    assert!(SCAN_BLOCK + 5 * HELD_BLOCK > (per_block + copy) + 2 * HELD_BLOCK);
+    assert!(LAST_READ + 5 * HELD_BLOCK > (per_block + copy) + 2 * HELD_BLOCK);
     assert_eq!(
         estimate_all(&after).block_memory(),
-        SCAN_BLOCK + 2 * HELD_BLOCK + 5 * HELD_BLOCK
+        LAST_READ + 2 * HELD_BLOCK + 5 * HELD_BLOCK
     );
 }

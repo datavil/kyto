@@ -684,6 +684,48 @@ Done-when's reference); it is 23% of scanpy's peak for the same workflow.
 - **Where kyto loses:** preprocessing on 1 thread is still 2.9x scanpy's time (5.16), and
   PCA alone's 4-thread gap above.
 
+## A short stream's last block in the estimate (task 5.21)
+
+Measured Nov 20, 2026, on the task 5.21 tree (base `808989f`), debug test builds, while other
+builds ran on the machine. An estimate change only: no executor code changed, so no timing
+run. `estimate()`'s reading phase is now counted window by window: the window holding the
+stream's last block reads it at its own rows (into a full block's pooled buffer when the pool
+has one for each of the window's reads, else growing its own), only the windows after the
+second find the buffers the second allocated for the consumer's block, and a read's larger
+pooled buffer is counted per read of the window. A stream with a fourth window keeps its
+estimate (its full third window is priced as before); reads cut from whole blocks (5.14)
+keep their pool term.
+
+`estimate_fixtures.rs`, whole blocks (the rows whose estimate changed; every other row's
+estimate is the same bytes, their measured heap moving by run-to-run noise only):
+
+| Fixture, plan, blocks in flight | Estimate base -> 5.21 (MB) | Measured (MB) | Error base -> 5.21 |
+| --- | --- | --- | --- |
+| pbmc3k maps, C=1024, 1 | 34.26 -> 29.64 | 27.62 to 27.83 | +23.1% -> **+6.5% to +7.3%** |
+| pbmc3k maps, C=1024, 2 | 42.66 -> 38.04 | 36.22 | +18.4% -> **+5.0%** |
+| pbmc3k filters, C=1024, 1 | 41.05 -> 37.47 | 37.12 to 37.32 | +10.6% -> **+0.4% to +0.9%** |
+
+- **Whole blocks:** -6.4% to +23.1% of the measured heap before (5.18 recorded +24.1% on
+  its run), -6.4% to **+12.3%** after (Done when: within 15%). pbmc3k at 1024-cell blocks has
+  3 blocks, the last of 652 cells: at 1 block in flight the third window is the last block,
+  read before at 1,024 rows. Split and cut rows: estimates unchanged (never below -2.5%).
+- **Longer streams (measured once, not kept in the test):** pbmc3k converted at 512 and 256
+  cells a block (6 and 11 blocks, the last of 140 cells), the same three plans at 1, 2 and 4
+  blocks in flight: the rows whose estimate fell went from +10.9% / +13.6% / +48.9% to
+  -2.3% / +2.6% / +36.5% (512, maps and filters at 2, maps at 4) and from +61.3% / +60.6% to
+  +51.4% / +52.4% (256 at 4); no row below -2.5%.
+- **Bug hunt:** the first version priced a read's larger pooled buffer (the `inflated` term,
+  5.18) for a full window even when the last window has fewer reads, so `scale` streams of
+  9 to 49 blocks at 4 in flight rose 13 to 23% and a longer stream could get a lower
+  estimate; it priced a last read as pooled when the consumer held the only pooled buffer
+  (2 blocks at 1 in flight: 8% low); and it raised cut reads' pool term (+32.6% -> +54.2%).
+  All three fixed; over 378 synthetic shapes (`scan`, `log1p`, `scale`; 1, 2, 4 in flight;
+  100 to 200,000 cells) no estimate rises, and those that fall are short last windows.
+- **Memory limit (`memory_limit.rs`):** the 84,000-cell store's estimate is the same
+  (16,968,368 B, 83 blocks), the fit still picks 1,024 x 1, and peak RSS is the same on base
+  and 5.21 on this machine (49.9 to 51.1 MB; above 5.18's 38 MB because of the parallel
+  builds' load, base included). The output hash is the same (R11).
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).
