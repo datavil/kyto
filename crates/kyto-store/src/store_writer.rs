@@ -12,13 +12,16 @@
 //! [`StoreWriter::add_graph`] are held whole and written by `finish` (format.md §6, §7;
 //! task 5.11), and [`StoreWriter::set_plan`] records the plan JSON that wrote the store
 //! in `provenance.json` (§9).
-//! Does not: fill in the seeds or timings of `provenance.json` (8.5), or stream the
+//! [`StoreWriter::set_seeds`] and [`StoreWriter::set_run`] add the seeds, start time and
+//! node timings (task 8.5).
+//! Does not: stream the
 //! cell table, embeddings or graphs (given whole, the buffered path of §10.2).
 //!
 //! Memory: per layer, fewer than `C` buffered rows, fewer than `S` unwritten entries and
 //! 8 bytes per tile between calls; during a push, a copy of the pushed rows and one
 //! `indptr` shard (see `layer_stream`). The gene table is held until `finish`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -89,6 +92,10 @@ pub struct StoreWriter {
     graphs: Vec<Graph>,
     /// The plan JSON that wrote the store, for `provenance.json` (§9).
     plan: Option<serde_json::Value>,
+    /// Plan node ID to seed, for `provenance.json` (§9).
+    seeds: BTreeMap<u64, u64>,
+    /// Plan node ID to seconds, for `provenance.json`'s `run` (§9).
+    timings: BTreeMap<u64, f64>,
     /// Set when a write failed: the arrays are then incomplete, so later calls fail.
     failed: bool,
 }
@@ -177,6 +184,8 @@ impl StoreWriter {
             embeddings: Vec::new(),
             graphs: Vec::new(),
             plan: None,
+            seeds: BTreeMap::new(),
+            timings: BTreeMap::new(),
             failed: false,
         })
     }
@@ -215,6 +224,21 @@ impl StoreWriter {
     /// wrote the store, so a recomputed column finds its recipe (task 5.11).
     pub fn set_plan(&mut self, plan: serde_json::Value) {
         self.plan = Some(plan);
+    }
+
+    /// Record `seeds` (plan node ID to seed, every seeded node of the plan) as the
+    /// `seeds` of `provenance.json` (format.md §9, task 8.5).
+    pub fn set_seeds(&mut self, seeds: BTreeMap<u64, u64>) {
+        self.seeds = seeds;
+    }
+
+    /// Record how the run went in `provenance.json`'s `run` (format.md §9, task 8.5):
+    /// it started at `started_at` (the writer's creation otherwise) and spent
+    /// `timings` (plan node ID to seconds) on its nodes. `run` is the one part of the
+    /// store that varies between identical runs (§10.3).
+    pub fn set_run(&mut self, started_at: SystemTime, timings: BTreeMap<u64, f64>) {
+        self.started_at = started_at;
+        self.timings = timings;
     }
 
     /// Matrix rows pushed so far.
@@ -378,8 +402,13 @@ impl StoreWriter {
             };
             set_lineage(*axis, columns, name, lineage)?;
         }
-        let provenance =
-            provenance_json(source, self.plan.take(), self.started_at, SystemTime::now());
+        let provenance = provenance_json(
+            source,
+            self.plan.take(),
+            &self.seeds,
+            &self.timings,
+            (self.started_at, SystemTime::now()),
+        );
         write_json(&store.join("provenance.json"), &provenance)?;
         let schema = atlas_schema(
             n_cells,

@@ -133,11 +133,8 @@ Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8): see [Implementation Plan - Done.m
 
 Goal: an agent can inspect data, write a pipeline, check it and fix its own mistakes without reading the matrix or the source code.
 
-Done (8.1, 8.2, 8.3, 8.4): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
+Done (8.1, 8.2, 8.3, 8.4, 8.5): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
 
-- [ ] **8.5 Provenance.** Every store written by kyto holds the plan JSON, kyto and dependency versions, seeds, device and timings.
-  - Depends: 2.5, 4.3
-  - Done when: `ky.scan(path).provenance()` rebuilds a plan that reproduces the store.
 - [ ] **8.6 Machine-readable docs.** `llms.txt`, one runnable example per method, doctests in CI.
   - Depends: 7.6
   - Done when: every public method appears in `llms.txt` and its example passes.

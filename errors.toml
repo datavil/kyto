@@ -734,6 +734,18 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E304"
+variant = "NoProvenancePlan"
+class = "LineageError"
+summary = "A store's provenance is asked for the plan that wrote it, but the store holds no such plan."
+message = "provenance() cannot rebuild the plan that wrote store '{store}': {problem}"
+hint = "only stores written by sink_zarr hold the plan that made them; a store from convert records its input file instead (metadata()['source'])"
+fields = [
+    { name = "store", type = "str", doc = "The store's path.", example = "pbmc.kyto" },
+    { name = "problem", type = "str", doc = "Why there is no plan.", example = "provenance.json records no plan (the store was not written by a kyto sink)" },
+]
+
+[[errors]]
 code = "KY-E401"
 variant = "MemoryLimit"
 class = "MemoryLimitError"

@@ -4,15 +4,16 @@
 //! spec's key order) with member lists sorted by name (format.md §10.3), build
 //! `provenance.json` with keys in spec order, and format the `run` timestamps as RFC 3339
 //! UTC.
-//! Does not: write files (see `store_writer`), or fill in a plan, seeds or timings
-//! (tasks 4.3 and 8.5); v0 writes `null`, `{}` and `{}`.
+//! Does not: write files (see `store_writer`), or know the plan, seeds or timings it
+//! is given (the executor's sink finds them, tasks 5.9 and 8.5).
 
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kyto_core::{
     AtlasSchema, ColumnSchema, EmbeddingSchema, GraphSchema, LayerSchema, TableSchema, Tiling,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// The input file of an import, recorded as `source` in `provenance.json` (format.md §9).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,12 +70,23 @@ pub(crate) fn atlas_schema(
 
 /// `provenance.json` (format.md §9). `run` holds the only varying values besides
 /// `source.path` (§10.3).
+/// `seeds` and `timings` are keyed by plan node ID, written as `n<ID>` in ID order;
+/// `(started_at, finished_at)` bound the run.
 pub(crate) fn provenance_json(
     source: Option<&ImportSource>,
     plan: Option<Value>,
-    started_at: SystemTime,
-    finished_at: SystemTime,
+    seeds: &BTreeMap<u64, u64>,
+    timings: &BTreeMap<u64, f64>,
+    (started_at, finished_at): (SystemTime, SystemTime),
 ) -> Value {
+    let seeds: Map<String, Value> = seeds
+        .iter()
+        .map(|(node, seed)| (format!("n{node}"), json!(seed)))
+        .collect();
+    let timings: Map<String, Value> = timings
+        .iter()
+        .map(|(node, seconds)| (format!("n{node}"), json!(seconds)))
+        .collect();
     json!({
         "kyto_version": env!("CARGO_PKG_VERSION"),
         "dependencies": {
@@ -88,12 +100,12 @@ pub(crate) fn provenance_json(
             "path": source.path,
             "sha256": source.sha256,
         })),
-        "seeds": {},
+        "seeds": seeds,
         "device": "cpu",
         "run": {
             "started_at": rfc3339_utc(started_at),
             "finished_at": rfc3339_utc(finished_at),
-            "timings": {},
+            "timings": timings,
         },
     })
 }

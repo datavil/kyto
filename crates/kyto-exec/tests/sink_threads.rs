@@ -14,7 +14,8 @@
 //! The plan: `log1p` of the counts as a second layer, a computed cell column and a PCA
 //! embedding (read by the sink after its stream), sunk to a Zarr store and to an `.h5ad`
 //! file at 1 and 4 threads. The stores' files are byte-identical across thread counts
-//! (except `provenance.json`'s target path and timestamps). The `.h5ad` files are not
+//! (`provenance.json` too, apart from its `run` object, format.md §10.3; task 8.5
+//! dropped the target path from it). The `.h5ad` files are not
 //! compared as bytes (HDF5 stamps its objects with the time they were written): each is
 //! converted back to a store once the global pool is released, and those stores' files
 //! are compared.
@@ -134,7 +135,8 @@ fn sink_within_deadline(plan: &Arc<Plan>, target: Sink, threads: usize) -> u64 {
     }
 }
 
-/// Every file under `root` (relative path to bytes), `provenance.json` left out.
+/// Every file under `root` (relative path to bytes), `provenance.json` without its `run`
+/// (and without the `source` of an import: the input `.h5ad`s differ, see above).
 fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut found = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
@@ -143,9 +145,19 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
             let path = entry.unwrap().path();
             if path.is_dir() {
                 pending.push(path);
-            } else if path.file_name().unwrap() != "provenance.json" {
+            } else {
+                let mut bytes = std::fs::read(&path).unwrap();
+                if path.file_name().unwrap() == "provenance.json" {
+                    let mut provenance: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    let object = provenance.as_object_mut().unwrap();
+                    object.remove("run").unwrap();
+                    if !object["source"].is_null() {
+                        object.remove("source");
+                    }
+                    bytes = serde_json::to_vec(&provenance).unwrap();
+                }
                 let relative = path.strip_prefix(root).unwrap().to_path_buf();
-                found.insert(relative, std::fs::read(&path).unwrap());
+                found.insert(relative, bytes);
             }
         }
     }

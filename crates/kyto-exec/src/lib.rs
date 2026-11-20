@@ -103,6 +103,7 @@ pub use pca::PcaStatistics;
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;
 pub use qc::{CellQc, GeneSet, QcValues};
+pub use recipe::provenance_plan;
 pub use run_control::{Progress, RunControl};
 pub use scrublet::{Doublets, ScrubletBatch, ScrubletResult, scrublet};
 pub use scrublet_pass::ScrubletStatistics;

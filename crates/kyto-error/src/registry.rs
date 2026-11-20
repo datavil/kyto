@@ -481,6 +481,14 @@ pub enum KytoError {
         /// Why the recipe is missing.
         problem: String,
     },
+    /// KY-E304: A store's provenance is asked for the plan that wrote it, but the store holds no such plan.
+    #[error("KY-E304: provenance() cannot rebuild the plan that wrote store '{store}': {problem}")]
+    NoProvenancePlan {
+        /// The store's path.
+        store: String,
+        /// Why there is no plan.
+        problem: String,
+    },
     /// KY-E401: A plan needs more memory than its limit, even with the smallest blocks.
     #[error("KY-E401: the plan needs at least {required_bytes} bytes but memory_limit is {limit_bytes} bytes")]
     MemoryLimit {
@@ -539,7 +547,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 55] = [
+    pub const CODES: [&'static str; 56] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -589,6 +597,7 @@ impl KytoError {
         "KY-E301",
         "KY-E302",
         "KY-E303",
+        "KY-E304",
         "KY-E401",
         "KY-E402",
         "KY-E501",
@@ -649,6 +658,7 @@ impl KytoError {
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
             Self::NoRecipe { .. } => "KY-E303",
+            Self::NoProvenancePlan { .. } => "KY-E304",
             Self::MemoryLimit { .. } => "KY-E401",
             Self::DenseTooLarge { .. } => "KY-E402",
             Self::MissingKernel { .. } => "KY-E501",
@@ -710,6 +720,7 @@ impl KytoError {
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
             Self::NoRecipe { .. } => "LineageError",
+            Self::NoProvenancePlan { .. } => "LineageError",
             Self::MemoryLimit { .. } => "MemoryLimitError",
             Self::DenseTooLarge { .. } => "MemoryLimitError",
             Self::MissingKernel { .. } => "DeviceError",
@@ -868,6 +879,9 @@ impl KytoError {
             }
             Self::NoRecipe { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e303"
+            }
+            Self::NoProvenancePlan { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e304"
             }
             Self::MemoryLimit { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e401"
@@ -1039,6 +1053,9 @@ impl KytoError {
             }
             Self::NoRecipe { column, .. } => {
                 format!("only stores written by a kyto sink hold the plan that computed a column (provenance.json); read '{column}' as stored, or compute it again from the matrix")
+            }
+            Self::NoProvenancePlan { .. } => {
+                String::from("only stores written by sink_zarr hold the plan that made them; a store from convert records its input file instead (metadata()['source'])")
             }
             Self::MemoryLimit { required_bytes, .. } => {
                 format!("raise memory_limit to at least {required_bytes} bytes, or select fewer cells or genes before this step")
@@ -1299,6 +1316,10 @@ impl KytoError {
                 ("expression", FieldValue::Str(expression.clone())),
                 ("kind", FieldValue::Str(kind.clone())),
                 ("column", FieldValue::Str(column.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+            ],
+            Self::NoProvenancePlan { store, problem } => vec![
+                ("store", FieldValue::Str(store.clone())),
                 ("problem", FieldValue::Str(problem.clone())),
             ],
             Self::MemoryLimit { required_bytes, limit_bytes } => vec![
@@ -1571,6 +1592,10 @@ impl KytoError {
                 kind: "cell column".to_owned(),
                 column: "n_genes".to_owned(),
                 problem: "provenance.json records no plan (lineage names node 3)".to_owned(),
+            },
+            Self::NoProvenancePlan {
+                store: "pbmc.kyto".to_owned(),
+                problem: "provenance.json records no plan (the store was not written by a kyto sink)".to_owned(),
             },
             Self::MemoryLimit {
                 required_bytes: 6000000000,

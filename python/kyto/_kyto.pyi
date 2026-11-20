@@ -1975,8 +1975,10 @@ class Atlas:
         How the scanned store was made: its ``provenance.json`` (docs/format.md section
         9), as a ``dict``.
 
-        Keys: ``kyto_version``, ``dependencies``, ``plan`` (the plan JSON that wrote the
-        store, or ``None`` for an import), ``source``, ``seeds``, ``device`` and ``run``.
+        Keys: ``kyto_version``, ``dependencies``, ``plan`` (the plan JSON whose output
+        the store holds, without its sink, or ``None`` for an import; ``provenance()``
+        rebuilds it), ``source``, ``seeds``, ``device`` and ``run`` (start, end and
+        seconds per step).
         It describes the store this plan scans, not the plan's own steps
         (``to_json()``). kyto stores no free-form metadata such as anndata's ``uns``.
 
@@ -1994,6 +1996,42 @@ class Atlas:
         --------
         >>> scan(store).metadata()["source"]["kind"]
         'mtx'
+        """
+    def provenance(self) -> Atlas:
+        r"""
+        The plan that wrote the scanned store, rebuilt from its ``provenance.json``
+        (docs/format.md section 9).
+
+        A store written by ``sink_zarr`` records the plan whose output it holds, with
+        every name resolved (R6) and every seed (R7). This is that plan, without the
+        sink: its scan reads the store the original plan read, at the path recorded
+        then. Sinking it again with the same kyto version writes a store with the same
+        bytes, apart from the ``run`` object of ``provenance.json`` (start, end and
+        per-step timings) (R11).
+
+        Returns
+        -------
+        Atlas
+            A new plan; nothing is read but ``provenance.json`` (no matrix data).
+
+        Raises
+        ------
+        LineageError
+            ``KY-E304``: the store holds no plan (an import from ``convert``), or its
+            ``provenance.json`` cannot be read.
+
+        Examples
+        --------
+        >>> target = store.parent / "logged.kyto"
+        >>> scan(store).log1p(layer="counts", into="log1p").sink_zarr(target)
+        >>> print(scan(target).provenance())
+        LOG1P "counts" -> "log1p"
+        SCAN "..." (2 cells x 3 genes)
+        >>> scan(target).provenance().sink_zarr(store.parent / "again.kyto")
+        >>> scan(store).provenance()
+        Traceback (most recent call last):
+        ...
+        kyto.errors.LineageError: KY-E304: provenance() cannot rebuild the plan that wrote store '...'...
         """
     def to_json(self) -> builtins.str:
         r"""

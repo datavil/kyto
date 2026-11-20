@@ -10,7 +10,8 @@
 //! layer as it is at that step, over the cells and genes present there (a QC metric
 //! over the genes a filter kept). The expression was resolved when the writing plan was
 //! built (R6) and computes the same dtype the plan declared for the column, so a store
-//! read without filters recomputes exactly the stored values.
+//! read without filters recomputes exactly the stored values. [`provenance_plan`]
+//! rebuilds the whole plan that wrote a store (task 8.5).
 //! Does not: recompute a column without lineage (`KY-E302`, refused when the plan is
 //! built) or one whose store holds no plan computing it (`KY-E303`: imported stores,
 //! columns carried over from an earlier store, hand-written lineage).
@@ -191,6 +192,28 @@ impl<'a> Recipes<'a> {
                 plan
             }
         }
+    }
+}
+
+/// The plan that wrote the store at `store`, rebuilt from its `provenance.json`
+/// (format.md §9, task 8.5): the plan whose output the sink wrote, without the sink
+/// (a store written before 8.5 recorded the sink too; it is dropped). Sinking it again
+/// writes the same store, apart from `provenance.json`'s `run` (§10.3). Reads only
+/// `provenance.json`.
+///
+/// # Errors
+/// `KY-E304` if the store has no readable `provenance.json`, or it records no plan (an
+/// import) or one that does not read back.
+pub fn provenance_plan(store: &str) -> Result<Arc<Plan>, KytoError> {
+    match read_plan(store) {
+        StoredPlan::Found(plan) => Ok(match &*plan {
+            Plan::Sink(node) => node.input().map_or(Arc::clone(&plan), Arc::clone),
+            _ => plan,
+        }),
+        StoredPlan::Missing(problem) => Err(KytoError::NoProvenancePlan {
+            store: store.to_owned(),
+            problem,
+        }),
     }
 }
 

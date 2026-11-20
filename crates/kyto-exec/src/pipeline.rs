@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use kyto_core::{AtlasSchema, Axis, ColumnDtype, Source};
 use kyto_error::KytoError;
@@ -193,6 +194,9 @@ pub struct Pipeline {
     /// The layers the scan reads.
     pub(crate) layers: Vec<String>,
     pub(crate) stages: Vec<Stage>,
+    /// The plan node ID of each stage (the first logical node of its optimized node),
+    /// for the timings in `provenance.json` (task 8.5).
+    pub(crate) stage_nodes: Vec<u64>,
     /// The layers the output reads; the stream drops each other one as soon as no
     /// later operator reads it (task 5.16).
     pub(crate) output_layers: BTreeSet<String>,
@@ -235,6 +239,7 @@ impl Pipeline {
         let nodes = optimized.nodes();
         let executions = plan.executions();
         let mut stages = Vec::new();
+        let mut stage_nodes = Vec::new();
         let mut next = Some(output_entry.node());
         let mut scan = None;
         let mut block_cells = None;
@@ -242,6 +247,7 @@ impl Pipeline {
         while let Some(index) = next {
             let node = &nodes[index];
             let passes = executions[index].statistics_passes();
+            let lowered = stages.len();
             match node.operation() {
                 Operation::Scan { plan, reads } => {
                     scan = Some((Arc::clone(plan), layer_names(reads).collect()));
@@ -275,6 +281,9 @@ impl Pipeline {
                     }
                 }
             }
+            if stages.len() > lowered {
+                stage_nodes.push(node.origin().first().map_or(0, |id| id.0));
+            }
             next = node.input();
         }
         // The arena's inputs end at a scan (OptimizedPlan's invariant).
@@ -282,6 +291,7 @@ impl Pipeline {
             unreachable!("an optimized plan's nodes lead down to a scan")
         };
         stages.reverse();
+        stage_nodes.reverse();
         let root = scan.root();
         let schema = root.schema();
         let members = resolve_members(&mut stages, nodes, schema)?;
@@ -317,6 +327,7 @@ impl Pipeline {
             grid,
             layers,
             stages,
+            stage_nodes,
             output_layers,
             blocks_in_flight,
             block_cells,
@@ -475,7 +486,15 @@ impl Pipeline {
             };
             collect_cells(&source(readers, &operators, BTreeSet::new()), &thread_pool)
         };
+        let mut timings = BTreeMap::new();
         for (position, stage) in self.stages.iter().enumerate() {
+            // Maps and cell steps run in later streams; the rest compute here.
+            let timed = !matches!(stage, Stage::Maps(_) | Stage::Cells(_));
+            let _timer = StageTimer {
+                node: self.stage_nodes.get(position).copied().filter(|_| timed),
+                timings: &mut timings,
+                started: Instant::now(),
+            };
             let cross_cell = match stage {
                 Stage::Maps(maps) => {
                     operators.push(Operator::Maps(maps.clone()));
@@ -741,12 +760,30 @@ impl Pipeline {
             operators.retain(|operator| !operator.reads_layers());
             Arc::new(Vec::new())
         };
-        BlockStream::start(
+        let mut stream = BlockStream::start(
             source(readers, &operators, self.output_layers.clone()),
             thread_pool,
             statistics,
             tables.into_genes(),
-        )
+        )?;
+        stream.set_timings(timings);
+        Ok(stream)
+    }
+}
+
+/// Adds the seconds from its creation to its drop to `timings[node]` (task 8.5): a
+/// stage's time, however the loop body leaves it (`continue`, `?`).
+struct StageTimer<'a> {
+    node: Option<u64>,
+    timings: &'a mut BTreeMap<u64, f64>,
+    started: Instant,
+}
+
+impl Drop for StageTimer<'_> {
+    fn drop(&mut self) {
+        if let Some(node) = self.node {
+            *self.timings.entry(node).or_default() += self.started.elapsed().as_secs_f64();
+        }
     }
 }
 

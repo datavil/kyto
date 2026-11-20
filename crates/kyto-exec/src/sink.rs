@@ -28,7 +28,10 @@
 //! embedding and loadings, `umap`'s layout, `neighbors`' graphs), at the rows of the
 //! cells written (in their order) and of the genes present; a graph keeps the edges
 //! between the cells written, re-indexed (anndata's `obsp` subset). The plan is
-//! recorded in `provenance.json`, and a column a `with_cells`/`with_genes` computes from
+//! recorded in `provenance.json` without its sink step (so the target path is not part
+//! of the store), with its seeds, the run's start and the seconds each node took (task
+//! 8.5: a node with its own passes or in-memory step, and the sink node for the
+//! output's stream and the writes), and a column a `with_cells`/`with_genes` computes from
 //! one layer gets `lineage` naming that layer and the node, so a later plan can
 //! recompute it (`recipe.rs`): only when the sink writes that layer and no node between
 //! the column and the sink rewrites it or changes the other axis, and the table columns
@@ -38,8 +41,10 @@
 //! embeddings and graphs it holds in the estimate (5.10). Cluster labels (6.8) arrive
 //! as an `Enum` computed column and are written as one.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Instant, SystemTime};
 
 use kyto_core::{Axis, CellExpr, ColumnDtype, ExprNode, GeneExpr, Lineage, Source};
 use kyto_error::KytoError;
@@ -84,8 +89,12 @@ pub(crate) struct SinkSpec {
     /// [`SinkSpec::set_members`]).
     pub(crate) embeddings: Vec<(String, Option<EmbeddingSource>)>,
     pub(crate) graphs: Vec<(String, Option<GraphSource>)>,
-    /// The plan JSON (task 4.3) recorded in `provenance.json`.
+    /// The plan JSON (task 4.3) recorded in `provenance.json`: the plan whose output
+    /// the sink writes, without the sink step (its target path is not part of the
+    /// store, format.md §9, task 8.5).
     pub(crate) plan: Option<serde_json::Value>,
+    /// The sink node's plan ID: the output's stream and the writes are timed under it.
+    pub(crate) node: u64,
 }
 
 impl SinkSpec {
@@ -139,7 +148,10 @@ impl SinkSpec {
                 .filter(|graph| written(Member::Graph(graph.name.clone())))
                 .map(|graph| (graph.name.clone(), None))
                 .collect(),
-            plan: serde_json::from_str(&plan.to_json()).ok(),
+            plan: node
+                .input()
+                .and_then(|input| serde_json::from_str(&input.to_json()).ok()),
+            node: plan.id().0,
             layers,
         })
     }
@@ -454,7 +466,9 @@ impl Pipeline {
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
     {
         let control = options.control.clone();
+        let started_at = SystemTime::now();
         let mut stream = self.run_on(storage, options)?;
+        let streamed = Instant::now();
         let thread_pool = Arc::clone(stream.thread_pool());
         let genes = match stream.genes() {
             Some(genes) => genes.table().clone(),
@@ -521,6 +535,7 @@ impl Pipeline {
         // The stream has ended (its producer is joined): the rest runs on the pool.
         let stream_genes = stream.genes();
         let statistics = stream.statistics();
+        let timings = stream.timings();
         let n_cells = thread_pool.install(|| -> Result<u64, KytoError> {
             let stored = read_table(Path::new(&self.store), TableAxis::Cells)?
                 .take(&IdxCa::new("cells".into(), positions))
@@ -565,14 +580,34 @@ impl Pipeline {
                 });
             }
             if let Some(plan) = &spec.plan {
+                writer.set_seeds(plan_seeds(plan));
                 writer.set_plan(plan.clone());
             }
+            let mut timings = timings.clone();
+            timings.insert(spec.node, streamed.elapsed().as_secs_f64());
+            writer.set_run(started_at, timings);
             // The last cancel point: after it, the store is renamed into place.
             writer.finish_checked(&cells, None, &|| control.check())?;
             Ok(n_cells)
         })?;
         Ok((n_cells, thread_pool))
     }
+}
+
+/// Every seeded node of the plan JSON `plan`, plan node ID to seed (`provenance.json`'s
+/// `seeds`, format.md §9, task 8.5): the nodes whose step has an integer `seed`
+/// argument, so a seeded step added later is found without a list to update.
+fn plan_seeds(plan: &serde_json::Value) -> BTreeMap<u64, u64> {
+    let nodes = plan.get("nodes").and_then(serde_json::Value::as_array);
+    nodes
+        .into_iter()
+        .flatten()
+        .filter_map(|node| {
+            let id = node.get("id")?.as_u64()?;
+            let seed = node.get("step")?.get("seed")?.as_u64()?;
+            Some((id, seed))
+        })
+        .collect()
 }
 
 /// The columns `columns` of `table`, in their order, each from `computed` when it holds

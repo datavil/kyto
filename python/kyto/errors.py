@@ -286,6 +286,7 @@ class LineageError(KytoError, ValueError):
 
     - ``KY-E302``: A column without lineage is asked to be recomputed.
     - ``KY-E303``: A column with lineage is asked to be recomputed, but the store does not hold the plan that computed it.
+    - ``KY-E304``: A store's provenance is asked for the plan that wrote it, but the store holds no such plan.
 
     See `KytoError` for the parameters and attributes.
 
@@ -1103,6 +1104,16 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("expression", "str"),
             _Field("kind", "str"),
             _Field("column", "str"),
+            _Field("problem", "str"),
+        ),
+    ),
+    "KY-E304": _Entry(
+        class_name="LineageError",
+        message="provenance() cannot rebuild the plan that wrote store '{store}': {problem}",
+        hint="only stores written by sink_zarr hold the plan that made them; a store from convert records its input file instead (metadata()['source'])",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e304",
+        fields=(
+            _Field("store", "str"),
             _Field("problem", "str"),
         ),
     ),

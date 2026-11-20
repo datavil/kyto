@@ -46,6 +46,7 @@ METHODS = (
     "count_cells",
     "count_genes",
     "metadata",
+    "provenance",
     # Inspection (task 8.3).
     "schema",
     "peek",

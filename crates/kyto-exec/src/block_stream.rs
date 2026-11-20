@@ -69,6 +69,9 @@ pub struct BlockStream {
     thread_pool: Arc<rayon::ThreadPool>,
     statistics: Statistics,
     genes: Option<Genes>,
+    /// Seconds each plan node took before the stream started, by plan node ID (task
+    /// 8.5); kept apart from `statistics`, which are the same on every run (R11).
+    timings: BTreeMap<u64, f64>,
 }
 
 /// What one stream reads and runs: the scanned layers (shared by every pass of a
@@ -160,6 +163,7 @@ impl BlockStream {
             thread_pool,
             statistics,
             genes,
+            timings: BTreeMap::new(),
         })
     }
 
@@ -174,6 +178,16 @@ impl BlockStream {
     /// statistics passes, before this stream started (task 5.4).
     pub fn statistics(&self) -> &Statistics {
         &self.statistics
+    }
+
+    /// Seconds each plan node with its own passes or in-memory step took before the
+    /// stream started, by plan node ID (task 8.5, `provenance.json`'s `run`).
+    pub(crate) fn timings(&self) -> &BTreeMap<u64, f64> {
+        &self.timings
+    }
+
+    pub(crate) fn set_timings(&mut self, timings: BTreeMap<u64, f64>) {
+        self.timings = timings;
     }
 
     /// Give a block the caller is done with back, so its buffers serve later blocks.

@@ -122,6 +122,8 @@ def test_atlas_is_frozen_and_has_no_matrix_accessors(store: Path) -> None:
         "count_cells",
         "count_genes",
         "metadata",
+        # Provenance (task 8.5).
+        "provenance",
         # Inspection (task 8.3).
         "schema",
         "peek",
