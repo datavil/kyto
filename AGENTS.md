@@ -69,8 +69,11 @@ decision recorded in the plan.
 
 - **Maestro.** When the user asks to work through the remaining plan items, the main
   session is the maestro and does not implement tasks itself. It starts one sub-session
-  per plan item, **one at a time**: it waits until that session has fully finished
-  (Done-when check, local gate, bug hunt, commit) before starting the next one.
+  per plan item. Items that don't share code or need clean timings may run in parallel
+  (at most 3–4 at once, each in its own worktree, rebased onto `main` before its
+  commit); performance tasks that benchmark run alone. The maestro lands a session only
+  after it has fully finished (Done-when check, local gate, bug hunt, commit).
+  (Parallel runs allowed by the user, Nov 20, 2026.)
 - **Version control.** Each sub-session works in its own git worktree on its own
   branch. When it is done, the maestro checks the result and merges it into `main`
   (rebase onto `main`, fast-forward, `git push origin main`), then removes the worktree
