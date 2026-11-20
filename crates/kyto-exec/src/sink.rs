@@ -15,9 +15,11 @@
 //! the kept cells and the gene table of the genes present (5.8's [`crate::Genes`]). An
 //! `.h5ad` is written as a store in a hidden temporary directory next to the target,
 //! exported by 2.7's [`kyto_store::sink_h5ad`] (the plan's default layer as `X`), and
-//! deleted. Any error or a cancel (`KY-E503`) leaves the target as it was: the writers
-//! write to temporaries renamed on success, and each checks the run's cancel flag once
-//! more right before its rename ([`kyto_store::CommitCheck`]), so a cancel that comes
+//! deleted. Every write (the writer's pushes and finish, the `.h5ad` export) runs on
+//! the run's rayon pool, of the threads asked for (R7, task 5.20). Any error or a
+//! cancel (`KY-E503`) leaves the target as it was: the writers write to temporaries
+//! renamed on success, and each checks the run's cancel flag once more right before
+//! its rename ([`kyto_store::CommitCheck`]), so a cancel that comes
 //! after the last block (while the tables are written, or during the `.h5ad` export)
 //! still leaves no target. Once the target is renamed into place the sink has
 //! finished: a later cancel changes nothing.
@@ -398,7 +400,9 @@ impl Pipeline {
         let target = PathBuf::from(spec.target.path());
         check_target(spec, &target, Path::new(&self.store), overwrite)?;
         match &spec.target {
-            Sink::Zarr { .. } => self.write_store(spec, storage, options, &target, overwrite),
+            Sink::Zarr { .. } => self
+                .write_store(spec, storage, options, &target, overwrite)
+                .map(|(cells, _)| cells),
             Sink::H5ad { .. } => {
                 let parent = match target.parent() {
                     Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -416,7 +420,8 @@ impl Pipeline {
                     })?;
                 let store = scratch.path().join("store");
                 let control = options.control.clone();
-                let cells = self.write_store(spec, storage, options, &store, false)?;
+                let (cells, thread_pool) =
+                    self.write_store(spec, storage, options, &store, false)?;
                 let export = SinkH5adOptions {
                     x_layer: spec.x_layer.clone(),
                     overwrite,
@@ -424,13 +429,19 @@ impl Pipeline {
                 };
                 // The export is not cancellable midway (5.7 Open (2)); a cancel during
                 // it is seen here, before the file appears.
-                sink_h5ad_checked(&store, &target, &export, &|| control.check())?;
+                // On the run's pool (R7, task 5.20): the export's reads of the
+                // temporary store decode on the current rayon pool.
+                thread_pool
+                    .install(|| sink_h5ad_checked(&store, &target, &export, &|| control.check()))?;
                 Ok(cells)
             }
         }
     }
 
-    /// Stream the plan into a store at `target`; the cells written.
+    /// Stream the plan into a store at `target`; the cells written and the run's rayon
+    /// pool. Every write runs on that pool, never on rayon's global one, so the sink
+    /// uses the threads asked for and no more (R7, task 5.20); the stream is read
+    /// outside it (a pool thread waiting for a block would stall a one-thread run).
     fn write_store<S>(
         &self,
         spec: &SinkSpec,
@@ -438,18 +449,21 @@ impl Pipeline {
         options: ExecuteOptions,
         target: &Path,
         overwrite: bool,
-    ) -> Result<u64, KytoError>
+    ) -> Result<(u64, Arc<rayon::ThreadPool>), KytoError>
     where
         S: ?Sized + ReadableStorageTraits + Send + Sync + 'static,
     {
         let control = options.control.clone();
         let mut stream = self.run_on(storage, options)?;
+        let thread_pool = Arc::clone(stream.thread_pool());
         let genes = match stream.genes() {
             Some(genes) => genes.table().clone(),
             None => read_table(Path::new(&self.store), TableAxis::Genes)?,
         };
         let genes = select_columns(&genes, &spec.genes, None, TableAxis::Genes, &self.store)?;
-        let mut writer = StoreWriter::create(target, &genes, &spec.layers, spec.tiling, overwrite)?;
+        let mut writer = thread_pool.install(|| {
+            StoreWriter::create(target, &genes, &spec.layers, spec.tiling, overwrite)
+        })?;
         for (axis, columns) in [
             (TableAxis::Cells, &spec.cells),
             (TableAxis::Genes, &spec.genes),
@@ -497,61 +511,67 @@ impl Pipeline {
                     })
                 })
                 .collect::<Result<_, KytoError>>()?;
-            let pushed = writer.push(&layers);
+            let pushed = thread_pool.install(|| writer.push(&layers));
             for layer in layers {
                 stream.pool().recycle(layer);
             }
             stream.recycle(block);
             pushed?;
         }
-        let stored = read_table(Path::new(&self.store), TableAxis::Cells)?
-            .take(&IdxCa::new("cells".into(), positions))
-            .map_err(|error| corrupt(&self.store, &error.to_string()))?;
-        let cells = select_columns(
-            &stored,
-            &spec.cells,
-            computed.as_ref(),
-            TableAxis::Cells,
-            &self.store,
-        )?;
-        let n_cells = cells.height() as u64;
-        let gene_positions: Vec<u64> = match stream.genes() {
-            Some(genes) => genes.positions().to_vec(),
-            None => (0..genes.height() as u64).collect(),
-        };
-        let mut members = StoredMembers::new(&self.store);
-        for (name, source) in &spec.embeddings {
-            let source = known(source.as_ref(), "embedding", name)?;
-            let rows = members.rows(source, stream.statistics())?;
-            let keys = match source.axis() {
-                Axis::Cells => &written,
-                Axis::Genes => &gene_positions,
+        // The stream has ended (its producer is joined): the rest runs on the pool.
+        let stream_genes = stream.genes();
+        let statistics = stream.statistics();
+        let n_cells = thread_pool.install(|| -> Result<u64, KytoError> {
+            let stored = read_table(Path::new(&self.store), TableAxis::Cells)?
+                .take(&IdxCa::new("cells".into(), positions))
+                .map_err(|error| corrupt(&self.store, &error.to_string()))?;
+            let cells = select_columns(
+                &stored,
+                &spec.cells,
+                computed.as_ref(),
+                TableAxis::Cells,
+                &self.store,
+            )?;
+            let n_cells = cells.height() as u64;
+            let gene_positions: Vec<u64> = match stream_genes {
+                Some(genes) => genes.positions().to_vec(),
+                None => (0..genes.height() as u64).collect(),
             };
-            writer.add_embedding(Embedding {
-                name: name.clone(),
-                axis: source.axis(),
-                width: rows.width as u64,
-                values: rows.take(keys, "embedding", name)?,
-            });
-        }
-        for (name, source) in &spec.graphs {
-            let source = known(source.as_ref(), "graph", name)?;
-            let graph = members
-                .keyed_graph(source, stream.statistics())?
-                .induced(&written, name)?;
-            writer.add_graph(Graph {
-                name: name.clone(),
-                indptr: graph.indptr,
-                indices: graph.indices,
-                weights: graph.weights,
-            });
-        }
-        if let Some(plan) = &spec.plan {
-            writer.set_plan(plan.clone());
-        }
-        // The last cancel point: after it, the store is renamed into place.
-        writer.finish_checked(&cells, None, &|| control.check())?;
-        Ok(n_cells)
+            let mut members = StoredMembers::new(&self.store);
+            for (name, source) in &spec.embeddings {
+                let source = known(source.as_ref(), "embedding", name)?;
+                let rows = members.rows(source, statistics)?;
+                let keys = match source.axis() {
+                    Axis::Cells => &written,
+                    Axis::Genes => &gene_positions,
+                };
+                writer.add_embedding(Embedding {
+                    name: name.clone(),
+                    axis: source.axis(),
+                    width: rows.width as u64,
+                    values: rows.take(keys, "embedding", name)?,
+                });
+            }
+            for (name, source) in &spec.graphs {
+                let source = known(source.as_ref(), "graph", name)?;
+                let graph = members
+                    .keyed_graph(source, statistics)?
+                    .induced(&written, name)?;
+                writer.add_graph(Graph {
+                    name: name.clone(),
+                    indptr: graph.indptr,
+                    indices: graph.indices,
+                    weights: graph.weights,
+                });
+            }
+            if let Some(plan) = &spec.plan {
+                writer.set_plan(plan.clone());
+            }
+            // The last cancel point: after it, the store is renamed into place.
+            writer.finish_checked(&cells, None, &|| control.check())?;
+            Ok(n_cells)
+        })?;
+        Ok((n_cells, thread_pool))
     }
 }
 

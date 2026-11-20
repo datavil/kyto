@@ -22,5 +22,5 @@ carries no zarrs version attributes.
 the shard by hand: encoded non-fill chunks in chunk order, then the index (`u64::MAX` pairs
 for skipped chunks) in `[bytes(little), crc32c]`; a shard all fill value is erased. These are
 exactly zarrs' one-thread bytes; `zarr_arrays.rs`'s tests compare the files on pools of 1, 3
-and 8 threads. If zarrs' shard layout changes on an upgrade, those tests fail first. Also:
-the sink's `push` runs outside the run's pool (global rayon pool) until 5.20.
+and 8 threads. If zarrs' shard layout changes on an upgrade, those tests fail first. Since 5.20
+the sink's `push` runs on the run's pool (before, on rayon's global pool).

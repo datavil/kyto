@@ -1,8 +1,9 @@
 //! The running stream of a [`crate::Pipeline`]: a producer thread that reads and
 //! computes blocks, a bounded channel, and the caller pulling blocks from it.
 //!
-//! Does: on a thread of its own, inside a rayon pool of exactly the threads asked
-//! for (R7), read `blocks_in_flight` cell blocks of every scanned layer at once (their
+//! Does: on a thread of its own, each window inside a rayon pool of exactly the
+//! threads asked for (R7, shared with the caller's own parallel work: the sink's
+//! writes, task 5.20), read `blocks_in_flight` cell blocks of every scanned layer at once (their
 //! tiles in parallel, task 2.4), run the operators over those blocks in parallel (rayon
 //! over blocks), and hand them over in cell order through a rendezvous channel
 //! (`sync_channel(0)`): the producer waits until the caller takes each block, so a slow
@@ -65,6 +66,7 @@ pub struct BlockStream {
     receiver: Option<Receiver<Item>>,
     producer: Option<JoinHandle<()>>,
     pool: Arc<CellBlockPool>,
+    thread_pool: Arc<rayon::ThreadPool>,
     statistics: Statistics,
     genes: Option<Genes>,
 }
@@ -111,6 +113,7 @@ impl<S: ?Sized> StreamSource<S> {
 struct Producer<S: ?Sized> {
     source: StreamSource<S>,
     pool: Arc<CellBlockPool>,
+    thread_pool: Arc<rayon::ThreadPool>,
     sender: SyncSender<Item>,
 }
 
@@ -139,12 +142,13 @@ impl BlockStream {
         let producer = Producer {
             source,
             pool: Arc::clone(&pool),
+            thread_pool: Arc::clone(&thread_pool),
             sender,
         };
         let threads = thread_pool.current_num_threads();
         let handle = std::thread::Builder::new()
             .name("kyto-exec-producer".to_owned())
-            .spawn(move || thread_pool.install(|| producer.run()))
+            .spawn(move || producer.run())
             .map_err(|error| KytoError::ThreadStart {
                 threads: threads as u64,
                 problem: error.to_string(),
@@ -153,6 +157,7 @@ impl BlockStream {
             receiver: Some(receiver),
             producer: Some(handle),
             pool,
+            thread_pool,
             statistics,
             genes,
         })
@@ -181,6 +186,15 @@ impl BlockStream {
     /// The pool that later blocks take their buffers from.
     pub fn pool(&self) -> &CellBlockPool {
         &self.pool
+    }
+
+    /// The run's rayon pool, of exactly the threads asked for (R7). The caller runs its
+    /// own parallel work on it (the sink's writes, task 5.20) with
+    /// [`rayon::ThreadPool::install`], never while waiting for a block: the producer
+    /// holds the pool only while it computes a window, not while it waits to hand a
+    /// block over, so an `install` from the caller interleaves with the windows.
+    pub fn thread_pool(&self) -> &Arc<rayon::ThreadPool> {
+        &self.thread_pool
     }
 
     /// Wait for the producer; re-raise its panic (a bug), if any.
@@ -223,15 +237,22 @@ impl Drop for BlockStream {
 impl<S: ?Sized + ReadableStorageTraits + 'static> Producer<S> {
     /// Read, compute and send windows of blocks until the end, an error, or a caller
     /// that hung up.
+    ///
+    /// Each window is computed inside the run's pool, but the blocks are handed over
+    /// from the producer's own thread, outside it: a producer waiting for the caller
+    /// holds no pool thread, so the caller's work on the pool (the sink's writes, task
+    /// 5.20) runs then, even on one thread.
     fn run(self) {
-        let mut windows = match Windows::open(&self.source, &self.pool) {
+        let thread_pool = Arc::clone(&self.thread_pool);
+        let opened = thread_pool.install(|| Windows::open(&self.source, &self.pool));
+        let mut windows = match opened {
             Ok(windows) => windows,
             Err(error) => {
                 let _ = self.sender.send(Err(error));
                 return;
             }
         };
-        while let Some(outputs) = windows.next_window() {
+        while let Some(outputs) = thread_pool.install(|| windows.next_window()) {
             for item in outputs {
                 // A block a filter emptied is not handed over.
                 if let Ok(block) = &item

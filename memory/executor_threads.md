@@ -1,8 +1,9 @@
 # Executor threads: one rayon pool per run, `install`, timing tests in release (task 5.2)
 
 **Works:** `kyto_exec::BlockStream` builds a `rayon::ThreadPool` of exactly
-`ExecuteOptions::threads` (R7: no global pool size) and runs the producer as
-`pool.install(|| ...)` on a thread of its own. Everything rayon below it (the tile
+`ExecuteOptions::threads` (R7: no global pool size) and runs the producer on a thread
+of its own, each window inside `pool.install(|| ...)` (since 5.20: the whole run was
+one `install` before). Everything rayon below it (the tile
 reader's `par_iter` over tiles and blocks, zarrs' codec concurrency, the operators'
 `into_par_iter` over blocks) then runs on that pool, so the thread count holds end to end.
 An indexed parallel collect (`Vec::into_par_iter().map().collect::<Vec<_>>()`) keeps
@@ -34,3 +35,14 @@ before joining, so a producer blocked in `send` gets an error and returns.
   threads joining). Past ~3.6x the cap here is the hardware: CPU time
   grows 1.7x from 1 to 10 threads (efficiency cores, shared bandwidth), not block count.
   Under a limit the fit tries the threads, then powers of two below (not halvings).
+- **The caller's own parallel work goes on the run's pool too (5.20).** Rayon work started
+  outside any pool (`par_iter`, `rayon::join`, zarrs' codec concurrency) runs on rayon's
+  *global* pool, one thread per core, whatever `threads` is. The sink's writes did that
+  until 5.20; they now `install` on `BlockStream::thread_pool()`. **Never `install` while
+  the producer holds a pool thread waiting to send:** with one thread the caller's job
+  waits behind a worker blocked in a channel `send`, a deadlock. That is why the producer
+  `install`s per window and sends outside the pool, and why the sink reads its stream
+  outside `install` (only `push`, `create` and the tail after the stream ends go in).
+  Check: `tests/sink_threads.rs` holds every global-pool thread with a waiting job, so any
+  work that leaks there hangs (a deadline fails the test). Polars' own pool (`POOL`, Parquet
+  table I/O) is not rayon's global pool and is not covered.

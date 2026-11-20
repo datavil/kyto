@@ -472,6 +472,72 @@ PCA alone end to end once, 5 alternating runs per build and thread count.
   run's (task 5.20); with no layer to write, PCA alone's sink now writes only the tables and
   the embedding.
 
+## The sink on the run's thread pool (task 5.20)
+
+Measured Nov 20, 2026, on the task 5.20 tree (base `5008943`, 5.19; release extensions built
+by `uv sync`), same machine, data and scripts as 5.12 to 5.19 above. **Not a quiet machine:**
+a game client ran throughout; the 1-minute load average was 3.4 to 6.5 during the timed runs
+(stated per table). Base and 5.20 ran alternating, each a fresh process, as in 5.17 and 5.19:
+a warm-up per thread count, then the timed call once; the median of 5 processes per build.
+**Peak memory:** `ru_maxrss` of a fresh process running the case end to end once, 5
+alternating runs per build and thread count.
+
+- **Change:** the sink's writes (`StoreWriter::create`, every `push`, the tables, embeddings
+  and graphs and `finish` after the stream, and the `.h5ad` export's reads of its temporary
+  store) run on the run's rayon pool of `threads` threads. Before, they ran on the sink's
+  consumer thread, outside any pool, so their rayon work (layers in parallel, 5.17's inner
+  chunks, zarrs' decodes) went to rayon's global pool, one thread per core, whatever
+  `threads` was (R7). The producer now enters the pool per window and hands blocks over
+  from outside it, so the writes interleave with the windows on the same threads.
+- **Thread count, checked:** `crates/kyto-exec/tests/sink_threads.rs` holds every thread of
+  rayon's global pool with a waiting job, then sinks a two-layer plan to a store and to an
+  `.h5ad` at 1 and 4 threads. Work that reached the global pool would never run; every sink
+  finishes. On the base build the same test hangs at 1 thread (its 120 s deadline fails it).
+- **Where 1 thread gets slower:** only where the sink writes layers. A handle terminal after
+  5.19 writes only its member (no layer for an embedding), so PCA alone and QC through PCA
+  do not get slower (both within noise, the medians slightly lower). `sink_zarr` of PCA
+  alone writes the `counts`, `normalized` and `log1p` layers (54 zstd shards): its zstd work
+  used to overlap the 1-thread stream on other cores and now shares the one thread.
+
+| Seconds (median of 5), base 5.19 / 5.20, load 5.0 to 6.5 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto PCA alone, end to end (`embedding("X_pca").to_numpy()`) | 1.884 / 1.860 | 0.768 / 0.755 | 0.587 / 0.575 |
+| kyto PCA stage (`_execute`, the whole output) | 2.306 / 2.282 | 0.889 / 0.880 | 0.660 / 0.654 |
+| scanpy `pp.pca` (re-run, load 4.5; matrix in memory) | 1.955 | 1.948 | 1.940 |
+
+| Seconds (median of 5), base 5.19 / 5.20, load 3.4 to 5.4 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| kyto PCA alone, `sink_zarr` (3 layers, embedding, tables) | 2.376 / **2.849** (+20%) | 1.047 / **1.094** (+4.5%) | 0.827 / 0.818 |
+
+`thread_scaling.py` (median of 5, one run per build, base then 5.20; load 3.8 to 6.4):
+
+| Seconds, base 5.19 / 5.20 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| preprocessing (`_execute`) | 2.884 / 2.876 | 1.037 / 1.058 | 0.812 / 0.814 |
+| QC through PCA (`embedding().to_numpy()`) | 5.573 / 5.527 | 2.126 / 2.101 | 1.619 / 1.599 |
+| PCA alone (`embedding().to_numpy()`) | 1.861 / 1.849 | 0.775 / 0.759 | 0.588 / 0.579 |
+
+| Peak memory, MB (5 runs, median), base 5.19 / 5.20 | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| PCA alone, end to end (load 4.3 to 5.4) | 279 / 278 | 325 / 322 | 328 / 322 |
+| QC through PCA, end to end (load 3.8 to 4.3) | 1002 / 1002 | 1047 / 1057 | 1110 / 1118 |
+
+- **Bit identity (R11):** `sink_zarr` of PCA alone at 1, 4 and 10 threads, base and 5.20: all
+  135 files identical except `provenance.json` (target path, timestamps). `sink_h5ad` of the
+  same plan: every dataset and attribute identical (h5py walk); the raw bytes differ between
+  any two runs, base against base too, only in HDF5's object timestamps. The PCA-alone
+  embedding, and QC through PCA's embedding and HVG gene table (`thread_scaling.py`), are
+  bit-identical across builds and thread counts. Against scanpy (`pca_scanpy.py`): worst
+  relative difference of the first 10 columns 2.9e-5, largest angle 1.7e-5 rad, as before.
+- **Where kyto wins and loses:** PCA alone end to end takes 0.95x scanpy's `pp.pca` time on 1
+  thread and 0.30x at 10. A `sink_zarr` that writes layers is now 20% slower on 1 thread than
+  before: the price of R7. The 4- and 10-thread peaks of QC through PCA are 1.0% and 0.7%
+  higher, within the spread of the 5 runs (1037 to 1084 MB at 4 threads, 1100 to 1145 MB
+  at 10).
+- **Not covered:** Polars' own thread pool (`POOL`, Parquet table reads and writes) is
+  sized by `POLARS_MAX_THREADS`, not by `threads`. It is not rayon's global pool, and the
+  Parquet table I/O of every run (not only the sink's) can use it.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).
