@@ -1,0 +1,34 @@
+# Devices: the probe, the placement rules and the GPU features (task 9.1)
+
+**Works:**
+
+- The device a plan asks for is a plan step (`ON_DEVICE`, method `on`), so it is part of
+  the plan JSON and provenance (R7). The last `on` decides for the whole plan
+  (`NodeState::device`, read from the first output in `optimize_reuse::lower` into
+  `OptimizedPlan::device_request`).
+- The devices found are an argument, `PhysicalOptions::devices` (`kyto_gpu::Devices`,
+  plain `Copy` data). `Default` is `Devices::CPU_ONLY`, so Rust explain/estimate
+  snapshots are the same on every machine; tests inject a Mac or a CUDA box by hand.
+  kyto-py probes (`terminal::devices_for`) only when the plan asks for a non-CPU device,
+  so a CPU plan never waits for a GPU driver.
+- Rules in `kyto-plan/src/device_placement.rs` (`place`, injectable kernel table);
+  kernels per runtime in `kyto-gpu/src/backend.rs` (`CUDA_KERNELS`, `WGPU_KERNELS`,
+  keyed by plan method). 9.2+ adds names there, and must replace the refusal of GPU
+  placements in `Pipeline::new` with real dispatch.
+- A CPU plan prints exactly what it printed before 9.1 (no device line, no notes);
+  only the explain JSON gained `optimized.device` and `device_note`.
+
+**Gotchas:**
+
+- cudarc with `fallback-dynamic-loading` **panics** on the first driver call when
+  `libcuda` is missing (macOS, CI). Call `cudarc::driver::sys::is_culib_present()`
+  (unsafe, needs a `// SAFETY:` note) before `result::init()`.
+- wgpu's `InstanceFlags::default()` turns on validation in debug builds; the probe sets
+  `InstanceFlags::empty()`. `enumerate_adapters` is async in wgpu 30 (`pollster`).
+  Skip `DeviceType::Cpu` adapters (llvmpipe, WARP): they are not GPUs.
+- Versions are CubeCL 0.11's (wgpu 30, cudarc 0.19) so 9.2 adds no second copy.
+- The workspace build never turns the GPU features on, so the gate lints and tests
+  `kyto-gpu --all-features` on its own lines; the Metal check is an ignored test
+  (`cargo test -p kyto-gpu --features wgpu -- --ignored`), since CI's macOS VMs have no GPU.
+- A Python build with GPUs: `MATURIN_PEP517_ARGS="--features wgpu" uv sync
+  --reinstall-package kyto` (then rebuild without it before the gate).

@@ -97,7 +97,10 @@ fn unused(node: &OptimizedNode, writes: &Members, needed: &Members) -> bool {
         Operation::Fused { .. } => true,
         Operation::Node(plan) => {
             plan.changes_axis().is_none()
-                && !matches!(**plan, Plan::Sink(_) | Plan::WithDefaultLayer(_))
+                && !matches!(
+                    **plan,
+                    Plan::Sink(_) | Plan::WithDefaultLayer(_) | Plan::OnDevice(_)
+                )
         }
     };
     removable && !writes.is_empty() && writes.is_disjoint(needed)

@@ -117,7 +117,7 @@ class CostEstimate(TypedDict):
     peak_memory: int
     held_memory: int
     passes_saved: int
-    device: Literal["cpu"]
+    device: Literal["cpu", "auto", "cuda", "wgpu", "metal"]
 
 class ExplainedStep(TypedDict):
     """One logical step of ``Atlas.explain(format="json")``."""
@@ -143,7 +143,8 @@ class ExplainedNode(TypedDict):
     reads: list[str] | None
     input: int | None
     origin: list[int]
-    device: Literal["cpu"]
+    device: Literal["cpu", "cuda", "metal", "vulkan", "dx12", "wgpu"]
+    device_note: str | None
     passes: int
     statistics_passes: int
     apply_pass: bool
@@ -151,9 +152,16 @@ class ExplainedNode(TypedDict):
     block_cells: int | None
     holds_input: bool
 
+class ExplainedDevice(TypedDict):
+    """The device a plan asks for (``Atlas.on``) and the devices found."""
+
+    requested: Literal["cpu", "auto", "cuda", "wgpu", "metal"]
+    found: str
+
 class ExplainedPlan(TypedDict):
     """The optimized plan of ``Atlas.explain(format="json")``."""
 
+    device: ExplainedDevice
     outputs: list[ExplainedOutput]
     nodes: list[ExplainedNode]
 

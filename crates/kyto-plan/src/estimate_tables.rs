@@ -122,6 +122,7 @@ fn node_tables(plan: &Plan) -> (bool, bool) {
         ),
         Plan::Scan(_)
         | Plan::WithDefaultLayer(_)
+        | Plan::OnDevice(_)
         | Plan::MapElementwise(_)
         | Plan::Neighbors(_)
         | Plan::Cluster(_)

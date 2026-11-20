@@ -37,6 +37,7 @@ use crate::filter::Filter;
 use crate::map_elementwise::MapElementwise;
 use crate::neighbors::Neighbors;
 use crate::node::{CellScope, Input, LogicalNode, Node, NodeId, NodeState, Transform};
+use crate::on_device::OnDevice;
 use crate::plan_schema::PlanSchema;
 use crate::scan::Scan;
 use crate::select_genes::SelectGenes;
@@ -56,6 +57,8 @@ pub enum Plan {
     Scan(Node<Scan>),
     /// Set the default layer of everything downstream.
     WithDefaultLayer(Node<WithDefaultLayer>),
+    /// Set the device of the whole plan (`on`).
+    OnDevice(Node<OnDevice>),
     /// Keep the cells or the genes where a predicate is true.
     Filter(Node<Filter>),
     /// Keep the genes named by ID.
@@ -103,6 +106,7 @@ impl Plan {
         match self {
             Self::Scan(node) => of(node),
             Self::WithDefaultLayer(node) => of(node),
+            Self::OnDevice(node) => of(node),
             Self::Filter(node) => of(node),
             Self::SelectGenes(node) => of(node),
             Self::TakeCells(node) => of(node),
@@ -120,6 +124,7 @@ impl Plan {
         match self {
             Self::Scan(node) => &mut node.input,
             Self::WithDefaultLayer(node) => &mut node.input,
+            Self::OnDevice(node) => &mut node.input,
             Self::Filter(node) => &mut node.input,
             Self::SelectGenes(node) => &mut node.input,
             Self::TakeCells(node) => &mut node.input,
@@ -140,6 +145,7 @@ impl Plan {
             (Self::WithDefaultLayer(left), Self::WithDefaultLayer(right)) => {
                 left.params() == right.params()
             }
+            (Self::OnDevice(left), Self::OnDevice(right)) => left.params() == right.params(),
             (Self::Filter(left), Self::Filter(right)) => left.params() == right.params(),
             (Self::SelectGenes(left), Self::SelectGenes(right)) => left.params() == right.params(),
             (Self::TakeCells(left), Self::TakeCells(right)) => left.params() == right.params(),

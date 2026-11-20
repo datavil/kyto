@@ -17,6 +17,7 @@ use std::sync::Arc;
 use kyto_core::{Axis, GeneIds, RemovedGenes};
 use serde::{Deserialize, Serialize};
 
+use crate::device_placement::DeviceRequest;
 use crate::plan::Plan;
 use crate::plan_schema::PlanSchema;
 
@@ -79,6 +80,11 @@ pub trait Transform: LogicalNode {
 
     /// The default layer the node sets for everything downstream.
     fn sets_default_layer(&self) -> Option<&str> {
+        None
+    }
+
+    /// The device the node asks the whole plan to run on (`on`, task 9.1).
+    fn sets_device(&self) -> Option<DeviceRequest> {
         None
     }
 
@@ -170,6 +176,8 @@ pub(crate) struct NodeState {
     pub(crate) gene_ids: Arc<GeneIds>,
     /// The default layer set nearest to this node.
     pub(crate) default_layer: Option<Arc<str>>,
+    /// The device the last `on` below or at this node asked for (the CPU without one).
+    pub(crate) device: DeviceRequest,
     /// The genes that may remain, in order, when a selection set them; `None` means
     /// every gene of `gene_ids` (in table order).
     pub(crate) kept_genes: Option<Arc<[String]>>,
@@ -191,6 +199,7 @@ impl NodeState {
             source,
             gene_ids,
             default_layer: None,
+            device: DeviceRequest::Cpu,
             kept_genes: None,
             removed_genes: Arc::new(RemovedGenes::new()),
             gene_axis_changed_by: None,
@@ -224,6 +233,9 @@ impl NodeState {
         }
         if let Some(layer) = node.sets_default_layer() {
             state.default_layer = Some(Arc::from(layer));
+        }
+        if let Some(device) = node.sets_device() {
+            state.device = device;
         }
         if let Some(selected) = node.selects_genes() {
             let keep: HashSet<&str> = selected.iter().map(String::as_str).collect();

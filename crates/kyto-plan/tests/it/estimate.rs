@@ -15,9 +15,9 @@ use std::sync::Arc;
 use kyto_core::{AtlasSchema, CellExpr, GeneExpr, GeneIds};
 use kyto_plan::{
     ASSUMED_CATEGORY_BYTES, ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, ASSUMED_STRING_BYTES,
-    CostEstimate, Device, HELD_BLOCK_BYTES, HvgFlavor, Member, Metric, NeighborSearch, Neighbors,
-    OptimizeOptions, Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Scrublet, Sink,
-    physical_plan,
+    CostEstimate, DeviceRequest, HELD_BLOCK_BYTES, HvgFlavor, Member, Metric, NeighborSearch,
+    Neighbors, OptimizeOptions, Output, PCA_POWER_ITERATIONS, PhysicalOptions, Plan, Scrublet,
+    Sink, physical_plan,
 };
 
 const N_CELLS: u64 = 10_000;
@@ -106,7 +106,7 @@ fn a_scan_read_whole() {
     assert_eq!(estimate.block_memory(), 2 * SCAN_BLOCK);
     assert_eq!(estimate.resident_memory(), 7 * 8);
     assert_eq!(estimate.peak_memory(), 2 * SCAN_BLOCK + 56);
-    assert_eq!(estimate.device(), Device::Cpu);
+    assert_eq!(estimate.device(), DeviceRequest::Cpu);
     assert_eq!(
         estimate.to_string(),
         format!(

@@ -6,6 +6,7 @@
 //!
 //! So far: [`Plan`] (task 3.2), a persistent chain of nodes shared through `Arc`, with
 //! the logical nodes of task 4.1, one file each: [`Scan`] (the root), [`WithDefaultLayer`],
+//! [`OnDevice`] (task 9.1),
 //! [`Filter`] (cells or genes), [`SelectGenes`], [`TakeCells`], [`MapElementwise`]
 //! (`normalize_total`, `log1p`), [`CrossCell`] (`scale`, `highly_variable_genes`, `pca`),
 //! [`WithColumns`], [`Neighbors`], [`Cluster`] and [`Sink`]. Each declares the axis it
@@ -20,7 +21,8 @@
 //! an [`OptimizedPlan`] by common sub-plan reuse, projection pushdown, elementwise
 //! fusion and predicate pushdown, each its own `optimize_*.rs` file. The physical plan
 //! (task 4.5): [`PhysicalPlan`] (and [`Plan::physical`], [`Plan::explain`]) says the
-//! device, passes and blocks of each optimized node. The cost estimate (task 4.6):
+//! device, passes and blocks of each optimized node; the device of each node follows
+//! the plan's [`DeviceRequest`] by the rules of task 9.1 ([`place`], [`Placement`]). The cost estimate (task 4.6):
 //! [`CostEstimate`] ([`PhysicalPlan::estimate`], [`Plan::estimate`]) gives the passes
 //! over the store, bytes read, peak memory and device without reading anything.
 //! Explain (task 4.7): [`Explain`] ([`Plan::explanation`], [`Plan::explain`], [`Plan::explain_json`]) shows
@@ -34,6 +36,7 @@
 
 mod cluster;
 mod cross_cell;
+mod device_placement;
 mod estimate;
 mod estimate_tables;
 mod explain;
@@ -45,6 +48,7 @@ mod memory_limit;
 mod names;
 mod neighbors;
 mod node;
+mod on_device;
 mod optimize;
 mod optimize_fusion;
 mod optimize_predicate;
@@ -69,23 +73,26 @@ mod with_default_layer;
 
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
+pub use device_placement::{DEVICE_NAMES, DeviceRequest, Placement, place};
 pub use estimate::{
     ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, HELD_BLOCK_BYTES,
     PCA_OVERSAMPLES, SCRUBLET_ASSUMED_GENES,
 };
 pub use estimate_tables::{ASSUMED_CATEGORY_BYTES, ASSUMED_STRING_BYTES};
-pub use explain::{Explain, LogicalEntry, OptimizedEntry, OutputEntry};
+pub use explain::{DeviceEntry, Explain, LogicalEntry, OptimizedEntry, OutputEntry};
 pub use filter::{Filter, Predicate};
 pub use handles::{EDGE_COLUMNS, Embedding, Estimate, Graph, Matrix, Modality, Table};
+pub use kyto_gpu::{Device, Devices, WgpuBackend};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};
 pub use members::{Member, Members, all_members};
 pub use memory_limit::MemoryLimit;
 pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
+pub use on_device::OnDevice;
 pub use optimize::{OptimizeOptions, Output, optimize};
 pub use optimized_plan::{Operation, OptimizedNode, OptimizedOutput, OptimizedPlan};
 pub use physical_plan::{
-    Blocks, DEFAULT_BLOCKS_IN_FLIGHT, Device, Execution, PCA_POWER_ITERATIONS, PhysicalOptions,
+    Blocks, DEFAULT_BLOCKS_IN_FLIGHT, Execution, PCA_POWER_ITERATIONS, PhysicalOptions,
     PhysicalPlan, physical_plan,
 };
 pub use plan::{Plan, PlanNodes};

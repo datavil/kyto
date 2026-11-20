@@ -222,6 +222,9 @@ impl Pipeline {
     ///
     /// # Errors
     /// - `KY-E215` if there is no output `output`.
+    /// - `KY-E504` if the plan asks for a device that was not found, `KY-E501` if a
+    ///   node of it has no kernel on the device asked for, or runs on a GPU (this
+    ///   executor runs only the CPU until task 9.2): never silently on the CPU.
     /// - `KY-E601` for a node the executor does not run yet, naming the task that adds it.
     /// - `KY-E104` if the store's schema holds a tiling the reader rejects.
     pub fn new(plan: &PhysicalPlan, output: usize) -> Result<Self, KytoError> {
@@ -238,6 +241,20 @@ impl Pipeline {
         };
         let nodes = optimized.nodes();
         let executions = plan.executions();
+        if let Some(error) = plan.device_error() {
+            return Err(error);
+        }
+        if let Some((node, device)) = nodes.iter().zip(executions).find_map(|(node, execution)| {
+            execution
+                .device()
+                .filter(|device| device.is_gpu())
+                .map(|device| (node, device))
+        }) {
+            return Err(KytoError::MissingKernel {
+                operation: node_operation(node).to_owned(),
+                device: device.name().to_owned(),
+            });
+        }
         let mut stages = Vec::new();
         let mut stage_nodes = Vec::new();
         let mut next = Some(output_entry.node());
@@ -273,7 +290,9 @@ impl Pipeline {
                     }
                 }
                 Operation::Node(logical) if matches!(**logical, Plan::Sink(_)) => {
-                    sink = Some(SinkSpec::new(logical, output_entry.reads())?);
+                    let mut spec = SinkSpec::new(logical, output_entry.reads())?;
+                    spec.device = run_device(nodes, executions, output_entry.node());
+                    sink = Some(spec);
                 }
                 Operation::Node(logical) => {
                     if let Some(stage) = lower_node(logical, index, passes)? {
@@ -787,12 +806,42 @@ impl Drop for StageTimer<'_> {
     }
 }
 
+/// The device a run of the chain below optimized node `top` computes on, as `explain`
+/// names it: the GPU of a step placed on one, else `cpu` (task 9.1; `provenance.json`).
+fn run_device(
+    nodes: &[kyto_plan::OptimizedNode],
+    executions: &[kyto_plan::Execution],
+    top: usize,
+) -> &'static str {
+    let mut next = Some(top);
+    let mut device = kyto_plan::Device::Cpu;
+    while let Some(index) = next {
+        if let Some(gpu) = executions[index].device().filter(|device| device.is_gpu()) {
+            device = gpu;
+        }
+        next = nodes[index].input();
+    }
+    device.name()
+}
+
+/// The plan method of an optimized node, as `KY-E501` names it: its logical node's, a
+/// fused pass's first map's, `scan`.
+fn node_operation(node: &kyto_plan::OptimizedNode) -> &'static str {
+    match node.operation() {
+        Operation::Scan { .. } => "scan",
+        Operation::Fused { maps, .. } => maps
+            .first()
+            .map_or("normalize_total", kyto_plan::LogicalNode::method),
+        Operation::Node(plan) => plan.node().method(),
+    }
+}
+
 /// The stage of logical node `index` (with the plan's statistics `passes`), `None`
 /// for one with no work at run time, or `KY-E601` for one the executor does not run
 /// yet.
 fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, KytoError> {
     match plan {
-        Plan::WithDefaultLayer(_) => Ok(None),
+        Plan::WithDefaultLayer(_) | Plan::OnDevice(_) => Ok(None),
         Plan::MapElementwise(node) => {
             let maps = vec![node.params().clone()];
             if starts_with_median(&maps) {

@@ -21,7 +21,8 @@ use kyto_algo::RankGenesGroups;
 use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
 use kyto_plan::{
-    Cluster, ClusterMethod, Explain, Neighbors, PhysicalOptions, Plan, Scrublet, Umap,
+    Cluster, ClusterMethod, DeviceRequest, Explain, Neighbors, PhysicalOptions, Plan, Scrublet,
+    Umap,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
@@ -1359,12 +1360,30 @@ impl Atlas {
 
     /// Run the plan on a device (R7: the device is an argument, not a setting).
     ///
-    /// Today every plan runs on the CPU; the GPU devices arrive with task 9.1.
+    /// Adds an ``ON_DEVICE`` step. The last ``on`` of a chain sets the device of the
+    /// whole plan, the steps before it too; a plan without one runs on the CPU.
+    /// ``explain()`` names each step's device, by these fixed rules:
+    ///
+    /// 1. Steps that only move or select data (``scan``, sinks, ``select_genes``,
+    ///    ``take_cells``, filters and columns on metadata alone) run on the CPU.
+    /// 2. ``"cpu"``: every step on the CPU.
+    /// 3. ``"auto"``: each step on the first GPU found that has a kernel for it, CUDA
+    ///    first, then Metal, Vulkan or DX12 (wgpu); otherwise on the CPU, and
+    ///    ``explain()`` says why (``auto: no gpu found``, ``auto: no gpu kernel``).
+    /// 4. ``"cuda"``, ``"metal"`` or ``"wgpu"`` (any of Metal, Vulkan, DX12): every
+    ///    other step on that GPU. Running the plan raises, before anything is read, if
+    ///    the GPU was not found (``KY-E504``) or has no kernel for a step
+    ///    (``KY-E501``); ``explain()`` marks those steps.
+    ///
+    /// GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature; the
+    /// GPU kernels arrive with tasks 9.2 to 9.8, so today ``"auto"`` runs every step on
+    /// the CPU and says so. The data size plays no part in the rules, and steps on the
+    /// CPU give the same bits whatever device was asked for (R11).
     ///
     /// Parameters
     /// ----------
-    /// device : {"cpu"}
-    ///     The device the plan's nodes run on.
+    /// device : {"cpu", "auto", "cuda", "wgpu", "metal"}
+    ///     The device the plan's steps run on.
     ///
     /// Returns
     /// -------
@@ -1373,15 +1392,16 @@ impl Atlas {
     ///
     /// Raises
     /// ------
-    /// NotImplementedYetError
-    ///     ``KY-E601``: ``"auto"``, ``"cuda"``, ``"wgpu"`` or ``"metal"`` (task 9.1).
     /// PlanError
-    ///     ``KY-E215``: any other device name.
+    ///     ``KY-E215``: any other device name; ``KY-E216``: the plan ends in a sink.
     ///
     /// Examples
     /// --------
     /// >>> scan(store).on(device="cpu").estimate()["device"]
     /// 'cpu'
+    /// >>> plan = scan(store).log1p(layer="counts", into="log").on(device="auto")
+    /// >>> "(auto: no gpu" in plan.explain()
+    /// True
     #[pyo3(signature = (*, device))]
     fn on(
         &self,
@@ -1389,7 +1409,10 @@ impl Atlas {
         #[gen_stub(override_type(type_repr = "typing.Literal[\"cpu\", \"auto\", \"cuda\", \"wgpu\", \"metal\"]", imports = ("typing",)))]
         device: &str,
     ) -> PyResult<Self> {
-        self.derive(py, chain::device(device).map(|()| Arc::clone(&self.plan)))
+        self.derive(
+            py,
+            DeviceRequest::parse(device).and_then(|device| self.plan.on_device(device)),
+        )
     }
 
     /// Run the plan and keep its result as a new, materialized ``Atlas``.
@@ -2659,23 +2682,29 @@ impl Atlas {
     /// reading all of its output): one line for what the output reads, then one line per
     /// node from the top down to the scan, each with the logical nodes it came from
     /// (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
-    /// (``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
+    /// (``cpu``, ``cuda``, ``metal``, ``vulkan`` or ``dx12``; with a note in parentheses
+    /// when the step does not run on the device ``on`` asked for, such as ``cpu (auto: no
+    /// gpu kernel)``, see ``on``), ``passes`` over its input's blocks (with the ``statistics`` passes over
     /// all cells and the ``apply`` pass when there are statistics passes), and
     /// ``blocks=N cells`` (streamed in blocks of N cells: the store's cell block size,
     /// or smaller on more than 2 ``threads``), ``in memory`` or ``no data``, then
     /// ``input held`` for a step that holds its input in
     /// memory (task 5.12: it reads the store once, and its ``passes`` run over the held
-    /// blocks). ``estimate()`` gives the cost of the whole plan. Nothing is read.
+    /// blocks). A plan that asks for a device other than the CPU shows one more line
+    /// before the outputs: ``device auto (found: cpu, metal)``, the device asked for and
+    /// the devices found on this machine. ``estimate()`` gives the cost of the whole
+    /// plan. Nothing is read.
     ///
     /// Parameters
     /// ----------
     /// format : {"text", "json"}, default="text"
     ///     ``"text"``: the two trees as text, under ``logical plan`` and ``optimized
     ///     plan``. ``"json"``: the same as a dict with ``logical`` (one dict per step:
-    ///     ``id``, ``name``, ``parameters``, ``input``, ``note``) and ``optimized`` (``outputs``:
+    ///     ``id``, ``name``, ``parameters``, ``input``, ``note``) and ``optimized``
+    ///     (``device``: ``requested``, ``found``; ``outputs``:
     ///     ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
     ///     ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
-    ///     ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
+    ///     ``device_note`` (``None`` when it runs as asked), ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
     ///     ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
     ///     text's order.
     /// threads : int or None, default=None
@@ -2722,7 +2751,7 @@ impl Atlas {
         format: &str,
         threads: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let options = shown_options(py, "explain", threads)?;
+        let options = shown_options(py, "explain", &self.plan, threads)?;
         let explanation = || Explain::new(&self.plan, &self.plan.physical(options));
         match format {
             "text" => explanation().to_string().into_bound_py_any(py),
@@ -2775,8 +2804,9 @@ impl Atlas {
     /// -------
     /// CostEstimate
     ///     A new dict with ``passes``, ``bytes_read``, ``peak_memory`` and
-    ///     ``held_memory`` (bytes, as ``int``), ``passes_saved`` and ``device``
-    ///     (``"cpu"``).
+    ///     ``held_memory`` (bytes, as ``int``), ``passes_saved`` and ``device`` (the
+    ///     device ``on`` asks for, ``"cpu"`` without one; ``explain()`` shows each
+    ///     step's). The memory is the CPU executor's on every device.
     ///
     /// Examples
     /// --------
@@ -2790,7 +2820,7 @@ impl Atlas {
         py: Python<'py>,
         threads: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let options = shown_options(py, "estimate", threads)?;
+        let options = shown_options(py, "estimate", &self.plan, threads)?;
         let estimate = self.plan.physical(options).estimate();
         let dict = PyDict::new(py);
         dict.set_item("passes", estimate.passes())?;
@@ -3102,18 +3132,22 @@ fn open_plan(py: Python<'_>, store: PathBuf) -> PyResult<Arc<Plan>> {
     Ok(Plan::scan(store.display().to_string(), schema, gene_ids))
 }
 
-/// The physical options `explain` and `estimate` show (task 5.14): those of a run on
-/// `threads` threads without a memory limit, or for `None` the default (2 cell blocks
-/// in flight, the store's blocks), which does not depend on the machine.
+/// The physical options `explain` and `estimate` show for `plan` (task 5.14): those
+/// of a run on `threads` threads without a memory limit, or for `None` the default (2
+/// cell blocks in flight, the store's blocks), which does not depend on the machine;
+/// placed among the devices a run would be (task 9.1, [`terminal::devices_for`]).
 fn shown_options(
     py: Python<'_>,
     function: &str,
+    plan: &Plan,
     threads: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PhysicalOptions> {
-    match threads {
-        None => Ok(PhysicalOptions::default()),
-        Some(_) => Ok(PhysicalOptions::for_threads(terminal::threads(
-            py, function, threads,
-        )?)),
-    }
+    let options = match threads {
+        None => PhysicalOptions::default(),
+        Some(_) => PhysicalOptions::for_threads(terminal::threads(py, function, threads)?),
+    };
+    Ok(PhysicalOptions {
+        devices: terminal::devices_for(plan),
+        ..options
+    })
 }

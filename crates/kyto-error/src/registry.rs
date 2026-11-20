@@ -535,6 +535,16 @@ pub enum KytoError {
         /// Cell rows the whole run streams, summed over its passes.
         total: u64,
     },
+    /// KY-E504: The device a plan asks for is not on this machine, or not in this build.
+    #[error("KY-E504: the plan asks for device '{device}', but {problem} (found: {found})")]
+    DeviceNotFound {
+        /// The device asked for with on(device=...).
+        device: String,
+        /// Why it is missing: no such GPU or driver, or a build without its feature.
+        problem: String,
+        /// The devices found, as explain() names them.
+        found: String,
+    },
     /// KY-E601: A documented method is called before the task that implements it is done.
     #[error("KY-E601: '{method}' is not implemented yet: it arrives with task {task} of the implementation plan")]
     NotImplementedYet {
@@ -547,7 +557,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 56] = [
+    pub const CODES: [&'static str; 57] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -603,6 +613,7 @@ impl KytoError {
         "KY-E501",
         "KY-E502",
         "KY-E503",
+        "KY-E504",
         "KY-E601",
     ];
 
@@ -664,6 +675,7 @@ impl KytoError {
             Self::MissingKernel { .. } => "KY-E501",
             Self::ThreadStart { .. } => "KY-E502",
             Self::Cancelled { .. } => "KY-E503",
+            Self::DeviceNotFound { .. } => "KY-E504",
             Self::NotImplementedYet { .. } => "KY-E601",
         }
     }
@@ -726,6 +738,7 @@ impl KytoError {
             Self::MissingKernel { .. } => "DeviceError",
             Self::ThreadStart { .. } => "DeviceError",
             Self::Cancelled { .. } => "RunCancelledError",
+            Self::DeviceNotFound { .. } => "DeviceError",
             Self::NotImplementedYet { .. } => "NotImplementedYetError",
         }
     }
@@ -897,6 +910,9 @@ impl KytoError {
             }
             Self::Cancelled { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e503"
+            }
+            Self::DeviceNotFound { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e504"
             }
             Self::NotImplementedYet { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e601"
@@ -1071,6 +1087,9 @@ impl KytoError {
             }
             Self::Cancelled { .. } => {
                 String::from("run the plan again to compute it; a cancelled run returns and writes nothing")
+            }
+            Self::DeviceNotFound { .. } => {
+                String::from("pass on(device='auto') to use the GPU found, if any, and the CPU for the rest, or on(device='cpu'); explain() shows each step's device")
             }
             Self::NotImplementedYet { .. } => {
                 String::from("inspect the data without reading it through names(), schema() and estimate() until then")
@@ -1344,6 +1363,11 @@ impl KytoError {
             Self::Cancelled { done, total } => vec![
                 ("done", FieldValue::Int(*done)),
                 ("total", FieldValue::Int(*total)),
+            ],
+            Self::DeviceNotFound { device, problem, found } => vec![
+                ("device", FieldValue::Str(device.clone())),
+                ("problem", FieldValue::Str(problem.clone())),
+                ("found", FieldValue::Str(found.clone())),
             ],
             Self::NotImplementedYet { method, task } => vec![
                 ("method", FieldValue::Str(method.clone())),
@@ -1619,6 +1643,11 @@ impl KytoError {
             Self::Cancelled {
                 done: 4096,
                 total: 16384,
+            },
+            Self::DeviceNotFound {
+                device: "cuda".to_owned(),
+                problem: "this kyto was built without the 'cuda' feature".to_owned(),
+                found: "cpu, metal".to_owned(),
             },
             Self::NotImplementedYet {
                 method: "Matrix.to_scipy".to_owned(),

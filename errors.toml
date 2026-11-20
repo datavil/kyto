@@ -809,6 +809,19 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E504"
+variant = "DeviceNotFound"
+class = "DeviceError"
+summary = "The device a plan asks for is not on this machine, or not in this build."
+message = "the plan asks for device '{device}', but {problem} (found: {found})"
+hint = "pass on(device='auto') to use the GPU found, if any, and the CPU for the rest, or on(device='cpu'); explain() shows each step's device"
+fields = [
+    { name = "device", type = "str", doc = "The device asked for with on(device=...).", example = "cuda" },
+    { name = "problem", type = "str", doc = "Why it is missing: no such GPU or driver, or a build without its feature.", example = "this kyto was built without the 'cuda' feature" },
+    { name = "found", type = "str", doc = "The devices found, as explain() names them.", example = "cpu, metal" },
+]
+
+[[errors]]
 code = "KY-E601"
 variant = "NotImplementedYet"
 class = "NotImplementedYetError"

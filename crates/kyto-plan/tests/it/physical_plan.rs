@@ -60,7 +60,7 @@ fn unoptimized(plan: &Arc<Plan>) -> PhysicalPlan {
 }
 
 /// The device, passes (statistics, apply) and blocks of the last node of `plan`.
-fn last(plan: &Arc<Plan>) -> (Device, u32, u32, bool, Blocks) {
+fn last(plan: &Arc<Plan>) -> (Option<Device>, u32, u32, bool, Blocks) {
     let physical = unoptimized(plan);
     let top = physical.optimized().outputs()[0].node();
     let execution = physical.executions()[top];
@@ -282,7 +282,7 @@ fn every_node_kind_has_a_device_and_passes() {
     for (case, plan, passes, statistics, blocks) in cases() {
         names.insert(plan.name());
         let (device, got_passes, got_statistics, apply, got_blocks) = last(&plan);
-        assert_eq!(device, Device::Cpu, "{case}");
+        assert_eq!(device, Some(Device::Cpu), "{case}");
         assert_eq!(got_passes, passes, "{case}");
         assert_eq!(got_statistics, statistics, "{case}");
         assert_eq!(u32::from(apply), passes - statistics, "{case}");

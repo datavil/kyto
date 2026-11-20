@@ -20,10 +20,22 @@
 //!   #0 SCAN "pbmc.kyto" (2 cells x 3 genes) reads [layer:counts, genes:feature_type, genes:symbol] (node 0) [device=cpu passes=1 blocks=4096 cells]
 //! ```
 //!
-//! JSON: `{"logical": [...], "optimized": {"outputs": [...], "nodes": [...]}}`, the
-//! entries in the text's order, with the keys of [`LogicalEntry`], [`OutputEntry`] and
-//! [`OptimizedEntry`].
-//! Does not: optimize or choose devices (4.4, 4.5), estimate costs (4.6: `estimate()`
+//! A plan that asks for a device other than the CPU (`on`, task 9.1) gets one more
+//! line before its outputs, the device asked for and the devices found, and each node
+//! names its device, with a note in parentheses when it does not run there
+//! (`device_placement.rs` has the rules):
+//!
+//! ```text
+//! optimized plan
+//!   device auto (found: cpu, metal)
+//!   output #1 reads [...]
+//!   #1 LOG1P "counts" -> "log1p" <- #0 (node 1) [device=cpu (auto: no gpu kernel) passes=1 blocks=4096 cells]
+//! ```
+//!
+//! JSON: `{"logical": [...], "optimized": {"device": {...}, "outputs": [...], "nodes":
+//! [...]}}`, the entries in the text's order, with the keys of [`LogicalEntry`],
+//! [`DeviceEntry`], [`OutputEntry`] and [`OptimizedEntry`].
+//! Does not: optimize or choose devices (4.4, 4.5, 9.1), estimate costs (4.6: `estimate()`
 //! is its own call), or serialize a plan to read back (the plan JSON of 4.3; this JSON
 //! is for reading only and has no version).
 
@@ -33,6 +45,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::cross_cell::CrossCellOp;
+use crate::device_placement::DeviceRequest;
 use crate::optimized_plan::{NodeParameters, Operation};
 use crate::physical_plan::{Blocks, PhysicalOptions, PhysicalPlan};
 use crate::plan::Plan;
@@ -69,9 +82,20 @@ pub struct OutputEntry {
     pub reads: Vec<String>,
 }
 
+/// The device a plan asks for and the devices it was placed among (task 9.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeviceEntry {
+    /// The device asked for with `on` (`cpu` without one): `cpu`, `auto`, `cuda`,
+    /// `wgpu` or `metal`.
+    pub requested: &'static str,
+    /// The devices found (`cpu, metal`), as given to the physical plan.
+    pub found: String,
+}
+
 /// The optimized plan's outputs and nodes (from the top down).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct OptimizedTree {
+    device: DeviceEntry,
     outputs: Vec<OutputEntry>,
     nodes: Vec<OptimizedEntry>,
 }
@@ -91,8 +115,12 @@ pub struct OptimizedEntry {
     pub input: Option<usize>,
     /// The IDs of the logical nodes it came from.
     pub origin: Vec<u64>,
-    /// The device it runs on (`cpu`).
+    /// The device it runs on (`cpu`, `cuda`, `metal`, `vulkan`, `dx12`), or the device
+    /// asked for when it cannot run there (task 9.1).
     pub device: &'static str,
+    /// Why it does not run where the plan asked (`auto: no gpu kernel`), or cannot
+    /// (`no kernel: KY-E501 when run`); `None` when it runs as asked.
+    pub device_note: Option<&'static str>,
     /// Its passes over its input's blocks (statistics passes plus the apply pass).
     pub passes: u32,
     /// Passes over all of its input's blocks before it outputs anything.
@@ -154,7 +182,8 @@ impl Explain {
                     },
                     input: node.input(),
                     origin: node.origin().iter().map(|id| id.0).collect(),
-                    device: execution.device().name(),
+                    device: execution.placement().name(),
+                    device_note: execution.placement().note(),
                     passes: execution.passes(),
                     statistics_passes: execution.statistics_passes(),
                     apply_pass: execution.apply_pass(),
@@ -164,15 +193,28 @@ impl Explain {
                 }
             })
             .collect();
+        let device = DeviceEntry {
+            requested: physical.device_request().name(),
+            found: physical.options().devices.to_string(),
+        };
         Self {
             logical,
-            optimized: OptimizedTree { outputs, nodes },
+            optimized: OptimizedTree {
+                device,
+                outputs,
+                nodes,
+            },
         }
     }
 
     /// The logical nodes, from the last down to the scan.
     pub fn logical(&self) -> &[LogicalEntry] {
         &self.logical
+    }
+
+    /// The device the plan asks for and the devices found (task 9.1).
+    pub fn device(&self) -> &DeviceEntry {
+        &self.optimized.device
     }
 
     /// The optimized plan's outputs, in the order they were asked for.
@@ -265,6 +307,14 @@ impl fmt::Display for Explain {
             }
         }
         formatter.write_str("\noptimized plan")?;
+        let device = &self.optimized.device;
+        if device.requested != DeviceRequest::Cpu.name() {
+            write!(
+                formatter,
+                "\n  device {} (found: {})",
+                device.requested, device.found
+            )?;
+        }
         for output in &self.optimized.outputs {
             let reads = member_list(&output.reads);
             write!(formatter, "\n  output #{} reads {reads}", output.node)?;
@@ -284,11 +334,14 @@ impl fmt::Display for Explain {
             let origin: Vec<String> = entry.origin.iter().map(ToString::to_string).collect();
             write!(
                 formatter,
-                " (node {}) [device={} passes={}",
+                " (node {}) [device={}",
                 origin.join(", "),
                 entry.device,
-                entry.passes
             )?;
+            if let Some(note) = entry.device_note {
+                write!(formatter, " ({note})")?;
+            }
+            write!(formatter, " passes={}", entry.passes)?;
             if entry.statistics_passes > 0 {
                 write!(
                     formatter,

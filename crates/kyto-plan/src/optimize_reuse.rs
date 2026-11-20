@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::device_placement::DeviceRequest;
 use crate::members::all_members;
 use crate::optimize::Output;
 use crate::optimized_plan::{Operation, OptimizedNode, OptimizedOutput, OptimizedPlan};
@@ -29,6 +30,11 @@ pub(crate) fn lower(outputs: &[Output], reuse: bool) -> OptimizedPlan {
     for output in outputs {
         let mut below: Option<usize> = None;
         for plan in chain(&output.plan) {
+            // `on` does nothing at run time: its request is the optimized plan's
+            // `device`, and a node here would keep the maps around it from fusing.
+            if matches!(*plan, Plan::OnDevice(_)) {
+                continue;
+            }
             let pointer = Arc::as_ptr(&plan);
             if reuse {
                 let found = by_pointer.get(&pointer).copied().or_else(|| {
@@ -71,6 +77,9 @@ pub(crate) fn lower(outputs: &[Output], reuse: bool) -> OptimizedPlan {
     OptimizedPlan {
         nodes,
         outputs: lowered,
+        device: outputs
+            .first()
+            .map_or(DeviceRequest::Cpu, |output| output.plan.device_request()),
     }
 }
 

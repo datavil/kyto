@@ -19,6 +19,11 @@ crate-type = ["cdylib", "rlib"]
 # Turned on only by maturin (`[tool.maturin] features` in pyproject.toml). Leaving it
 # off for plain cargo builds lets `cargo test --workspace` link against libpython.
 extension-module = ["pyo3/extension-module"]
+# GPUs (task 9.1): off in the default wheel, so it links no GPU library and finds only
+# the CPU. Build with them through maturin, for example
+# `MATURIN_PEP517_ARGS="--features wgpu" uv sync --reinstall-package kyto`.
+wgpu = ["kyto-gpu/wgpu"]
+cuda = ["kyto-gpu/cuda"]
 
 [dependencies]
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
@@ -26,6 +31,8 @@ kyto-algo = { path = "../kyto-algo" }
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
 kyto-exec = { path = "../kyto-exec" }
+# The probe for the devices `on(device=...)` places steps on (task 9.1).
+kyto-gpu = { path = "../kyto-gpu" }
 kyto-plan = { path = "../kyto-plan" }
 kyto-store = { path = "../kyto-store" }
 # The frames the terminals and `rank_genes_groups` return (tasks 7.2, 7.3). Same version

@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cluster::{Cluster, ClusterMethod};
 use crate::cross_cell::{CrossCellOp, HvgFlavor};
+use crate::device_placement::DeviceRequest;
 use crate::filter::Predicate;
 use crate::map_elementwise::ElementwiseOp;
 use crate::neighbors::{Metric, NeighborSearch, Neighbors};
@@ -91,6 +92,11 @@ enum Step {
     },
     WithDefaultLayer {
         layer: String,
+    },
+    /// `on(device=...)`: the device's name, read back through
+    /// [`DeviceRequest::parse`].
+    On {
+        device: String,
     },
     FilterCells {
         predicate: ExprJson,
@@ -223,6 +229,9 @@ impl Step {
             }
             Plan::WithDefaultLayer(node) => Self::WithDefaultLayer {
                 layer: node.params().layer().to_owned(),
+            },
+            Plan::OnDevice(node) => Self::On {
+                device: node.params().device().name().to_owned(),
             },
             Plan::Filter(node) => match node.params().predicate() {
                 Predicate::Cells(predicate) => Self::FilterCells {
@@ -406,6 +415,7 @@ impl Step {
         match self {
             Self::Scan { .. } => "scan",
             Self::WithDefaultLayer { .. } => "with_default_layer",
+            Self::On { .. } => "on",
             Self::FilterCells { .. } => "filter_cells",
             Self::FilterGenes { .. } => "filter_genes",
             Self::SelectGenes { .. } => "select_genes",
@@ -439,6 +449,9 @@ impl Step {
                 ));
             }
             Self::WithDefaultLayer { layer } => input.with_default_layer(&layer),
+            Self::On { device } => {
+                DeviceRequest::parse(&device).and_then(|device| input.on_device(device))
+            }
             Self::FilterCells { predicate: text } => input.filter_cells(&predicate(&text, node)?),
             Self::FilterGenes { predicate: text } => input.filter_genes(&predicate(&text, node)?),
             Self::SelectGenes { gene_ids } => input.select_genes(gene_ids),

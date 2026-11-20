@@ -632,6 +632,9 @@ Run the plan on a device (R7: the device is an argument, not a setting).
 ```python
 >>> scan(store).on(device="cpu").estimate()["device"]
 'cpu'
+>>> plan = scan(store).log1p(layer="counts", into="log").on(device="auto")
+>>> "(auto: no gpu" in plan.explain()
+True
 ```
 
 ### Atlas.collect

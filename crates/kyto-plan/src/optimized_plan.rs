@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use kyto_core::Axis;
 
+use crate::device_placement::DeviceRequest;
 use crate::map_elementwise::MapElementwise;
 use crate::members::{Member, Members, node_reads, node_writes};
 use crate::node::{CellScope, LogicalNode, NodeId};
@@ -156,9 +157,17 @@ impl OptimizedOutput {
 pub struct OptimizedPlan {
     pub(crate) nodes: Vec<OptimizedNode>,
     pub(crate) outputs: Vec<OptimizedOutput>,
+    /// The device the plan asks for (task 9.1): its first output's last `on`.
+    pub(crate) device: DeviceRequest,
 }
 
 impl OptimizedPlan {
+    /// The device the plan asks for (`on`, task 9.1): the last `on` of the first
+    /// output's plan, else the CPU. The outputs of one terminal share one plan.
+    pub fn device_request(&self) -> DeviceRequest {
+        self.device
+    }
+
     /// The nodes; each one's input comes before it.
     pub fn nodes(&self) -> &[OptimizedNode] {
         &self.nodes
@@ -225,7 +234,11 @@ impl OptimizedPlan {
                 reads: output.reads,
             })
             .collect();
-        Self { nodes, outputs }
+        Self {
+            nodes,
+            outputs,
+            device: self.device,
+        }
     }
 }
 

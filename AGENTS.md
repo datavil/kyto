@@ -298,6 +298,8 @@ uv run cargo build --workspace --locked   # build all crates (uv run: PyO3 sees 
 uv run cargo test --workspace --locked    # Rust tests, proptests with a fixed seed (Linux: libpython on LD_LIBRARY_PATH, see below)
 uv run python scripts/remote_store_tests.py   # tile reader suite on S3 in MinIO: native `minio` on PATH, else docker or podman (prints SKIPPED without any)
 uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lint
+uv run cargo clippy -p kyto-gpu --all-targets --all-features --locked -- -D warnings   # 9.1: lint the GPU features (wgpu, cuda), off in the workspace build
+uv run cargo test -p kyto-gpu --all-features --locked   # 9.1: the device probe with the GPU libraries built in (finds none on a machine without a GPU)
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
@@ -327,6 +329,7 @@ uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy
 uv run cargo test --release -p kyto-exec --test it -- thread_scaling:: --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
 uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (criterion, timings)
 uv run cargo test --release -p kyto-exec --test it -- kernels:: --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
+uv run cargo test -p kyto-gpu --features wgpu -- --ignored   # 9.1: the probe finds Metal (on an Apple GPU; CI's macOS runners have none)
 KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run cargo test --workspace   # 10.1 long proptest run: 20x the cases, other seed
 KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run pytest tests/test_properties.py   # 10.1 long hypothesis run
 ```

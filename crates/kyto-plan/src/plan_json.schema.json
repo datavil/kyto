@@ -40,7 +40,7 @@
         {"properties": {"step": {"properties": {"method": {
           "description": "Only the first node of a plan is a scan.",
           "enum": [
-            "with_default_layer", "filter_cells", "filter_genes", "select_genes", "take_cells",
+            "with_default_layer", "on", "filter_cells", "filter_genes", "select_genes", "take_cells",
             "normalize_total", "log1p", "scale", "highly_variable_genes", "pca", "with_cells",
             "with_genes", "neighbors", "leiden", "louvain", "umap", "scrublet", "sink_zarr", "sink_h5ad"
           ]
@@ -65,6 +65,7 @@
       "allOf": [
         {"if": {"required": ["method"], "properties": {"method": {"const": "scan"}}}, "then": {"$ref": "#/$defs/scan"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "with_default_layer"}}}, "then": {"$ref": "#/$defs/with_default_layer"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "on"}}}, "then": {"$ref": "#/$defs/on"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "filter_cells"}}}, "then": {"$ref": "#/$defs/filter"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "filter_genes"}}}, "then": {"$ref": "#/$defs/filter"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "select_genes"}}}, "then": {"$ref": "#/$defs/select_genes"}},
@@ -106,6 +107,12 @@
       "required": ["layer"],
       "additionalProperties": false,
       "properties": {"method": true, "layer": {"type": "string"}}
+    },
+    "on": {
+      "description": "on(device=...): the device the whole plan runs on (task 9.1).",
+      "required": ["device"],
+      "additionalProperties": false,
+      "properties": {"method": true, "device": {"type": "string", "description": "cpu, auto, cuda, wgpu or metal (others: KY-E215 when read)."}}
     },
     "filter": {
       "description": "filter_cells (a cell expression) or filter_genes (a gene expression).",

@@ -479,7 +479,7 @@ How the store was made (task 8.5; 4.3 defines the plan JSON). v0 keys:
 | `plan` | yes | the plan JSON (4.3) whose output the store holds, without its sink step (a kyto sink writes it, 5.11; the target path is not recorded, so it does not vary with where the store is written, 8.5), or `null` for a plain import. Stores written before 8.5 recorded the sink step too; readers drop a trailing sink step |
 | `source` | yes | for an import: input kind, path as given, and the SHA-256 of the input file (computed while streaming it); otherwise `null` |
 | `seeds` | yes | plan node ID to seed, for every seeded node of `plan` (a step with an integer `seed` argument), keyed `n<ID>` in ID order (`{}` if none). The seeds are also in `plan`; this is the summary |
-| `device` | yes | `"cpu"` or a device name (9.x) |
+| `device` | yes | the device the run computed on, as `explain()` names it: `"cpu"`, or the GPU (`"cuda"`, `"metal"`, `"vulkan"`, `"dx12"`) a step was placed on (9.1); the device asked for is the plan's `on` step |
 | `run` | yes | `started_at` and `finished_at` (RFC 3339, UTC, whole seconds) and `timings`: plan node ID (keyed `n<ID>`, in ID order) to seconds, for each node that runs its own passes or in-memory step (a cross-cell node such as a median `normalize_total`, `highly_variable_genes`, `scale`, `pca` or `scrublet`; a gene step; `neighbors`, `leiden`/`louvain`, `umap`) and for the sink node, whose time is the output's stream with the per-cell steps fused into it and the writes. `{}` for an import |
 
 `run` and `source.path` are the only parts that vary between identical runs; 8.7

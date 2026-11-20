@@ -133,6 +133,7 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
             },
         ],
         "optimized": {
+            "device": {"requested": "cpu", "found": "cpu"},
             "outputs": [
                 {
                     "node": 1,
@@ -148,6 +149,7 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
                     "input": 0,
                     "origin": [1],
                     "device": "cpu",
+                    "device_note": None,
                     "passes": 1,
                     "statistics_passes": 0,
                     "apply_pass": True,
@@ -163,6 +165,7 @@ def test_json_is_the_same_as_a_dict(store: Path) -> None:
                     "input": None,
                     "origin": [0],
                     "device": "cpu",
+                    "device_note": None,
                     "passes": 1,
                     "statistics_passes": 0,
                     "apply_pass": True,

@@ -117,13 +117,14 @@ use std::fmt;
 use kyto_core::{ColumnDtype, ExprNode, FloatDtype, LayerDtype, LayerSchema, Source};
 
 use crate::cross_cell::CrossCellOp;
+use crate::device_placement::DeviceRequest;
 use crate::estimate_tables::TableReads;
 use crate::filter::Predicate;
 use crate::map_elementwise::ElementwiseOp;
 use crate::members::{Member, for_each_leaf};
 use crate::node::{CellScope, LogicalNode};
 use crate::optimized_plan::{Operation, OptimizedNode};
-use crate::physical_plan::{Blocks, Device, PCA_POWER_ITERATIONS, PhysicalPlan};
+use crate::physical_plan::{Blocks, PCA_POWER_ITERATIONS, PhysicalPlan};
 use crate::plan::Plan;
 use crate::plan_schema::{PlanSchema, SparseMember};
 use crate::sink::Sink;
@@ -200,7 +201,7 @@ pub struct CostEstimate {
     block_memory: u64,
     resident_memory: u64,
     held_memory: u64,
-    device: Device,
+    device: DeviceRequest,
 }
 
 impl CostEstimate {
@@ -243,8 +244,9 @@ impl CostEstimate {
         self.resident_memory
     }
 
-    /// The device the plan runs on.
-    pub fn device(&self) -> Device {
+    /// The device the plan asks for (`on`, task 9.1; `explain` shows each node's).
+    /// The estimate models the CPU executor's memory on every device.
+    pub fn device(&self) -> DeviceRequest {
         self.device
     }
 }
@@ -561,7 +563,7 @@ impl PhysicalPlan {
             block_memory: saturate(block.max(opening).max(tables.reading)),
             resident_memory: saturate(resident + held + tables.held),
             held_memory: saturate(held),
-            device: self.options().device,
+            device: self.device_request(),
         }
     }
 }

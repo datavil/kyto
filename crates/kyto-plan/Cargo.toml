@@ -17,6 +17,9 @@ workspace = true
 jsonschema = { version = "0.61.1", default-features = false }
 kyto-core = { path = "../kyto-core" }
 kyto-error = { path = "../kyto-error" }
+# The devices and their kernels the physical plan places nodes on (task 9.1); no GPU
+# library comes with it unless its `cuda` or `wgpu` feature is on.
+kyto-gpu = { path = "../kyto-gpu" }
 # Node parameters and output schemas derive serde for the plan JSON of task 4.3.
 # `column_dtype` asks Polars for the dtype of a computed column (task 4.2); same version
 # as kyto-core, which already brings it in.

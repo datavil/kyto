@@ -77,9 +77,10 @@ def test_chain_methods_read_nothing_and_leave_the_input_unchanged(store: Path) -
     chained = _chain(atlas)
     assert str(atlas) == before
     lines = str(chained).splitlines()
-    assert lines[0].startswith('UMAP "connectivities" -> "X_umap"')
+    assert lines[0] == 'ON_DEVICE "cpu"'
+    assert lines[1].startswith('UMAP "connectivities" -> "X_umap"')
     assert lines[-1] == before
-    assert len(lines) == 17  # `on(device="cpu")` adds no step
+    assert len(lines) == 18  # with the `on(device="cpu")` step
     frame = atlas.with_default_layer("counts").rank_genes_groups("cell_id")
     assert isinstance(frame, pl.LazyFrame)
     assert frame.collect_schema() == pl.Schema(
@@ -221,11 +222,6 @@ def test_algorithm_arguments_are_coded(store: Path) -> None:
             kyto.NotImplementedYetError,
             "KY-E601",
             lambda: atlas.with_embedding("X_scvi", None),  # pyright: ignore[reportArgumentType]
-        ),
-        (
-            kyto.NotImplementedYetError,
-            "KY-E601",
-            lambda: atlas.on(device="cuda"),
         ),
         (
             kyto.PlanError,

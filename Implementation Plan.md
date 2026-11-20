@@ -143,12 +143,12 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6): see [Implementation Plan - Done.md](Impleme
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-- [ ] **9.1 Device trait.** One `Device` interface with CPU, CUDA and wgpu/Metal implementations. `device="auto"` picks by fixed, documented rules shown in `explain()`.
-  - Depends: 5.2
-  - Done when: `explain()` names the device per node on a machine with and without a GPU.
+Done (9.1): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+
 - [ ] **9.2 CubeCL kernels.** The 5.3 kernels (row sums, nnz, scaling, `log1p`) written once in CubeCL for CUDA, ROCm and wgpu.
   - Depends: 9.1, 5.3
   - Done when: each kernel matches CPU output to 1e-6 relative.
+  - Note (9.1): register each kernel by its plan method in `kyto-gpu/src/backend.rs` (`CUDA_KERNELS`, `WGPU_KERNELS`); the placement rules then put the step on the GPU and `explain()` shows it. `Pipeline::new` (kyto-exec) refuses every node placed on a GPU with `KY-E501` until this task adds the dispatch (and the host-to-device moves). Use the CubeCL version whose wgpu and cudarc match `kyto-gpu`'s (wgpu 30, cudarc 0.19: CubeCL 0.11), or move all three together.
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
   - Done when: GPU PCA matches CPU PCA within the 6.5 tolerances.
@@ -162,12 +162,16 @@ Goal: the same plan runs on a GPU by changing `on(device=...)`, with results mat
 - [ ] **9.6 Fallback rules.** `device="cuda"` with a missing kernel raises `KY-E501`; `device="auto"` falls back to CPU and says so in `explain()`. Never silent.
   - Depends: 9.1, 8.1
   - Done when: both cases are tested.
+  - Note (9.1): the interim rules are in place and tested for a plan with no GPU kernel (`kyto-plan/tests/it/devices.rs`, `tests/test_devices.py`): a named GPU raises `KY-E501` (no kernel) or `KY-E504` (not found) before anything is read, `auto` runs on the CPU with `(auto: no gpu kernel)` or `(auto: no gpu found)` on each step. Left for this task: the rules once some steps have kernels (moving blocks between devices mid-plan, a step whose input lives on another device).
 - [ ] **9.7 GPU CI.** GPU tests on a self-hosted runner; skipped with a visible notice elsewhere.
   - Depends: 1.4, 9.2
   - Done when: the GPU job runs on every PR that touches `kyto-gpu` or `kyto-exec`.
 - [ ] **9.8 Portable matrix kernels (Metal).** PCA's products (sparse × dense SpMM and dense GEMM) and 9.4's tiled distances plus top-k written in CubeCL, so PCA and neighbours run through wgpu on Metal (and ROCm) as well as CUDA. 9.3's cuSPARSE/cuBLAS stays the CUDA path; `device="auto"` picks it on NVIDIA and these kernels elsewhere, by the 9.1 rules shown in `explain()`. (added Nov 14, 2026, at the user's request: Apple GPUs otherwise run only the 9.2 kernels)
   - Depends: 9.2, 9.3, 9.4
   - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
+- [ ] **9.9 Provenance records each step's device.** Since 9.1, `provenance.json` holds the device asked for (the plan's `on` step) and `device`, the device the run computed on (a GPU if any step was placed on one, else `cpu`), but not which steps ran where or which devices were found. Record the devices found and each node's placement (as `explain(format="json")` gives them), so a store says which steps ran on a GPU once some do (9.2). (added Nov 21, 2026, by 9.1)
+  - Depends: 8.5, 9.1
+  - Done when: a store written with `on(device="auto")` holds the request, the devices found and each step's device in `provenance.json`; stores stay byte-identical across thread counts (except `run`).
 
 ## 10. Testing, benchmarks, docs, release
 
@@ -202,5 +206,5 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
 | M3 Full analysis | 2.9, 5.12–5.15, 6.4–6.10, 6.12, 6.15–6.16, 7.8, 8.4–8.7, 10.4, 10.7 |
-| M4 GPU backend | 9.1–9.8 |
+| M4 GPU backend | 9.1–9.9 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |

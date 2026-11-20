@@ -95,6 +95,9 @@ pub(crate) struct SinkSpec {
     pub(crate) plan: Option<serde_json::Value>,
     /// The sink node's plan ID: the output's stream and the writes are timed under it.
     pub(crate) node: u64,
+    /// The device the run computes on (`provenance.json`, task 9.1): set by
+    /// `Pipeline::new` from the output's placements.
+    pub(crate) device: &'static str,
 }
 
 impl SinkSpec {
@@ -152,6 +155,7 @@ impl SinkSpec {
                 .input()
                 .and_then(|input| serde_json::from_str(&input.to_json()).ok()),
             node: plan.id().0,
+            device: "cpu",
             layers,
         })
     }
@@ -586,6 +590,7 @@ impl Pipeline {
             let mut timings = timings.clone();
             timings.insert(spec.node, streamed.elapsed().as_secs_f64());
             writer.set_run(started_at, timings);
+            writer.set_device(spec.device);
             // The last cancel point: after it, the store is renamed into place.
             writer.finish_checked(&cells, None, &|| control.check())?;
             Ok(n_cells)

@@ -10,7 +10,8 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use kyto_error::KytoError;
 use kyto_plan::{
-    MemoryLimit, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan, Plan, optimize,
+    DeviceRequest, Devices, MemoryLimit, OptimizeOptions, Output, PhysicalOptions, PhysicalPlan,
+    Plan, optimize,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyString;
@@ -135,6 +136,16 @@ pub fn run_arguments(
     )
 }
 
+/// The devices `plan` is placed among (task 9.1): this machine's (`kyto_gpu::probe`,
+/// asked once per process) when the plan asks for a device other than the CPU, else the
+/// CPU alone, so a CPU plan never waits for a GPU driver.
+pub fn devices_for(plan: &Plan) -> Devices {
+    match plan.device_request() {
+        DeviceRequest::Cpu => Devices::CPU_ONLY,
+        _ => kyto_gpu::probe(),
+    }
+}
+
 /// [`run_arguments`] for a terminal that reads only `output`'s members (task 7.4), so
 /// the optimizer leaves out what nothing reads.
 pub fn output_run_arguments(
@@ -149,7 +160,10 @@ pub fn output_run_arguments(
     let threads = threads(py, function, threads_argument)?;
     check_progress(py, function, progress)?;
     // One block in flight per thread (task 5.13); a memory limit fits fewer.
-    let options = PhysicalOptions::for_threads(threads);
+    let options = PhysicalOptions {
+        devices: devices_for(output.plan()),
+        ..PhysicalOptions::for_threads(threads)
+    };
     let optimized = optimize(&[output], OptimizeOptions::ALL);
     let physical = match limit {
         None => PhysicalPlan::new(optimized, options),

@@ -80,7 +80,10 @@ pub fn lazy_frame<'py>(
                     rank_genes_groups(
                         &plan,
                         &parameters,
-                        PhysicalOptions::for_threads(threads),
+                        PhysicalOptions {
+                            devices: crate::terminal::devices_for(&plan),
+                            ..PhysicalOptions::for_threads(threads)
+                        },
                         &ExecuteOptions::new(threads),
                     )
                 })

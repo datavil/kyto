@@ -10,6 +10,7 @@ mod support;
 
 mod build_validation;
 mod column_dtype_polars;
+mod devices;
 mod estimate;
 mod explain;
 mod handles;

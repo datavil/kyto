@@ -14,7 +14,7 @@
 //! | `highly_variable_genes` (`seurat_v3`: moments, then clipped variances) | 2 | 0 | cells |
 //! | `pca` (streamed randomized block Krylov: `2 +` [`PCA_POWER_ITERATIONS`]) | 11 | 0 | cells |
 //! | `with_cells`/`with_genes` on metadata only, `neighbors`, `leiden`/`louvain` | 0 | 0 | in memory |
-//! | `with_default_layer` | 0 | 0 | none (resolved at build) |
+//! | `with_default_layer`, `on` | 0 | 0 | none (resolved at build) |
 //!
 //! A pass counts one read of the node's input stream for one read of its output: a
 //! node's work in its apply pass shares that pass with the per-cell nodes around it.
@@ -36,17 +36,26 @@
 //! cells, so the cells in flight stay those of `n` store cell blocks; the executor
 //! still reads whole cell blocks ([`PhysicalOptions::scan_read_cells`]) and cuts them
 //! in memory, so reading costs what it costs at `C`.
+//!
+//! **Devices (task 9.1).** Each node's [`Placement`] follows the device the plan asks
+//! for (`on`, [`OptimizedPlan::device_request`]) on the devices found
+//! ([`PhysicalOptions::devices`]), by the rules in `device_placement.rs`; a node that
+//! cannot run as asked makes [`PhysicalPlan::device_error`] an error, which the
+//! executor raises before reading anything.
 //! Does not: execute (5.x), choose blocks for a memory limit (`memory_limit.rs`), count the
 //! passes over the store for the whole plan or estimate bytes and memory (4.6,
-//! `estimate.rs`), pick
-//! among several devices (9.1: [`Device`] has only the CPU), or print the logical
+//! `estimate.rs`), find the devices (`kyto_gpu::probe`), or print the logical
 //! tree or JSON (4.7, `explain.rs`).
 
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::Arc;
 
+use kyto_error::KytoError;
+use kyto_gpu::{Device, Devices};
+
 use crate::cross_cell::{CrossCellOp, HvgFlavor};
+use crate::device_placement::{DeviceRequest, Placement, operations, place};
 use crate::filter::Predicate;
 use crate::node::{CellScope, LogicalNode};
 use crate::optimize::{OptimizeOptions, Output, optimize};
@@ -63,30 +72,6 @@ use crate::with_columns::Columns;
 /// scanpy's variances to 1.2e-4, 9 to 1.3e-6 (the `float32` reference's precision).
 pub const PCA_POWER_ITERATIONS: u32 = 9;
 
-/// Where a node runs (R7: an argument, never a global setting).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum Device {
-    /// The CPU (the streaming executor of 5.x). The only device until task 9.1.
-    #[default]
-    Cpu,
-}
-
-impl Device {
-    /// The name `explain` shows (`cpu`).
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Cpu => "cpu",
-        }
-    }
-}
-
-impl fmt::Display for Device {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.name())
-    }
-}
-
 /// Cell blocks a stream reads at once in [`PhysicalOptions::default`] (as
 /// `kyto_store::sink_h5ad`): what `explain` and `estimate` assume when given no thread
 /// count. A run uses [`PhysicalOptions::for_threads`] (task 5.13), which keeps the cells
@@ -99,8 +84,10 @@ pub const DEFAULT_BLOCKS_IN_FLIGHT: NonZeroU64 = NonZeroU64::new(2).expect("2 is
 /// [`PhysicalOptions::for_threads`] one per thread of the run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalOptions {
-    /// The device every node runs on.
-    pub device: Device,
+    /// The devices found on the machine (`kyto_gpu::probe()`), among which each node's
+    /// device is chosen (task 9.1). [`Default`] is the CPU alone, so a plan explains
+    /// the same on every machine unless it is given the probe (R7: an argument).
+    pub devices: Devices,
     /// Cell blocks a stream reads and holds at once (memory grows with it; task 4.6's
     /// estimate counts it, 5.2's executor uses it).
     pub blocks_in_flight: NonZeroU64,
@@ -123,7 +110,7 @@ pub struct PhysicalOptions {
 impl Default for PhysicalOptions {
     fn default() -> Self {
         Self {
-            device: Device::default(),
+            devices: Devices::CPU_ONLY,
             blocks_in_flight: DEFAULT_BLOCKS_IN_FLIGHT,
             max_block_cells: None,
             hold_inputs: true,
@@ -193,7 +180,7 @@ pub enum Blocks {
 /// How one optimized node runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Execution {
-    device: Device,
+    placement: Placement,
     statistics_passes: u32,
     apply_pass: bool,
     blocks: Blocks,
@@ -201,9 +188,15 @@ pub struct Execution {
 }
 
 impl Execution {
-    /// The device it runs on.
-    pub fn device(&self) -> Device {
-        self.device
+    /// The device it runs on, `None` when it cannot run as asked (`KY-E501`,
+    /// `KY-E504`: [`Execution::placement`] says why).
+    pub fn device(&self) -> Option<Device> {
+        self.placement.device()
+    }
+
+    /// Where it runs, and why when not where the plan asked (task 9.1).
+    pub fn placement(&self) -> Placement {
+        self.placement
     }
 
     /// Passes over all of its input's blocks before it outputs anything.
@@ -244,10 +237,16 @@ impl Execution {
 }
 
 /// `device=cpu passes=2 (statistics=1 apply=1) blocks=4096 cells`, then ` input held`
-/// for a node holding its input (task 5.12).
+/// for a node holding its input (task 5.12); the device with its note when it does not
+/// run where asked (`device=cpu (auto: no gpu kernel)`, task 9.1).
 impl fmt::Display for Execution {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "device={} passes={}", self.device, self.passes())?;
+        write!(
+            formatter,
+            "device={} passes={}",
+            self.placement,
+            self.passes()
+        )?;
         if self.statistics_passes > 0 {
             write!(
                 formatter,
@@ -281,6 +280,7 @@ impl PhysicalPlan {
     pub fn new(optimized: OptimizedPlan, options: PhysicalOptions) -> Self {
         let mut block_sizes: Vec<u64> = Vec::with_capacity(optimized.nodes().len());
         let mut executions = Vec::with_capacity(optimized.nodes().len());
+        let request = optimized.device_request();
         for node in optimized.nodes() {
             // Inputs come first, so the input's block size is known.
             let cells = match (node.operation(), node.input()) {
@@ -292,7 +292,13 @@ impl PhysicalPlan {
                 (_, None) => unreachable!("optimized node without input"),
             };
             block_sizes.push(cells);
-            executions.push(execution(node, options, cells));
+            let placement = place(
+                request,
+                options.devices,
+                &operations(node),
+                Device::has_kernel,
+            );
+            executions.push(execution(node, options, cells, placement));
         }
         Self {
             optimized,
@@ -315,13 +321,35 @@ impl PhysicalPlan {
     pub fn executions(&self) -> &[Execution] {
         &self.executions
     }
+
+    /// The error a run of this plan raises before reading anything because a node
+    /// cannot run where the plan asks (task 9.1): `KY-E504` when the device asked for
+    /// was not found, else `KY-E501` for the first node (from the scan up) whose device
+    /// has no kernel for it. `None` when every node can run.
+    pub fn device_error(&self) -> Option<KytoError> {
+        let placements = || self.executions.iter().map(Execution::placement);
+        placements()
+            .find(|placement| matches!(placement, Placement::NotFound(_)))
+            .or_else(|| placements().find(|placement| placement.device().is_none()))
+            .and_then(|placement| placement.error(self.options.devices))
+    }
+
+    /// The device the plan asks for (its last `on`, else the CPU).
+    pub fn device_request(&self) -> DeviceRequest {
+        self.optimized.device_request()
+    }
 }
 
-/// How `node` runs with `options`, streamed in blocks of `cells` cells if it is.
-fn execution(node: &OptimizedNode, options: PhysicalOptions, cells: u64) -> Execution {
-    let device = options.device;
+/// How `node` runs with `options` on `placement`, streamed in blocks of `cells` cells
+/// if it is.
+fn execution(
+    node: &OptimizedNode,
+    options: PhysicalOptions,
+    cells: u64,
+    placement: Placement,
+) -> Execution {
     let streamed = |statistics_passes: u32, apply_pass: bool| Execution {
-        device,
+        placement,
         statistics_passes,
         apply_pass,
         blocks: Blocks::Cells(cells),
@@ -329,7 +357,7 @@ fn execution(node: &OptimizedNode, options: PhysicalOptions, cells: u64) -> Exec
         holds_input: options.hold_inputs && statistics_passes >= 2,
     };
     let held = |blocks: Blocks| Execution {
-        device,
+        placement,
         statistics_passes: 0,
         apply_pass: false,
         blocks,
@@ -345,7 +373,7 @@ fn execution(node: &OptimizedNode, options: PhysicalOptions, cells: u64) -> Exec
         ),
         Operation::Node(plan) => match plan.as_ref() {
             Plan::Scan(_) => streamed(0, true),
-            Plan::WithDefaultLayer(_) => held(Blocks::None),
+            Plan::WithDefaultLayer(_) | Plan::OnDevice(_) => held(Blocks::None),
             Plan::Filter(filter) => match filter.params().predicate() {
                 Predicate::Cells(_) => streamed(0, true),
                 Predicate::Genes(_) => mapped(plan.cell_scope()),

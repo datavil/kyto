@@ -234,22 +234,3 @@ pub fn strings(
     let error = refuse(function, parameter, value, problem, accepted)?;
     Err(to_py_err(py, &error))
 }
-
-/// `device` of `Atlas.on`: the CPU runs today; the GPU devices are task 9.1's
-/// (`KY-E601`); anything else is `KY-E215`.
-pub fn device(value: &str) -> Result<(), KytoError> {
-    match value {
-        "cpu" => Ok(()),
-        "auto" | "cuda" | "wgpu" | "metal" => Err(KytoError::NotImplementedYet {
-            method: format!("Atlas.on(device='{value}')"),
-            task: "9.1".to_owned(),
-        }),
-        _ => Err(invalid(
-            "on",
-            "device",
-            format!("'{value}'"),
-            "it is not a device kyto knows",
-            "'cpu' ('auto', 'cuda', 'wgpu' and 'metal' arrive with task 9.1)",
-        )),
-    }
-}

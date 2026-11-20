@@ -96,6 +96,8 @@ pub struct StoreWriter {
     seeds: BTreeMap<u64, u64>,
     /// Plan node ID to seconds, for `provenance.json`'s `run` (§9).
     timings: BTreeMap<u64, f64>,
+    /// The device the run computed on, for `provenance.json` (§9, task 9.1).
+    device: String,
     /// Set when a write failed: the arrays are then incomplete, so later calls fail.
     failed: bool,
 }
@@ -186,6 +188,7 @@ impl StoreWriter {
             plan: None,
             seeds: BTreeMap::new(),
             timings: BTreeMap::new(),
+            device: "cpu".to_owned(),
             failed: false,
         })
     }
@@ -239,6 +242,13 @@ impl StoreWriter {
     pub fn set_run(&mut self, started_at: SystemTime, timings: BTreeMap<u64, f64>) {
         self.started_at = started_at;
         self.timings = timings;
+    }
+
+    /// Record `device` (as `explain` names it: `cpu`, `cuda`, `metal`, ...) as the
+    /// `device` of `provenance.json` (format.md §9, task 9.1): the device the run's
+    /// steps computed on. `cpu` unless set (an import computes on the CPU).
+    pub fn set_device(&mut self, device: &str) {
+        device.clone_into(&mut self.device);
     }
 
     /// Matrix rows pushed so far.
@@ -407,6 +417,7 @@ impl StoreWriter {
             self.plan.take(),
             &self.seeds,
             &self.timings,
+            &self.device,
             (self.started_at, SystemTime::now()),
         );
         write_json(&store.join("provenance.json"), &provenance)?;

@@ -10,4 +10,19 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# GPU libraries are opt-in (task 9.1): the default build, and the default wheel, link
+# none of them, so the probe finds only the CPU. `wgpu` finds Metal (Apple), Vulkan and
+# DX12 adapters; `cuda` finds NVIDIA GPUs through the driver library, loaded at run time
+# (no CUDA toolkit needed to build). The versions are CubeCL 0.11's (task 9.2), so its
+# runtimes reuse them.
+[features]
+wgpu = ["dep:wgpu", "dep:pollster"]
+cuda = ["dep:cudarc"]
+
 [dependencies]
+kyto-error = { path = "../kyto-error" }
+cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
+# Only the native backends: no WebGL, no GLES.
+wgpu = { version = "30.0.2", optional = true, default-features = false, features = ["metal", "vulkan", "dx12", "std"] }
+# Blocks on wgpu's async adapter request; the probe runs once, on the calling thread.
+pollster = { version = "0.4.0", optional = true }

@@ -139,6 +139,7 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
         // A sink writes what its output reads (task 5.19), nothing of its own.
         Plan::Scan(_)
         | Plan::WithDefaultLayer(_)
+        | Plan::OnDevice(_)
         | Plan::SelectGenes(_)
         | Plan::TakeCells(_)
         | Plan::Sink(_) => {}
@@ -206,6 +207,7 @@ pub(crate) fn node_writes(plan: &Plan) -> Members {
     match plan {
         Plan::Scan(node) => writes = all_members(node.params().schema()),
         Plan::WithDefaultLayer(_)
+        | Plan::OnDevice(_)
         | Plan::Filter(_)
         | Plan::SelectGenes(_)
         | Plan::TakeCells(_)

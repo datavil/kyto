@@ -1567,12 +1567,30 @@ Atlas.on(*, device: Literal['cpu', 'auto', 'cuda', 'wgpu', 'metal']) -> Atlas
 
 Run the plan on a device (R7: the device is an argument, not a setting).
 
-Today every plan runs on the CPU; the GPU devices arrive with task 9.1.
+Adds an ``ON_DEVICE`` step. The last ``on`` of a chain sets the device of the
+whole plan, the steps before it too; a plan without one runs on the CPU.
+``explain()`` names each step's device, by these fixed rules:
+
+1. Steps that only move or select data (``scan``, sinks, ``select_genes``,
+   ``take_cells``, filters and columns on metadata alone) run on the CPU.
+2. ``"cpu"``: every step on the CPU.
+3. ``"auto"``: each step on the first GPU found that has a kernel for it, CUDA
+   first, then Metal, Vulkan or DX12 (wgpu); otherwise on the CPU, and
+   ``explain()`` says why (``auto: no gpu found``, ``auto: no gpu kernel``).
+4. ``"cuda"``, ``"metal"`` or ``"wgpu"`` (any of Metal, Vulkan, DX12): every
+   other step on that GPU. Running the plan raises, before anything is read, if
+   the GPU was not found (``KY-E504``) or has no kernel for a step
+   (``KY-E501``); ``explain()`` marks those steps.
+
+GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature; the
+GPU kernels arrive with tasks 9.2 to 9.8, so today ``"auto"`` runs every step on
+the CPU and says so. The data size plays no part in the rules, and steps on the
+CPU give the same bits whatever device was asked for (R11).
 
 Parameters
 ----------
-device : {"cpu"}
-    The device the plan's nodes run on.
+device : {"cpu", "auto", "cuda", "wgpu", "metal"}
+    The device the plan's steps run on.
 
 Returns
 -------
@@ -1581,15 +1599,16 @@ Atlas
 
 Raises
 ------
-NotImplementedYetError
-    ``KY-E601``: ``"auto"``, ``"cuda"``, ``"wgpu"`` or ``"metal"`` (task 9.1).
 PlanError
-    ``KY-E215``: any other device name.
+    ``KY-E215``: any other device name; ``KY-E216``: the plan ends in a sink.
 
 Examples
 --------
 >>> scan(store).on(device="cpu").estimate()["device"]
 'cpu'
+>>> plan = scan(store).log1p(layer="counts", into="log").on(device="auto")
+>>> "(auto: no gpu" in plan.explain()
+True
 
 ### Atlas.collect
 
@@ -2583,23 +2602,29 @@ implicitly). The optimized tree is the plan optimized with every rule (for a ter
 reading all of its output): one line for what the output reads, then one line per
 node from the top down to the scan, each with the logical nodes it came from
 (``(node 1, 2)`` for a fused pass) and, in brackets, how it runs: ``device``
-(``cpu``), ``passes`` over its input's blocks (with the ``statistics`` passes over
+(``cpu``, ``cuda``, ``metal``, ``vulkan`` or ``dx12``; with a note in parentheses
+when the step does not run on the device ``on`` asked for, such as ``cpu (auto: no
+gpu kernel)``, see ``on``), ``passes`` over its input's blocks (with the ``statistics`` passes over
 all cells and the ``apply`` pass when there are statistics passes), and
 ``blocks=N cells`` (streamed in blocks of N cells: the store's cell block size,
 or smaller on more than 2 ``threads``), ``in memory`` or ``no data``, then
 ``input held`` for a step that holds its input in
 memory (task 5.12: it reads the store once, and its ``passes`` run over the held
-blocks). ``estimate()`` gives the cost of the whole plan. Nothing is read.
+blocks). A plan that asks for a device other than the CPU shows one more line
+before the outputs: ``device auto (found: cpu, metal)``, the device asked for and
+the devices found on this machine. ``estimate()`` gives the cost of the whole
+plan. Nothing is read.
 
 Parameters
 ----------
 format : {"text", "json"}, default="text"
     ``"text"``: the two trees as text, under ``logical plan`` and ``optimized
     plan``. ``"json"``: the same as a dict with ``logical`` (one dict per step:
-    ``id``, ``name``, ``parameters``, ``input``, ``note``) and ``optimized`` (``outputs``:
+    ``id``, ``name``, ``parameters``, ``input``, ``note``) and ``optimized``
+    (``device``: ``requested``, ``found``; ``outputs``:
     ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
     ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
-    ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
+    ``device_note`` (``None`` when it runs as asked), ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
     ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
     text's order.
 threads : int or None, default=None
@@ -2677,8 +2702,9 @@ Returns
 -------
 CostEstimate
     A new dict with ``passes``, ``bytes_read``, ``peak_memory`` and
-    ``held_memory`` (bytes, as ``int``), ``passes_saved`` and ``device``
-    (``"cpu"``).
+    ``held_memory`` (bytes, as ``int``), ``passes_saved`` and ``device`` (the
+    device ``on`` asks for, ``"cpu"`` without one; ``explain()`` shows each
+    step's). The memory is the CPU executor's on every device.
 
 Examples
 --------
@@ -4290,6 +4316,7 @@ Subclasses `KytoError` and `RuntimeError`. Raised with these codes:
 
 - ``KY-E501``: The requested device has no kernel for an operation.
 - ``KY-E502``: The CPU executor cannot start the threads it was asked for.
+- ``KY-E504``: The device a plan asks for is not on this machine, or not in this build.
 
 See `KytoError` for the parameters and attributes.
 

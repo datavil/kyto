@@ -379,7 +379,7 @@ pub fn check_equal(
 fn apply(plan: &Plan, data: &mut Data) -> Result<(), String> {
     match plan {
         Plan::Scan(_) => Err("a scan is not applied".to_owned()),
-        Plan::WithDefaultLayer(_) | Plan::Sink(_) => Ok(()),
+        Plan::WithDefaultLayer(_) | Plan::OnDevice(_) | Plan::Sink(_) => Ok(()),
         Plan::Filter(node) => match node.params().predicate() {
             Predicate::Cells(predicate) => {
                 let rows = mask(&evaluate(predicate, data)?)?;

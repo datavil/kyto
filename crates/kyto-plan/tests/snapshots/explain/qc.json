@@ -30,6 +30,10 @@
     }
   ],
   "optimized": {
+    "device": {
+      "requested": "cpu",
+      "found": "cpu"
+    },
     "outputs": [
       {
         "node": 3,
@@ -59,6 +63,7 @@
           3
         ],
         "device": "cpu",
+        "device_note": null,
         "passes": 1,
         "statistics_passes": 0,
         "apply_pass": true,
@@ -76,6 +81,7 @@
           2
         ],
         "device": "cpu",
+        "device_note": null,
         "passes": 1,
         "statistics_passes": 0,
         "apply_pass": true,
@@ -93,6 +99,7 @@
           1
         ],
         "device": "cpu",
+        "device_note": null,
         "passes": 0,
         "statistics_passes": 0,
         "apply_pass": false,
@@ -122,6 +129,7 @@
           0
         ],
         "device": "cpu",
+        "device_note": null,
         "passes": 1,
         "statistics_passes": 0,
         "apply_pass": true,
