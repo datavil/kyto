@@ -43,13 +43,10 @@ store_with_members = Path("members.kyto")
 # calls (anndata ships no type stubs). ``_private`` functions and methods are skipped too.
 _PRIVATE_MODULES = {"_anndata.py"}
 
-# Examples whose values come from a library without complete types: SciPy
-# (``scipy-stubs`` is not in the dev env yet, a follow-up of 7.6 in the plan) and
-# anndata (no stubs at all). Their ``reportUnknown*`` diagnostics are the library's, not
-# kyto's stubs'.
+# Examples whose values come from a library without complete types: anndata (no stubs
+# at all). Their ``reportUnknown*`` diagnostics are the library's, not kyto's stubs'.
+# SciPy is typed by ``scipy-stubs`` (7.9), so the ``to_scipy`` examples are checked.
 _UNTYPED_THIRD_PARTY = {
-    "_kyto.pyi.Matrix.to_scipy",
-    "_kyto.pyi.Graph.to_scipy",
     "_kyto.pyi.Atlas.to_anndata",
 }
 

@@ -33,5 +33,7 @@ doc comment and copy it.
   `I`, or the gate's ruff rewrites the generated file and the tree is dirty.
 - An argument no overload of `filter` accepts makes pyright report both
   `reportCallIssue` and `reportArgumentType`: an ignore comment must name both.
-- `scipy-stubs` would type `to_scipy()` results, but makes 8 errors in
-  `tests/fixtures/make_reference.py`; not added (follow-up 7.9).
+- `scipy-stubs` types `to_scipy()` results (added by 7.9). In its stubs neither
+  `spmatrix` nor `sparray` is a sparse base, so `csr_matrix(x)` accepts only a
+  concrete sparse class or an array: narrow anndata's loosely typed `X`/`obsp` with
+  `isinstance(x, csr_matrix)` (`make_reference._sparse`), not with `spmatrix`.

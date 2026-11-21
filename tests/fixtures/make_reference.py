@@ -17,7 +17,7 @@ Run from the repository root after changing a fixture or upgrading scanpy::
 What it does not: run kyto, or decide tolerances (task 10.2 owns the parity table).
 """
 
-# scanpy, pandas and scipy ship without complete type information; strict pyright
+# scanpy and pandas ship without complete type information; strict pyright
 # cannot see their types, so the unknown-type checks are relaxed in this file only.
 # pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
@@ -25,7 +25,7 @@ What it does not: run kyto, or decide tolerances (task 10.2 owns the parity tabl
 import json
 from collections.abc import Callable, Mapping
 from importlib.metadata import version
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import numpy as np
 from anndata import AnnData
@@ -34,6 +34,9 @@ from numpy.typing import NDArray
 from fixtures.interop import to_anndata
 from fixtures.reference import MANIFEST_PATH, REFERENCE_DIR, array_entry
 from fixtures.registry import EXPECTED_DIGESTS, FIXTURE_NAMES, FixtureName, load_fixture
+
+if TYPE_CHECKING:
+    from scipy.sparse import csr_matrix
 
 VERSIONED_PACKAGES: tuple[str, ...] = (
     "anndata",
@@ -103,11 +106,23 @@ def _frame_arrays(frame: object, prefix: str) -> Arrays:
     return arrays
 
 
+def _sparse(matrix: object) -> "csr_matrix":
+    """Return ``matrix`` typed as a ``csr_matrix``: anndata's ``X`` and ``obsp``
+    values are typed loosely (``object``, or a union with ``None`` and backed
+    datasets), and every one the references read is a ``csr_matrix`` (the fixtures'
+    ``to_anndata`` builds one, scanpy keeps it)."""
+    from scipy.sparse import csr_matrix
+
+    if not isinstance(matrix, csr_matrix):
+        raise TypeError(f"expected a SciPy csr_matrix, got {type(matrix).__name__}")
+    return matrix
+
+
 def _csr_arrays(matrix: object, prefix: str) -> Arrays:
     """Return a scipy CSR matrix as ``<prefix>/{data,indices,indptr,shape}`` arrays."""
     from scipy.sparse import csr_matrix
 
-    csr = csr_matrix(matrix)
+    csr = csr_matrix(_sparse(matrix))
     csr.sort_indices()
     return {
         f"{prefix}/data": np.asarray(csr.data),
@@ -121,7 +136,7 @@ def _sum_arrays(matrix: object, prefix: str) -> Arrays:
     """Return float64 per-cell sums, per-gene sums and the number of stored values."""
     from scipy.sparse import csr_matrix
 
-    csr = csr_matrix(matrix, dtype=np.float64)
+    csr = csr_matrix(_sparse(matrix), dtype=np.float64)
     return {
         f"{prefix}/cell_sum": np.asarray(csr.sum(axis=1)).ravel(),
         f"{prefix}/gene_sum": np.asarray(csr.sum(axis=0)).ravel(),
@@ -220,7 +235,7 @@ def normalize_log1p(name: FixtureName) -> tuple[Parameters, Arrays]:
         adata = _counts(name)
         sc.pp.normalize_total(adata, target_sum=target_sum)
         # A copy: `log1p` below changes `adata.X` in place.
-        normalized = csr_matrix(adata.X, copy=True)
+        normalized = csr_matrix(_sparse(adata.X), copy=True)
         sc.pp.log1p(adata)
         for step, matrix in (("normalized", normalized), ("log1p", adata.X)):
             prefix = f"{label}/{step}"
@@ -351,7 +366,7 @@ def _rb_quality(
     edge weight: ``sum_c (W_c - resolution * K_out_c * K_in_c / m) / m``."""
     from scipy.sparse import csr_matrix
 
-    matrix = csr_matrix(adjacency, dtype=np.float64)
+    matrix = csr_matrix(_sparse(adjacency), dtype=np.float64)
     rows, columns = matrix.nonzero()
     weights = np.asarray(matrix[rows, columns]).ravel()
     total = float(weights.sum())

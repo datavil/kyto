@@ -25,7 +25,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 import pytest
-import scipy.sparse  # pyright: ignore[reportMissingTypeStubs]
+import scipy.sparse
 from kyto import _kyto, gene_column
 from kyto.qc import total_counts, total_counts_in
 
