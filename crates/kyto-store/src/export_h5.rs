@@ -31,12 +31,18 @@ impl H5Out {
     /// `errno 35` (EAGAIN) until the child exits. `path` is a temporary file with a
     /// random name that only this writer opens, so the lock guards nothing.
     ///
+    /// No object records its creation and modification times (the root through the file
+    /// creation list, the groups in [`H5Out::group`]; hdf5-metno's datasets record none
+    /// either, as h5py's), so the same store exports to the same bytes (format.md
+    /// §10.3, task 8.7).
+    ///
     /// # Errors
     /// `KY-E110` if it cannot be created.
     pub(crate) fn create(path: &Path, target: &Path) -> Result<Self, KytoError> {
         let target = target.display().to_string();
         let file = File::with_options()
             .with_fapl(|fapl| fapl.file_locking(false))
+            .with_fcpl(|fcpl| fcpl.obj_track_times(false))
             .create(path)
             .map_err(|error| KytoError::StoreIo {
                 operation: "create".to_owned(),
@@ -69,7 +75,9 @@ impl H5Out {
     pub(crate) fn group(&self, member: &str, encoding: (&str, &str)) -> Result<Group, KytoError> {
         let group = self
             .file
-            .create_group(member)
+            .create_group_builder()
+            .obj_track_times(false)
+            .create(member)
             .map_err(|error| self.write_error(member, error))?;
         self.encode(member, &group, encoding)?;
         Ok(group)

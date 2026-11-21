@@ -15,10 +15,8 @@
 //! embedding (read by the sink after its stream), sunk to a Zarr store and to an `.h5ad`
 //! file at 1 and 4 threads. The stores' files are byte-identical across thread counts
 //! (`provenance.json` too, apart from its `run` object, format.md §10.3; task 8.5
-//! dropped the target path from it). The `.h5ad` files are not
-//! compared as bytes (HDF5 stamps its objects with the time they were written): each is
-//! converted back to a store once the global pool is released, and those stores' files
-//! are compared.
+//! dropped the target path from it). The `.h5ad` files are byte-identical too: the
+//! HDF5 writer records no object times (task 8.7).
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -34,8 +32,8 @@ use kyto_core::{BinaryOp, CellExpr, Expr, GeneIds, Tiling};
 use kyto_exec::{ExecuteOptions, Pipeline};
 use kyto_plan::{OptimizeOptions, Output, PhysicalOptions, Plan, Sink, physical_plan};
 use kyto_store::{
-    CellBlock, ConvertOptions, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype,
-    convert, open_atlas_schema, read_ids,
+    CellBlock, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype, open_atlas_schema,
+    read_ids,
 };
 use polars::prelude::{DataFrame, IntoColumn, NamedFrom, Series};
 
@@ -260,26 +258,9 @@ fn a_sink_writes_on_the_runs_pool_only() {
         stores[0], stores[1],
         "the store differs between 1 and 4 threads"
     );
-    // Converted after the global pool is released (the importer runs outside any pool).
-    let converted: Vec<_> = h5ads
-        .iter()
-        .map(|h5ad| {
-            let back = h5ad.with_extension("back.kyto");
-            let options = ConvertOptions {
-                layer: "log1p".to_owned(),
-                ..ConvertOptions::default()
-            };
-            convert(h5ad, &back, &options).unwrap();
-            files(&back)
-        })
-        .collect();
-    assert!(
-        converted[0]
-            .keys()
-            .any(|path| path.starts_with("layers/log1p"))
-    );
     assert_eq!(
-        converted[0], converted[1],
-        "the .h5ad's contents differ between 1 and 4 threads"
+        std::fs::read(&h5ads[0]).unwrap(),
+        std::fs::read(&h5ads[1]).unwrap(),
+        "the .h5ad differs between 1 and 4 threads"
     );
 }

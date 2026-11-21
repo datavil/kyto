@@ -134,11 +134,7 @@ Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9): see [Implementation Plan - D
 
 Goal: an agent can inspect data, write a pipeline, check it and fix its own mistakes without reading the matrix or the source code.
 
-Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
-
-- [ ] **8.7 Reproducibility test.** Same input, plan and seed give a byte-identical store (R11).
-  - Depends: 8.5, 5.6, 5.12
-  - Done when: CI writes a reference pipeline twice and compares checksums.
+Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#8-agent-friendliness).
 
 ## 9. GPU backend (`kyto-gpu`)
 

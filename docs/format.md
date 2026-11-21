@@ -567,6 +567,19 @@ tile order (§4.3), canonical CSR (§4.6), no all-fill chunks (§4.4), fixed cod
 parameters, JSON keys in the order this spec lists them, member lists sorted by name,
 and no timestamps outside `run`.
 
+**The checksum rule (8.7).** Two writes are the same store when the SHA-256 of every
+file, keyed by its path relative to the store root, is the same, with one exception:
+`provenance.json` is hashed after parsing it, deleting `run` and `source.path` (when
+`source` is not `null`), and dumping it again (key order kept). Nothing else is left
+out: every data member (layer, embedding and graph chunks and `zarr.json` files,
+`cells.parquet`, `genes.parquet`, `schema.json`, the root `zarr.json`) is compared
+byte for byte, and the two stores must hold the same set of paths. An `.h5ad` written
+by a kyto sink is compared as one file, every byte: the HDF5 writer records no object
+creation or modification times (no `obj_track_times` on the file, its groups or its
+datasets), so the same store exports to the same bytes. `tests/test_reproducibility.py`
+applies the rule to a pipeline on pbmc3k that writes every kind of member, at one
+thread and at one thread per core, in both sinks (local gate and CI).
+
 ## 11. Versioning and compatibility
 
 - Writers write the `format_version` they implement (§3).
