@@ -73,7 +73,9 @@ decision recorded in the plan.
   (at most 3–4 at once, each in its own worktree, rebased onto `main` before its
   commit); performance tasks that benchmark run alone. The maestro lands a session only
   after it has fully finished (Done-when check, local gate, bug hunt, commit).
-  (Parallel runs allowed by the user, Nov 20, 2026.)
+  (Parallel runs allowed by the user, Nov 20, 2026.) Features and correctness come
+  first: speed tasks wait for milestone M6 (plan section 12), which starts once M3 to
+  M5 are done (decided by the user, Nov 21, 2026).
 - **Version control.** Each sub-session works in its own git worktree on its own
   branch. When it is done, the maestro checks the result and merges it into `main`
   (rebase onto `main`, fast-forward, `git push origin main`), then removes the worktree
