@@ -204,7 +204,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `python/kyto` | Python package and `.pyi` stubs |
 | `tests/` | pytest (API, parity, property tests) and fixtures |
 | `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
-| `docs/` | `format.md` store format spec (2.1); docs site sources (not yet: task 10.5) |
+| `docs/` | docs site sources (10.5, `mkdocs.yml`): `format.md` store format spec (2.1), migration pages, guides; `errors.md` generated from `errors.toml`; index, design rules and API reference generated at build time by `scripts/docs_hooks.py` |
 | `errors.toml` | the error registry (codes, classes, templates, hints, docs links) |
 | `llms.txt`, `llms-full.txt` | the public API for agents: signatures, summaries, examples (generated from the stubs, 8.6) |
 | `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
@@ -308,6 +308,7 @@ uv run pyright                            # Python type check (strict, set in py
 uv run python scripts/error_registry.py --check   # errors.toml: generated code in sync, no unregistered error (R10)
 uv run python scripts/stubs.py --check    # python/kyto/_kyto.pyi is what the bindings generate (R12; drop --check to regenerate)
 uv run python scripts/llms_txt.py --check  # llms.txt and llms-full.txt are what the stubs say (8.6; drop --check to regenerate)
+NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict   # 10.5: the docs site builds with zero warnings (into target/site, nothing deployed)
 uv run pytest                             # Python tests (API, parity, hypothesis properties with a fixed seed)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
 uv run pre-commit install                 # run the hooks on every git commit (once)

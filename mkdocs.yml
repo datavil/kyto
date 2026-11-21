@@ -1,0 +1,74 @@
+# The docs site (task 10.5). Build it with `uv run mkdocs build --strict` (the local
+# gate does): any warning fails the build. Nothing is deployed; the site is written to
+# target/site. Pages generated at build time (index, design rules, API reference) come
+# from scripts/docs_hooks.py; docs/errors.md from scripts/error_registry.py.
+site_name: kyto
+site_description: Lazy, streaming single-cell analysis, written in Rust, used from Python.
+repo_url: https://github.com/datavil/kyto
+edit_uri: ""
+docs_dir: docs
+site_dir: target/site
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+hooks:
+  - scripts/docs_hooks.py
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [python]
+          options:
+            # Stub methods written only as overloads (scripts/docs_hooks.py).
+            extensions:
+              - scripts/docs_hooks.py:OverloadOnlyMembers
+            docstring_style: numpy
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: false
+            show_symbol_type_heading: true
+            members_order: source
+            filters: ["!^_"]
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Moving from scanpy:
+      - AnnData and scanpy to kyto: migration.md
+      - Reading features: anndata_migration.md
+  - Guides:
+      - Feature names: feature_names.md
+      - Plotting: plotting.md
+      - "Tutorial: clustering": tutorials/clustering.md
+  - Design rules: design-rules.md
+  - API reference:
+      - Functions: api/functions.md
+      - Plans, handles and expressions: api/classes.md
+      - QC metrics: api/qc.md
+      - Expression dtypes: api/dtypes.md
+      - Exceptions: api/errors.md
+  - Error codes: errors.md
+  - Store format: format.md

@@ -57,6 +57,11 @@ dev = [
     "cellestial>=0.62.1; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     # Property tests of the Python API (task 10.1): random chains must not crash.
     "hypothesis>=6.100",
+    # Docs site (task 10.5): `mkdocs build --strict` in the gate; the API reference is
+    # read from the generated stubs by mkdocstrings (griffe, NumPy docstrings).
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6",
+    "mkdocstrings[python]>=0.29",
 ]
 
 [tool.maturin]

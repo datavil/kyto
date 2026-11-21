@@ -174,7 +174,7 @@ Done (9.1): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done
 
 Goal: correctness and speed are measured on every PR, and 1.0 ships as wheels with a migration guide. 10.1–10.3 start with M1 and grow with each milestone.
 
-Done (10.1, 10.2, 10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
+Done (10.1, 10.2, 10.5, 10.7, 10.8): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#10-testing-benchmarks-docs-release).
 
 - [ ] **10.3 Benchmarks.** `criterion` for Rust and `pytest-benchmark` for Python, against scanpy and rapids-singlecell at increasing dataset sizes, tracking time and peak RSS.
   - Depends: 5.2
@@ -182,9 +182,6 @@ Done (10.1, 10.2, 10.7, 10.8): see [Implementation Plan - Done.md](Implementatio
 - [ ] **10.4 Tile size study.** Benchmark cell-block × gene-block sizes for cell scans, gene lookups and PCA; set the 2.2 defaults from the results.
   - Depends: 2.4, 10.3, 5.12, 5.13
   - Done when: the chosen defaults and the benchmark table are in `docs/format.md`.
-- [ ] **10.5 Docs site.** mkdocs-material with mkdocstrings (NumPy style), a design-rules page (R1–R12), an error-code page from 8.1, and the AnnData → kyto migration table.
-  - Depends: 7.6, 8.1
-  - Done when: docs build in CI with zero warnings.
 - [ ] **10.6 Release.** abi3 wheels via maturin, PyPI trusted publishing, semantic versioning, and a stated policy for reading older `format_version` stores.
   - Depends: 1.4, 10.5
   - Done when: `pip install kyto` works on Linux, macOS and Windows from a tagged release.

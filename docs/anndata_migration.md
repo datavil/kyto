@@ -1,11 +1,11 @@
 # From AnnData to kyto: reading features
 
 How the AnnData (and `scanpy.get`) ways of reading cells, genes and values map to
-kyto's feature access (task 7.4). Task 10.5 folds this page into the docs site's
-migration table. Every row of the table below is run by
-`tests/test_feature_access.py` on the pbmc3k fixture, both sides, and the results are
-compared value for value (`test_migration_row`): a row that stops matching fails the
-local gate.
+kyto's feature access (task 7.4). The workflow calls (`sc.pp`, `sc.tl`, reading and
+writing) are in [From AnnData and scanpy to kyto](migration.md). Every row of the table
+below is run by `tests/test_feature_access.py` on the pbmc3k fixture, both sides, and
+the results are compared value for value (`test_migration_row`): a row that stops
+matching fails the local gate.
 
 kyto has no `obs`, `var`, `.X` or `__getitem__` (R4). Values come out through
 terminals that run the plan and return Polars objects or ints (R1, R3), and every name

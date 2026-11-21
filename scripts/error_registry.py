@@ -2,7 +2,8 @@
 
 Does: read and validate `errors.toml`, write the Rust enum
 (`crates/kyto-error/src/registry.rs`) and the Python classes
-(`python/kyto/errors.py`, `python/kyto/errors.pyi`) from it. With `--check` it writes
+(`python/kyto/errors.py`, `python/kyto/errors.pyi`) and the docs site's error page
+(`docs/errors.md`, task 10.5) from it. With `--check` it writes
 nothing and fails if a generated file differs from what it would write, or if any
 Rust or Python source raises an error that is not registered (see `scan_rust` and
 `scan_python` for the rules).
@@ -36,6 +37,7 @@ REGISTRY_FILE = ROOT / "errors.toml"
 RUST_FILE = ROOT / "crates" / "kyto-error" / "src" / "registry.rs"
 PYTHON_FILE = ROOT / "python" / "kyto" / "errors.py"
 STUB_FILE = ROOT / "python" / "kyto" / "errors.pyi"
+DOCS_FILE = ROOT / "docs" / "errors.md"
 
 FieldType = Literal["str", "int", "list[str]", "suggestions"]
 FIELD_TYPES: tuple[FieldType, ...] = ("str", "int", "list[str]", "suggestions")
@@ -770,12 +772,117 @@ def render_stub(registry: Registry) -> str:
     return "\n".join(out)
 
 
+def _code_span(text: str) -> str:
+    """`text` as one Markdown code span, fenced by more backticks than it holds."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    padding = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{padding}{text}{padding}{fence}"
+
+
+def _example_text(value: str | int | tuple[str, ...]) -> str:
+    if isinstance(value, tuple):
+        return ", ".join(f"'{item}'" for item in value)
+    return str(value)
+
+
+# A range in the `Ranges:` comment of errors.toml: a code prefix and its meaning.
+_RANGE = re.compile(r"(KY-E\dxx) (.+?)(?=\s{2,}KY-E|$)")
+
+
+def code_ranges(header: str) -> list[tuple[str, str]]:
+    """The code ranges listed in the `Ranges:` comment of errors.toml's header.
+
+    Raises
+    ------
+    RegistryError
+        If the header lists no ranges.
+    """
+    lines = header.splitlines()
+    start = next(
+        (index for index, line in enumerate(lines) if line.endswith(" Ranges:")), None
+    )
+    ranges: list[tuple[str, str]] = []
+    for line in lines[start + 1 :] if start is not None else []:
+        if not line.startswith("#   "):
+            break
+        ranges += _RANGE.findall(line.removeprefix("#").strip())
+    if not ranges:
+        raise RegistryError("errors.toml: the header lists no code ranges")
+    return ranges
+
+
+def render_docs(registry: Registry, header: str) -> str:
+    """Return the error-code page of the docs site (`docs/errors.md`, task 10.5).
+
+    Each code is a `## KY-Exxx` heading, so its anchor is the code in lower case:
+    the `docs_url` every error carries points here. `header` is the text of
+    errors.toml, whose header comment lists the code ranges.
+    """
+    lines = [
+        f"<!-- {GENERATED_NOTE} -->",
+        "",
+        "# Error codes",
+        "",
+        "Every kyto error has a stable `KY-Exxx` code (R10). Its message says what was",
+        "wrong and where, its hint how to fix it, and its `docs_url` links to its",
+        "entry on this page. Codes are never reused or renumbered.",
+        "",
+        "Every error is a `kyto.KytoError` and an instance of a builtin exception, so",
+        "`except ValueError` still catches a `ResolutionError`. Catch one code with",
+        "`except kyto.KytoError as error` and test `error.code`; the structured fields",
+        "below are attributes of the error.",
+        "",
+        "```text",
+        "KY-E101: the genes table has 2 IDs that occur more than once, first: 'A', 'B'",
+        "hint: IDs on the genes axis must be unique (exact byte comparison); ...",
+        f"docs: {registry.docs_base}#ky-e101",
+        "```",
+        "",
+        "Ranges:",
+        "",
+        *[f"- `{name}`: {meaning}" for name, meaning in code_ranges(header)],
+        "",
+        "## Exception classes",
+        "",
+        "| Class | Builtin base | Raised when | Codes |",
+        "| --- | --- | --- | --- |",
+    ]
+    for item in registry.classes:
+        codes = ", ".join(
+            f"[{entry.code}](#{entry.code.lower()})"
+            for entry in registry.entries
+            if entry.class_name == item.name
+        )
+        lines.append(f"| `{item.name}` | `{item.base}` | {item.doc} | {codes} |")
+    for entry in registry.entries:
+        lines += [
+            "",
+            f"## {entry.code}",
+            "",
+            f"{entry.summary}",
+            "",
+            f"- Class: `{entry.class_name}`",
+            f"- Message: {_code_span(entry.message)}",
+            f"- Hint: {_code_span(entry.hint)}",
+        ]
+        if entry.fields:
+            lines.append("- Fields:")
+            lines += [
+                f"    - `{field.name}` ({field.type}): {field.doc} Example: "
+                f"{_code_span(_example_text(field.example))}."
+                for field in entry.fields
+            ]
+    return "\n".join(lines) + "\n"
+
+
 def render_all(registry: Registry) -> dict[Path, str]:
     """Return every generated file's path and text."""
     return {
         RUST_FILE: render_rust(registry),
         PYTHON_FILE: render_python(registry),
         STUB_FILE: render_stub(registry),
+        DOCS_FILE: render_docs(registry, REGISTRY_FILE.read_text(encoding="utf-8")),
     }
 
 
