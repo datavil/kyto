@@ -18,8 +18,9 @@ from kyto import _kyto
 
 _STUB = ast.parse(Path(_kyto.__file__).with_name("_kyto.pyi").read_text("utf-8"))
 
-# Names the stub declares for type checkers only: none exists at run time.
-_TYPE_ONLY_BASES = {"TypedDict"}
+# Names the stub declares for type checkers only: none exists at run time (the dicts
+# methods return, and the DLPack protocol `with_embedding` reads, task 6.11).
+_TYPE_ONLY_BASES = {"TypedDict", "Protocol"}
 
 # A member pyright needs that the run time has under another form: ``__hash__ = None``
 # says expressions are unhashable (they define ``__eq__``).

@@ -15,6 +15,7 @@ from typing import (
     Literal,
     NoReturn,
     NotRequired,
+    Protocol,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -187,6 +188,15 @@ class Estimate(TypedDict):
     n_columns: int | None
     nnz: int | None
     dense_bytes: int | None
+
+class _SupportsDLPack(Protocol):  # noqa: PYI046 (used by the generated Atlas.with_embedding)
+    """An object that exports its memory through DLPack (a torch tensor on the CPU).
+
+    What ``Atlas.with_embedding`` reads besides a NumPy array (task 6.11), through
+    ``numpy.from_dlpack``.
+    """
+
+    def __dlpack__(self) -> object: ...
 
 _D_co = TypeVar("_D_co", bound=ExprDtype, covariant=True)
 _D = TypeVar("_D", bound=ExprDtype)  # noqa: PYI018 (used by the generated Atlas.resolve)

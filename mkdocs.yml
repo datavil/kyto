@@ -63,6 +63,7 @@ nav:
       - Feature names: feature_names.md
       - Plotting: plotting.md
       - "Tutorial: clustering": tutorials/clustering.md
+      - "Tutorial: scvi-tools and Harmony": tutorials/interop.md
   - Design rules: design-rules.md
   - API reference:
       - Functions: api/functions.md

@@ -106,8 +106,8 @@ pub use run_control::{Progress, RunControl};
 pub use scrublet::{Doublets, ScrubletBatch, ScrubletResult, scrublet};
 pub use scrublet_pass::ScrubletStatistics;
 pub use statistics::{
-    BatchStatistics, ClippedMoments, GeneMoments, HighlyVariableGeneStatistics, HvgValues,
-    NodeStatistics, ScaleStatistics, Statistics,
+    BatchStatistics, ClippedMoments, GeneMoments, GivenEmbedding, HighlyVariableGeneStatistics,
+    HvgValues, NodeStatistics, ScaleStatistics, Statistics,
 };
 pub use umap::{UMAP_SMALL_GRAPH_CELLS, UmapLayout, UmapStatistics, find_ab_params, umap_layout};
 // The block type lives in kyto-store (the tile reader builds it, the writer consumes

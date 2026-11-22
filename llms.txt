@@ -443,17 +443,28 @@ SCAN "..." (2 cells x 3 genes)
 ### Atlas.with_embedding
 
 ```python
-Atlas.with_embedding(name: str, values: numpy.NDArray[numpy.float32 | numpy.float64], /) -> Atlas
+Atlas.with_embedding(name: str, values: numpy.NDArray[numpy.float32] | numpy.NDArray[numpy.float64] | _SupportsDLPack, /) -> Atlas
 ```
 
-Add a cell embedding computed outside kyto (not implemented yet).
+Add a cell embedding computed outside kyto (scvi-tools, Harmony, ...).
 
 ```python
 >>> import numpy as np
->>> scan(store).with_embedding("X_scvi", np.zeros((2, 10), np.float32))
+>>> latent = np.array([[0.5, -1.0], [2.0, 0.25]], dtype=np.float32)
+>>> atlas = scan(store).with_embedding("X_scVI", latent)
+>>> print(atlas)
+WITH_EMBEDDING "X_scVI" (2 cells x 2 float32)
+SCAN "..." (2 cells x 3 genes)
+>>> atlas.embedding("X_scVI").to_numpy()
+array([[ 0.5 , -1.  ],
+       [ 2.  ,  0.25]], dtype=float32)
+
+A row count that does not match the plan is refused when the plan is built:
+
+>>> scan(store).with_embedding("X_scVI", np.zeros((3, 2), np.float32))
 Traceback (most recent call last):
 ...
-kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not implemented yet...
+kyto.errors.PlanError: KY-E215: with_embedding(..., values=3 rows) is invalid: the plan has 2 cells...
 ```
 
 ### Atlas.normalize_total

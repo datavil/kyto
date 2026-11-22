@@ -219,8 +219,8 @@ def test_algorithm_arguments_are_coded(store: Path) -> None:
             lambda: atlas.rank_genes_groups("cell_id"),
         ),
         (
-            kyto.NotImplementedYetError,
-            "KY-E601",
+            kyto.ExpressionError,
+            "KY-E205",
             lambda: atlas.with_embedding("X_scvi", None),  # pyright: ignore[reportArgumentType]
         ),
         (

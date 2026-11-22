@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use kyto_core::{AtlasSchema, Axis, Expr, ExprAxis, ExprNode, GeneIds, GeneQcMetric, Source};
 use kyto_plan::{
-    Columns, CrossCellOp, ElementwiseOp, MapElementwise, Member, Members, Operation,
+    Columns, CrossCellOp, ElementwiseOp, GivenValues, MapElementwise, Member, Members, Operation,
     OptimizeOptions, OptimizedPlan, Output, Plan, Predicate, hvg_columns, loadings_name, optimize,
 };
 use polars::prelude::*;
@@ -508,6 +508,26 @@ fn apply(plan: &Plan, data: &mut Data) -> Result<(), String> {
                 .collect();
             data.embeddings
                 .insert(params.into.clone(), (Axis::Cells, rows));
+            Ok(())
+        }
+        Plan::WithEmbedding(node) => {
+            // Row r for the r-th cell present here.
+            let params = node.params();
+            let values: Vec<f64> = match &**params.values() {
+                GivenValues::Float32(values) => values.iter().map(|&v| f64::from(v)).collect(),
+                GivenValues::Float64(values) => values.clone(),
+            };
+            let width = usize::try_from(params.width()).unwrap();
+            if values.len() != data.cells.height() * width {
+                return Err(format!(
+                    "with_embedding has {} rows for {} cells",
+                    values.len() / width,
+                    data.cells.height()
+                ));
+            }
+            let rows = values.chunks(width).map(<[f64]>::to_vec).collect();
+            data.embeddings
+                .insert(params.name().to_owned(), (Axis::Cells, rows));
             Ok(())
         }
     }

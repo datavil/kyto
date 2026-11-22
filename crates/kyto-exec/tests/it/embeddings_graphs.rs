@@ -14,7 +14,9 @@
 //!   without a recipe it is `KY-E303`;
 //! - a sink whose output reads one member (a handle terminal's temporary store, task
 //!   5.19) writes that member alone (and the ID columns), the same bits as the whole
-//!   sink, on 1 and 4 threads; an embedding or a graph writes no layer.
+//!   sink, on 1 and 4 threads; an embedding or a graph writes no layer;
+//! - a cell embedding given by value (`with_embedding`, task 6.11) runs like one kyto
+//!   computed: same graph, written bit for bit, rows kept or counted around filters.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -26,8 +28,9 @@ use std::sync::Arc;
 use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, GeneIds, Literal, QcMetric, Tiling};
 use kyto_exec::{CellGraph, ExecuteOptions, NodeStatistics, Pipeline, Statistics, cluster};
 use kyto_plan::{
-    Cluster, ClusterMethod, Member, Metric, NeighborSearch, Neighbors, OptimizeOptions, Output,
-    PhysicalOptions, Plan, Sink, Umap, loadings_name, physical_plan,
+    Cluster, ClusterMethod, GivenValues, Member, Metric, NeighborSearch, Neighbors,
+    OptimizeOptions, Output, PhysicalOptions, Plan, Sink, Umap, WithEmbedding, loadings_name,
+    physical_plan,
 };
 use kyto_store::{
     CellBlock, FloatValues, LayerSpec, LayerWriteOptions, StoreWriter, TableAxis, ValueDtype,
@@ -919,4 +922,103 @@ fn a_sink_of_one_member_writes_that_member_alone() {
             assert_eq!(schema.n_genes, full_schema.n_genes);
         }
     }
+}
+
+/// Task 6.11: a cell embedding given by value (`with_embedding`) is an embedding like
+/// any other: `neighbors` on kyto's own PCA handed back gives the same graph, a sink
+/// writes the values bit for bit, a later cell filter keeps the kept cells' rows, and
+/// after an earlier cell filter the rows are the cells reaching it (counted when the
+/// plan runs, `KY-E215` otherwise).
+#[test]
+fn a_given_embedding_runs_like_one_kyto_computed() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let base = scan(&store)
+        .normalize_total(Some(1e4), Some("counts"), "norm")
+        .unwrap()
+        .log1p(Some("norm"), "log1p")
+        .unwrap();
+    let computed = base
+        .pca(Some("log1p"), "X_pca", 3, 0, None)
+        .unwrap()
+        .neighbors(neighbors_params("X_pca"))
+        .unwrap();
+    let (mut pca, mut expected) = (None, None);
+    for (_, statistics) in statistics(&computed).iter() {
+        match statistics {
+            NodeStatistics::Pca(found) => pca = Some(found.clone()),
+            NodeStatistics::Neighbors(found) => expected = Some(found.clone()),
+            _ => {}
+        }
+    }
+    let (pca, expected) = (pca.unwrap(), expected.unwrap());
+    let given =
+        |name: &str, values: Vec<f32>| WithEmbedding::new(name, 3, GivenValues::Float32(values));
+    let handed_back = base
+        .with_embedding(given("X_scVI", pca.embedding().to_vec()))
+        .unwrap()
+        .neighbors(neighbors_params("X_scVI"))
+        .unwrap();
+    let mut found = None;
+    for (_, statistics) in statistics(&handed_back).iter() {
+        if let NodeStatistics::Neighbors(neighbors) = statistics {
+            found = Some(neighbors.clone());
+        }
+    }
+    let found = found.unwrap();
+    assert_eq!(found.distances(), expected.distances());
+    assert_eq!(found.connectivities(), expected.connectivities());
+
+    // A sink writes it bit for bit; a later cell filter keeps the kept cells' rows.
+    let values: Vec<f32> = (0..N_CELLS * 3)
+        .map(|at| f32::from_bits(0x3f80_0001 + at as u32) * if at % 2 == 0 { -1.0 } else { 1.0 })
+        .collect();
+    let out = work.path().join("given.kyto");
+    let plan = scan(&store)
+        .with_embedding(given("X_scVI", values.clone()))
+        .unwrap();
+    assert_eq!(sink(&plan, zarr(&out)).unwrap(), N_CELLS as u64);
+    assert_eq!(
+        f32s(&read_embedding(&out, "X_scVI").unwrap().values),
+        values
+    );
+    let not_b = Expr::binary(
+        CellExpr::column("group"),
+        BinaryOp::NotEq,
+        Literal::String("b".into()),
+    )
+    .unwrap();
+    let kept: Vec<usize> = (0..N_CELLS).filter(|cell| cell / 40 != 1).collect();
+    let kept_rows: Vec<f32> = kept
+        .iter()
+        .flat_map(|cell| values[cell * 3..cell * 3 + 3].iter().copied())
+        .collect();
+    let out = work.path().join("filtered_after.kyto");
+    sink(&plan.filter_cells(&not_b).unwrap(), zarr(&out)).unwrap();
+    assert_eq!(
+        f32s(&read_embedding(&out, "X_scVI").unwrap().values),
+        kept_rows
+    );
+
+    // After a cell filter: one row per cell reaching it, in stream order.
+    let filtered = scan(&store).filter_cells(&not_b).unwrap();
+    let out = work.path().join("filtered_before.kyto");
+    let plan = filtered
+        .with_embedding(given("X_scVI", kept_rows.clone()))
+        .unwrap();
+    sink(&plan, zarr(&out)).unwrap();
+    assert_eq!(
+        f32s(&read_embedding(&out, "X_scVI").unwrap().values),
+        kept_rows
+    );
+    let wrong = filtered
+        .with_embedding(given("X_scVI", values[..3 * (kept.len() + 1)].to_vec()))
+        .unwrap();
+    let error = sink(&wrong, zarr(&work.path().join("wrong.kyto"))).unwrap_err();
+    assert_eq!(error.code(), "KY-E215");
+    assert!(
+        error.to_string().contains("80 cells reach the step"),
+        "{error}"
+    );
 }

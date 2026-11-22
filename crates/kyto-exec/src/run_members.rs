@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use kyto_core::Axis;
 use kyto_error::KytoError;
+use kyto_plan::GivenValues;
 use kyto_store::{FloatValues, read_embedding, read_graph};
 use zarrs::storage::ReadableStorageTraits;
 
@@ -38,6 +39,8 @@ pub(crate) enum EmbeddingSource {
     Loadings { node: usize },
     /// The layout of the `umap` node at this index.
     Umap { node: usize },
+    /// The values of the `with_embedding` node at this index (task 6.11).
+    Given { node: usize },
 }
 
 impl EmbeddingSource {
@@ -46,7 +49,7 @@ impl EmbeddingSource {
         match self {
             Self::Stored { axis, .. } => *axis,
             Self::Loadings { .. } => Axis::Genes,
-            Self::Pca { .. } | Self::Umap { .. } => Axis::Cells,
+            Self::Pca { .. } | Self::Umap { .. } | Self::Given { .. } => Axis::Cells,
         }
     }
 }
@@ -248,6 +251,13 @@ impl StoredMembers {
                 umap.layout().n_components(),
                 FloatValues::F32(umap.layout().embedding().to_vec()),
             ),
+            (EmbeddingSource::Given { .. }, Some(NodeStatistics::WithEmbedding(given))) => {
+                let values = match &*given.values {
+                    GivenValues::Float32(values) => FloatValues::F32(values.clone()),
+                    GivenValues::Float64(values) => FloatValues::F64(values.clone()),
+                };
+                Rows::new(Arc::clone(&given.cells), given.width, values)
+            }
             _ => unreachable!("an embedding's producer runs before the steps that read it"),
         };
         Ok(Arc::new(rows))
@@ -288,7 +298,8 @@ fn source_node(source: &EmbeddingSource) -> Option<usize> {
         EmbeddingSource::Stored { .. } => None,
         EmbeddingSource::Pca { node }
         | EmbeddingSource::Loadings { node }
-        | EmbeddingSource::Umap { node } => Some(*node),
+        | EmbeddingSource::Umap { node }
+        | EmbeddingSource::Given { node } => Some(*node),
     }
 }
 

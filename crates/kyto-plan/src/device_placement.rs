@@ -315,6 +315,8 @@ pub(crate) fn operations(node: &OptimizedNode) -> Vec<&'static str> {
                     Columns::Cells(columns) => columns.iter().all(|(_, e)| e.is_metadata_only()),
                     Columns::Genes(columns) => columns.iter().all(|(_, e)| e.is_metadata_only()),
                 },
+                // Nothing to compute: its values are given.
+                Plan::WithEmbedding(_) => true,
                 Plan::MapElementwise(_)
                 | Plan::CrossCell(_)
                 | Plan::Neighbors(_)

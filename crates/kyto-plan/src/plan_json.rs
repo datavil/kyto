@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use kyto_core::{AtlasSchema, ExprJson, GeneIds};
+use kyto_core::{AtlasSchema, ExprJson, FloatDtype, GeneIds};
 use kyto_error::KytoError;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,7 @@ use crate::scrublet::Scrublet;
 use crate::sink::Sink;
 use crate::umap::{Umap, UmapInit};
 use crate::with_columns::Columns;
+use crate::with_embedding::{GivenValues, WithEmbedding};
 
 /// The `format` value of every plan JSON.
 pub const PLAN_JSON_FORMAT: &str = "kyto-plan";
@@ -191,6 +192,14 @@ enum Step {
         init: UmapInit,
         seed: u64,
         into: String,
+    },
+    /// `with_embedding` (task 6.11): the values row-major, each written as the
+    /// `float64` equal to it (a `float32` value exactly), read back in `dtype`.
+    WithEmbedding {
+        name: String,
+        dtype: FloatDtype,
+        width: u64,
+        values: Vec<f64>,
     },
     SinkZarr {
         path: String,
@@ -403,6 +412,21 @@ impl Step {
                     into,
                 }
             }
+            Plan::WithEmbedding(node) => {
+                let params = node.params();
+                let values = match &**params.values() {
+                    GivenValues::Float32(values) => {
+                        values.iter().map(|&value| f64::from(value)).collect()
+                    }
+                    GivenValues::Float64(values) => values.clone(),
+                };
+                Self::WithEmbedding {
+                    name: params.name().to_owned(),
+                    dtype: params.values().dtype(),
+                    width: params.width(),
+                    values,
+                }
+            }
             Plan::Sink(node) => match node.params().clone() {
                 Sink::Zarr { path } => Self::SinkZarr { path },
                 Sink::H5ad { path } => Self::SinkH5ad { path },
@@ -432,6 +456,7 @@ impl Step {
             Self::Leiden { .. } => "leiden",
             Self::Louvain { .. } => "louvain",
             Self::Umap { .. } => "umap",
+            Self::WithEmbedding { .. } => "with_embedding",
             Self::SinkZarr { .. } => "sink_zarr",
             Self::SinkH5ad { .. } => "sink_h5ad",
         }
@@ -594,6 +619,23 @@ impl Step {
                 seed,
                 into,
             }),
+            Self::WithEmbedding {
+                name,
+                dtype,
+                width,
+                values,
+            } => {
+                let values = match dtype {
+                    // A value that is not a float32 is rounded to nearest, as NumPy's
+                    // astype (text that kyto wrote holds exact float32 values).
+                    #[allow(clippy::cast_possible_truncation)]
+                    FloatDtype::Float32 => {
+                        GivenValues::Float32(values.iter().map(|&value| value as f32).collect())
+                    }
+                    FloatDtype::Float64 => GivenValues::Float64(values),
+                };
+                input.with_embedding(WithEmbedding::new(name, width, values))
+            }
             Self::SinkZarr { path } => input.sink(Sink::Zarr { path }),
             Self::SinkH5ad { path } => input.sink(Sink::H5ad { path }),
         };

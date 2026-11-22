@@ -196,6 +196,7 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
         Plan::Umap(node) => {
             reads.insert(Member::Graph(node.params().graph.clone()));
         }
+        Plan::WithEmbedding(_) => {}
     }
     reads
 }
@@ -262,6 +263,9 @@ pub(crate) fn node_writes(plan: &Plan) -> Members {
         }
         Plan::Umap(node) => {
             writes.insert(Member::Embedding(node.params().into.clone()));
+        }
+        Plan::WithEmbedding(node) => {
+            writes.insert(Member::Embedding(node.params().name().to_owned()));
         }
     }
     writes

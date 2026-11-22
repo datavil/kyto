@@ -403,7 +403,9 @@ fn execution(
                     (false, Columns::Genes(_)) => streamed(1, false),
                 }
             }
-            Plan::Neighbors(_) | Plan::Cluster(_) | Plan::Umap(_) => held(Blocks::InMemory),
+            Plan::Neighbors(_) | Plan::Cluster(_) | Plan::Umap(_) | Plan::WithEmbedding(_) => {
+                held(Blocks::InMemory)
+            }
         },
     }
 }

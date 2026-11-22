@@ -26,3 +26,4 @@ mod plan_json;
 mod plan_validate;
 mod resolve_in_plan;
 mod summary;
+mod with_embedding;

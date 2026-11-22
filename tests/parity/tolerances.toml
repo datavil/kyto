@@ -337,3 +337,17 @@ kind = "absolute"
 task = "7.2"
 tests = ["tests/test_readme.py"]
 reason = "Lets log1p values near 0 compare next to readme.log1p (numpy's float32 log1p is 1 ulp off on some)."
+
+[interop.harmony_rows]
+value = 5e-3
+kind = "relative"
+task = "6.11"
+tests = ["tests/test_interop.py"]
+reason = "Median over cells of |Harmony(kyto PCA) - Harmony(scanpy PCA)| / |Harmony(scanpy PCA)| per row, 30 PCs of pbmc3k; kyto's trailing PCs differ from scanpy's (pca.all_angle), Harmony carries it through (measured 1.1e-3, worst cell 7.5e-2)."
+
+[interop.harmony_knn]
+value = 0.97
+kind = "floor"
+task = "6.11"
+tests = ["tests/test_interop.py"]
+reason = "Mean share of each cell's 15 nearest neighbours in the corrected embedding that both sides find (measured 0.991; scanpy against itself with another PCA seed 1.0)."

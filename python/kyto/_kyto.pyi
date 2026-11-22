@@ -14,6 +14,7 @@ from typing import (
     Literal,
     NoReturn,
     NotRequired,
+    Protocol,
     TypeAlias,
     TypedDict,
     TypeVar,
@@ -378,38 +379,70 @@ class Atlas:
     def with_embedding(
         self,
         name: builtins.str,
-        values: numpy.typing.NDArray[numpy.float32 | numpy.float64],
+        values: numpy.typing.NDArray[numpy.float32]
+        | numpy.typing.NDArray[numpy.float64]
+        | _SupportsDLPack,
         /,
     ) -> Atlas:
         r"""
-        Add a cell embedding computed outside kyto (not implemented yet).
+        Add a cell embedding computed outside kyto (scvi-tools, Harmony, ...).
 
-        Arrives with task 6.11 (interop hooks: scvi-tools and Harmony outputs).
+        The import side of the interop hooks (task 6.11): run a tool on what a terminal
+        exported (``to_anndata``, ``Matrix.to_dense``, ``Matrix.to_torch``,
+        ``Embedding.to_numpy``, ``torch.from_dlpack(embedding)``) and store its output
+        back. Row ``r`` belongs to the ``r``-th cell of this plan, in ``cell_ids()``
+        order, the order every export uses. Later steps read it by name like any
+        embedding: ``neighbors(embedding=...)``, ``embedding(...)``, the sinks.
 
         Parameters
         ----------
         name : str
-            Name of the new embedding.
-        values : numpy.ndarray
-            One row per cell of the plan, in ``cell_ids()`` order.
+            Name of the cell embedding (a new name, or an embedding to replace; scanpy
+            calls scvi's ``"X_scVI"`` and Harmony's ``"X_pca_harmony"``).
+        values : numpy.ndarray or DLPack tensor
+            A 2-D ``float32`` or ``float64`` array of shape ``(n_cells, n_components)``,
+            finite, any memory order; or any object with ``__dlpack__`` on the CPU (a
+            torch tensor), read through ``numpy.from_dlpack``. Other dtypes are refused
+            rather than converted: cast first (``values.astype(numpy.float32)``).
 
         Returns
         -------
         Atlas
-            A new plan; this one is unchanged.
+            A new plan; this one is unchanged. The values are copied into the plan once,
+            in their dtype and bit for bit, so changing ``values`` afterwards changes
+            nothing; plans built on it share that copy. Nothing is read from the store.
 
         Raises
         ------
-        NotImplementedYetError
-            ``KY-E601``: always, until task 6.11.
+        ExpressionError
+            ``KY-E205``: ``values`` is neither a NumPy array nor a DLPack tensor.
+        PlanError
+            ``KY-E215``: ``values`` is not 2-D, not ``float32`` or ``float64``, has no
+            column, holds a NaN or an infinity, or has another row count than the
+            plan's cells (checked when the plan is built if the count is known, else
+            when it runs: after a filter on cells), is a masked array, or is not in
+            native byte order; or ``name`` is not a valid member name or names a gene
+            embedding (``pca``'s loadings).
+            ``KY-E216``: the plan ends in a sink.
 
         Examples
         --------
         >>> import numpy as np
-        >>> scan(store).with_embedding("X_scvi", np.zeros((2, 10), np.float32))
+        >>> latent = np.array([[0.5, -1.0], [2.0, 0.25]], dtype=np.float32)
+        >>> atlas = scan(store).with_embedding("X_scVI", latent)
+        >>> print(atlas)
+        WITH_EMBEDDING "X_scVI" (2 cells x 2 float32)
+        SCAN "..." (2 cells x 3 genes)
+        >>> atlas.embedding("X_scVI").to_numpy()
+        array([[ 0.5 , -1.  ],
+               [ 2.  ,  0.25]], dtype=float32)
+
+        A row count that does not match the plan is refused when the plan is built:
+
+        >>> scan(store).with_embedding("X_scVI", np.zeros((3, 2), np.float32))
         Traceback (most recent call last):
         ...
-        kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not implemented yet...
+        kyto.errors.PlanError: KY-E215: with_embedding(..., values=3 rows) is invalid: the plan has 2 cells...
         """
     def normalize_total(
         self,
@@ -4032,6 +4065,15 @@ class Estimate(TypedDict):
     n_columns: int | None
     nnz: int | None
     dense_bytes: int | None
+
+class _SupportsDLPack(Protocol):
+    """An object that exports its memory through DLPack (a torch tensor on the CPU).
+
+    What ``Atlas.with_embedding`` reads besides a NumPy array (task 6.11), through
+    ``numpy.from_dlpack``.
+    """
+
+    def __dlpack__(self) -> object: ...
 
 _D_co = TypeVar("_D_co", bound=ExprDtype, covariant=True)
 _D = TypeVar("_D", bound=ExprDtype)

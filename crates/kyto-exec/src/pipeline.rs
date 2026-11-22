@@ -49,7 +49,7 @@ use kyto_error::KytoError;
 use kyto_gpu::DeviceKernels;
 use kyto_plan::{
     Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, Neighbors, Operation,
-    PhysicalPlan, Plan, Predicate, Umap, loadings_name,
+    PhysicalPlan, Plan, Predicate, Umap, WithEmbedding, loadings_name,
 };
 use kyto_store::{FloatValues, LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -76,7 +76,7 @@ use crate::reduction::reduce_pass;
 use crate::run_control::RunControl;
 use crate::run_members::{EmbeddingSource, GraphSource, Rows, StoredMembers, collect_cells};
 use crate::sink::SinkSpec;
-use crate::statistics::{NodeStatistics, Statistics};
+use crate::statistics::{GivenEmbedding, NodeStatistics, Statistics};
 use crate::umap::{self, UmapStatistics};
 
 /// How a pipeline runs, apart from the plan.
@@ -125,6 +125,19 @@ pub(crate) enum Stage {
     Cluster(ClusterStage),
     /// `umap` (task 6.9), laid out in memory once its graph is computed.
     Umap(UmapStage),
+    /// `with_embedding` (task 6.11): given values, keyed to the cells reaching it.
+    Embedding(EmbeddingStage),
+}
+
+/// A `with_embedding` node.
+#[derive(Debug, Clone)]
+pub(crate) struct EmbeddingStage {
+    /// The node's index in the optimized plan.
+    node: usize,
+    params: WithEmbedding,
+    /// Whether a cell filter or `take_cells` lies below the node: the cells reaching
+    /// it are then found by one pass (task 5.11), else they are the store's, in order.
+    filtered: bool,
 }
 
 /// A clustering node and where its graph comes from.
@@ -173,6 +186,7 @@ impl Stage {
             Self::Neighbors(stage) => stage.filtered,
             Self::Cluster(stage) => stage.filtered,
             Self::Umap(stage) => stage.filtered,
+            Self::Embedding(stage) => stage.filtered,
             _ => false,
         }
     }
@@ -430,7 +444,8 @@ impl Pipeline {
             | Stage::Cells(_)
             | Stage::Neighbors(_)
             | Stage::Cluster(_)
-            | Stage::Umap(_) => passes,
+            | Stage::Umap(_)
+            | Stage::Embedding(_) => passes,
             // A held input (task 5.12) streams once more, to be held.
             Stage::CrossCell(cross_cell) => passes
                 .saturating_add(u64::from(cross_cell.passes))
@@ -665,6 +680,36 @@ impl Pipeline {
                     statistics
                         .nodes
                         .insert(stage.node, NodeStatistics::Umap(Box::new(found)));
+                    continue;
+                }
+                Stage::Embedding(stage) => {
+                    let cells: Vec<u64> = if stage.filtered {
+                        cells_pass(&operators)?
+                    } else {
+                        (0..self.grid.n_cells()).collect()
+                    };
+                    let n_rows = stage.params.n_rows();
+                    if cells.len() as u64 != n_rows {
+                        return Err(KytoError::InvalidArgument {
+                            function: "with_embedding".to_owned(),
+                            parameter: "values".to_owned(),
+                            value: format!("{n_rows} rows"),
+                            problem: format!(
+                                "{} cells reach the step when the plan runs",
+                                cells.len()
+                            ),
+                            accepted: "one row per cell of the plan, in its cell_ids() order"
+                                .to_owned(),
+                        });
+                    }
+                    let found = GivenEmbedding {
+                        cells: Arc::new(cells),
+                        width: usize::try_from(stage.params.width()).unwrap_or(usize::MAX),
+                        values: Arc::clone(stage.params.values()),
+                    };
+                    statistics
+                        .nodes
+                        .insert(stage.node, NodeStatistics::WithEmbedding(Box::new(found)));
                     continue;
                 }
                 Stage::CrossCell(cross_cell) => cross_cell,
@@ -1023,6 +1068,11 @@ fn lower_node(
             graph: GraphSource::Stored {
                 name: node.params().graph.clone(),
             },
+            filtered: false,
+        }))),
+        Plan::WithEmbedding(node) => Ok(Some(Stage::Embedding(EmbeddingStage {
+            node: index,
+            params: node.params().clone(),
             filtered: false,
         }))),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
@@ -1434,6 +1484,8 @@ fn resolve_members(
         accepted: "a plan built by kyto".to_owned(),
     };
     let mut at_stage = Vec::with_capacity(stages.len());
+    // Whether a cell filter or `take_cells` ran so far.
+    let mut cells_removed = false;
     for stage in stages {
         at_stage.push(
             embeddings
@@ -1454,6 +1506,7 @@ fn resolve_members(
                 }
             }
             Stage::Cells(CellStage::Filter(_) | CellStage::Take(_)) => {
+                cells_removed = true;
                 for entry in embeddings.values_mut() {
                     entry.1 = true;
                 }
@@ -1504,6 +1557,11 @@ fn resolve_members(
                 umap.filtered = *filtered;
                 let layout = EmbeddingSource::Umap { node: umap.node };
                 embeddings.insert(umap.params.into.clone(), (layout, false));
+            }
+            Stage::Embedding(stage) => {
+                stage.filtered = cells_removed;
+                let given = EmbeddingSource::Given { node: stage.node };
+                embeddings.insert(stage.params.name().to_owned(), (given, false));
             }
             Stage::Maps(_) | Stage::Cells(_) | Stage::Genes { .. } => {}
         }

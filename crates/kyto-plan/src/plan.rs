@@ -46,6 +46,7 @@ use crate::take_cells::TakeCells;
 use crate::umap::Umap;
 use crate::with_columns::WithColumns;
 use crate::with_default_layer::WithDefaultLayer;
+use crate::with_embedding::WithEmbedding;
 
 /// A logical plan node and, through its input, the plan below it.
 ///
@@ -77,6 +78,8 @@ pub enum Plan {
     Cluster(Node<Cluster>),
     /// Lay out a cell graph (UMAP).
     Umap(Node<Umap>),
+    /// Add a cell embedding given by value (`with_embedding`, task 6.11).
+    WithEmbedding(Node<WithEmbedding>),
     /// Write the plan (the last node).
     Sink(Node<Sink>),
 }
@@ -116,6 +119,7 @@ impl Plan {
             Self::Neighbors(node) => of(node),
             Self::Cluster(node) => of(node),
             Self::Umap(node) => of(node),
+            Self::WithEmbedding(node) => of(node),
             Self::Sink(node) => of(node),
         }
     }
@@ -134,6 +138,7 @@ impl Plan {
             Self::Neighbors(node) => &mut node.input,
             Self::Cluster(node) => &mut node.input,
             Self::Umap(node) => &mut node.input,
+            Self::WithEmbedding(node) => &mut node.input,
             Self::Sink(node) => &mut node.input,
         }
     }
@@ -157,6 +162,9 @@ impl Plan {
             (Self::Neighbors(left), Self::Neighbors(right)) => left.params() == right.params(),
             (Self::Cluster(left), Self::Cluster(right)) => left.params() == right.params(),
             (Self::Umap(left), Self::Umap(right)) => left.params() == right.params(),
+            (Self::WithEmbedding(left), Self::WithEmbedding(right)) => {
+                left.params() == right.params()
+            }
             (Self::Sink(left), Self::Sink(right)) => left.params() == right.params(),
             _ => false,
         }

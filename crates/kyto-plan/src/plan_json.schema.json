@@ -42,7 +42,7 @@
           "enum": [
             "with_default_layer", "on", "filter_cells", "filter_genes", "select_genes", "take_cells",
             "normalize_total", "log1p", "scale", "highly_variable_genes", "pca", "with_cells",
-            "with_genes", "neighbors", "leiden", "louvain", "umap", "scrublet", "sink_zarr", "sink_h5ad"
+            "with_genes", "neighbors", "leiden", "louvain", "umap", "scrublet", "with_embedding", "sink_zarr", "sink_h5ad"
           ]
         }}}}}
       ]
@@ -82,6 +82,7 @@
         {"if": {"required": ["method"], "properties": {"method": {"const": "louvain"}}}, "then": {"$ref": "#/$defs/cluster"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "umap"}}}, "then": {"$ref": "#/$defs/umap"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "scrublet"}}}, "then": {"$ref": "#/$defs/scrublet"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "with_embedding"}}}, "then": {"$ref": "#/$defs/with_embedding"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_zarr"}}}, "then": {"$ref": "#/$defs/sink"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_h5ad"}}}, "then": {"$ref": "#/$defs/sink"}}
       ]
@@ -238,6 +239,18 @@
         "init": {"enum": ["spectral", "random"]},
         "seed": {"$ref": "#/$defs/uint"},
         "into": {"type": "string"}
+      }
+    },
+    "with_embedding": {
+      "description": "with_embedding: a cell embedding given by value (task 6.11), one row per cell reaching the node.",
+      "required": ["name", "dtype", "width", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "name": {"type": "string"},
+        "dtype": {"enum": ["float32", "float64"]},
+        "width": {"$ref": "#/$defs/uint", "description": "Values a row, at least 1 (KY-E215 when read)."},
+        "values": {"type": "array", "items": {"type": "number"}, "description": "Row-major, finite; a multiple of width (KY-E215 when read)."}
       }
     },
     "scrublet": {

@@ -21,8 +21,8 @@ use kyto_core::{
 };
 use kyto_error::KytoError;
 use kyto_plan::{
-    Cluster, ClusterMethod, HvgFlavor, Metric, NeighborSearch, Neighbors, PLAN_JSON_VERSION, Plan,
-    Scrublet, Sink, Umap, UmapInit,
+    Cluster, ClusterMethod, GivenValues, HvgFlavor, Metric, NeighborSearch, Neighbors,
+    PLAN_JSON_VERSION, Plan, Scrublet, Sink, Umap, UmapInit, WithEmbedding,
 };
 use proptest::prelude::*;
 use serde_json::Value;
@@ -470,6 +470,21 @@ fn corpus() -> Vec<Arc<Plan>> {
         );
     }
     plans.push(graphs.umap(Umap::default()).unwrap());
+    // A cell embedding given by value (task 6.11), in both dtypes, after a cell filter.
+    let given = |width: u64, values| WithEmbedding::new("X_scVI", width, values);
+    plans.push(
+        base.with_embedding(given(2, GivenValues::Float32(vec![0.1; 2 * 4])))
+            .unwrap(),
+    );
+    plans.push(
+        base.filter_cells(&cell_predicates()[0])
+            .unwrap()
+            .with_embedding(given(
+                1,
+                GivenValues::Float64(vec![-0.0, 1e-300, 0.1 + 0.2]),
+            ))
+            .unwrap(),
+    );
     plans.push(
         graphs
             .umap(Umap {

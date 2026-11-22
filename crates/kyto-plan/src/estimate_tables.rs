@@ -126,7 +126,8 @@ fn node_tables(plan: &Plan) -> (bool, bool) {
         | Plan::MapElementwise(_)
         | Plan::Neighbors(_)
         | Plan::Cluster(_)
-        | Plan::Umap(_) => (false, false),
+        | Plan::Umap(_)
+        | Plan::WithEmbedding(_) => (false, false),
     }
 }
 

@@ -63,6 +63,15 @@ dev = [
     "mkdocs-material>=9.6",
     "mkdocstrings[python]>=0.29",
 ]
+# Interop hooks (task 6.11): the tools whose outputs `Atlas.with_embedding` reads back,
+# run on kyto's exports in tests/test_interop.py and docs/interop.md. Heavy (scvi-tools
+# brings PyTorch and Lightning), so not a default group: `uv sync --group interop`, or
+# `uv run --group interop pytest tests/test_interop.py`; the tests skip, visibly,
+# without them. Same platforms as scanpy (they compare with it).
+interop = [
+    "scvi-tools>=1.3; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+    "harmonypy>=0.0.10; python_version >= '3.12' and (sys_platform != 'win32' or platform_machine != 'ARM64') and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
+]
 
 [tool.maturin]
 manifest-path = "crates/kyto-py/Cargo.toml"

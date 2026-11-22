@@ -12,7 +12,9 @@
 
 use std::collections::BTreeMap;
 
-use kyto_plan::HvgFlavor;
+use std::sync::Arc;
+
+use kyto_plan::{GivenValues, HvgFlavor};
 
 use crate::leiden::ClusterStatistics;
 use crate::neighbors::NeighborStatistics;
@@ -302,6 +304,35 @@ pub enum NodeStatistics {
     Umap(Box<UmapStatistics>),
     /// `scrublet`: doublet scores and calls (task 6.12; one pass gathers its input).
     Scrublet(Box<ScrubletStatistics>),
+    /// `with_embedding`: the given rows, keyed to the cells that reached the node
+    /// (task 6.11; no statistics passes, one pass to find the cells after a cell filter).
+    WithEmbedding(Box<GivenEmbedding>),
+}
+
+/// What a `with_embedding` node holds when the plan runs: its values, row `r` for the
+/// cell at store position `cells()[r]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GivenEmbedding {
+    pub(crate) cells: Arc<Vec<u64>>,
+    pub(crate) width: usize,
+    pub(crate) values: Arc<GivenValues>,
+}
+
+impl GivenEmbedding {
+    /// The store table position of each row.
+    pub fn cells(&self) -> &[u64] {
+        &self.cells
+    }
+
+    /// The values a row.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// The values, row-major, as given (copied from nothing: shared with the plan).
+    pub fn values(&self) -> &GivenValues {
+        &self.values
+    }
 }
 
 /// The statistics of every cross-cell node a run computed, by the node's index in the

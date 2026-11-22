@@ -94,13 +94,8 @@ Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14,
 
 Goal: the standard scanpy workflow, streamed, with each step checked against scanpy on the 1.5 fixtures.
 
-Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14, 6.17): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
+Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.11, 6.12, 6.13, 6.14, 6.17): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
 
-- [ ] **6.11 Interop hooks.** Export embeddings and matrices to scvi-tools and Harmony through DLPack and NumPy; import their outputs with `with_embedding`.
-  - Depends: 9.5, 7.3
-  - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
-  - Parity: none yet: the exports have no scanpy counterpart; the task adds a round-trip test (kyto -> NumPy/DLPack -> `with_embedding`, bit for bit) and, for scvi/Harmony outputs, a comparison with the same tool run on scanpy's AnnData, its tolerances in [tolerances](tests/parity/tolerances.toml).
-  - Note (9.5): the DLPack side exists: `Embedding.__dlpack__` (`torch.from_dlpack(embedding)`, `numpy.from_dlpack`), `Embedding.to_torch(device=)` and `Matrix.to_torch(device=, max_bytes=)`, all copy-free on the CPU; a `Matrix` has no `__dlpack__` (R8), its `to_dense` array speaks DLPack through NumPy. Harmony and scvi-tools take NumPy or torch tensors, so 6.11 needs no new export, only the hooks.
 - [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.

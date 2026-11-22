@@ -16,15 +16,22 @@
 //! shares its memory (R2).
 //! Hand such an array to PyTorch through DLPack (task 9.5, `to_torch`): the CPU tensor
 //! shares the array's memory, the one buffer Rust filled.
+//! Read an embedding computed outside kyto (task 6.11, `with_embedding`): a 2-D
+//! `float32` or `float64` NumPy array, or any DLPack tensor through `numpy.from_dlpack`,
+//! copied once in row-major order into the plan, bit for bit.
 //! Does not: hand over memory on a GPU (kyto's results are on the host, so any other
 //! device gets one copy, made by PyTorch), use `pyo3-polars` (it pins an older pyo3;
 //! the C stream interface it uses is called directly here), or stream: each terminal
 //! holds its whole result in memory.
 
 use kyto_error::KytoError;
+use kyto_plan::{GivenValues, WithEmbedding};
 use kyto_store::CsrMatrix;
 use numpy::ndarray::Array2;
-use numpy::{Element, PyArray1, PyArray2};
+use numpy::{
+    Element, PyArray1, PyArray2, PyArrayDescrMethods, PyArrayMethods, PyUntypedArray,
+    PyUntypedArrayMethods,
+};
 use polars::prelude::{
     Column, CompatLevel, DataFrame, Float32Chunked, Float64Chunked, IntoColumn, IntoSeries, Series,
     UInt32Chunked,
@@ -331,4 +338,129 @@ pub fn handoff_example(py: Python<'_>) -> PyResult<(Bound<'_, PyAny>, usize, usi
         unreachable!("x and n are single-chunk Float64 and UInt32 columns without nulls")
     };
     Ok((to_polars(py, frame)?, x, n))
+}
+
+/// The embedding `name` holding `values` (task 6.11): a 2-D `float32` or `float64`
+/// NumPy array, or an object with `__dlpack__` read through `numpy.from_dlpack` (no
+/// copy on the CPU), copied once into a row-major `Vec` in its dtype. The plan's
+/// builder checks the rest (finite, rows, name).
+///
+/// # Errors
+/// `KY-E205` for an object that is neither; `KY-E215` for a tensor NumPy cannot read,
+/// an array that is not 2-D or not `float32`/`float64`.
+pub(crate) fn given_embedding(
+    py: Python<'_>,
+    name: &str,
+    values: &Bound<'_, PyAny>,
+) -> Result<WithEmbedding, KytoError> {
+    const METHOD: &str = "with_embedding";
+    let invalid = |value: String, problem: String, accepted: &str| KytoError::InvalidArgument {
+        function: METHOD.to_owned(),
+        parameter: "values".to_owned(),
+        value,
+        problem,
+        accepted: accepted.to_owned(),
+    };
+    const ACCEPTED: &str = "a 2-D float32 or float64 array of shape (n_cells, n_components)";
+    let numpy = py.import("numpy").map_err(|error| {
+        invalid(
+            "an array".to_owned(),
+            format!("numpy cannot be imported ({error})"),
+            ACCEPTED,
+        )
+    })?;
+    // A masked array's mask would be dropped: its hidden values would be read as data.
+    let masked = numpy
+        .getattr("ma")
+        .and_then(|ma| ma.getattr("MaskedArray"))
+        .and_then(|class| values.is_instance(&class))
+        .unwrap_or(false);
+    if masked {
+        return Err(invalid(
+            "a masked array".to_owned(),
+            "its mask would be ignored".to_owned(),
+            "a plain array (fill the masked values first: values.filled(...))",
+        ));
+    }
+    let array = if let Ok(array) = values.cast::<PyUntypedArray>() {
+        array.clone()
+    } else if values.hasattr("__dlpack__").unwrap_or(false) {
+        let read = numpy
+            .call_method1("from_dlpack", (values,))
+            .map_err(|error| {
+                invalid(
+                    "a DLPack tensor".to_owned(),
+                    format!("numpy.from_dlpack cannot read it ({error})"),
+                    "a tensor on the CPU (move it first: tensor.cpu())",
+                )
+            })?;
+        read.cast_into::<PyUntypedArray>().map_err(|_| {
+            invalid(
+                "a DLPack tensor".to_owned(),
+                "numpy.from_dlpack did not return an array".to_owned(),
+                ACCEPTED,
+            )
+        })?
+    } else {
+        return Err(crate::atlas::wrong_type(
+            METHOD,
+            "a NumPy array or a DLPack tensor",
+            values,
+        ));
+    };
+    let shape = array.shape().to_vec();
+    if shape.len() != 2 {
+        return Err(invalid(
+            format!("an array of shape {shape:?}"),
+            format!("it has {} dimensions", shape.len()),
+            ACCEPTED,
+        ));
+    }
+    if shape[1] == 0 {
+        return Err(invalid(
+            format!("an array of shape {shape:?}"),
+            "it has no column".to_owned(),
+            ACCEPTED,
+        ));
+    }
+    let width = shape[1] as u64;
+    // Read through a typed view only when it is aligned (NumPy allows unaligned float
+    // arrays, a Rust slice does not): otherwise through an aligned NumPy copy.
+    let array = if array.is_aligned() {
+        array
+    } else {
+        numpy
+            .call_method1("ascontiguousarray", (&array,))
+            .and_then(|copy| Ok(copy.cast_into::<PyUntypedArray>()?))
+            .map_err(|error| {
+                invalid(
+                    "an unaligned array".to_owned(),
+                    format!("it cannot be copied ({error})"),
+                    ACCEPTED,
+                )
+            })?
+    };
+    let values = if let Ok(array) = array.cast::<PyArray2<f32>>() {
+        GivenValues::Float32(array.readonly().as_array().iter().copied().collect())
+    } else if let Ok(array) = array.cast::<PyArray2<f64>>() {
+        GivenValues::Float64(array.readonly().as_array().iter().copied().collect())
+    } else {
+        let dtype = array.dtype();
+        let name = dtype
+            .str()
+            .map_or_else(|_| "another dtype".to_owned(), |text| text.to_string());
+        let swapped = dtype.kind() == b'f' && !dtype.is_native_byteorder().unwrap_or(true);
+        let problem = if swapped {
+            "it is float32 or float64 in the other byte order".to_owned()
+        } else {
+            "it is not float32 or float64".to_owned()
+        };
+        return Err(invalid(
+            format!("an array of dtype {name}"),
+            problem,
+            "float32 or float64 in native byte order (cast first: \
+             values.astype(numpy.float32))",
+        ));
+    };
+    Ok(WithEmbedding::new(name, width, values))
 }
