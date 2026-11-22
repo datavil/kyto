@@ -155,7 +155,7 @@ The single plan run end to end (`run_kyto.py`, all 10 cores, exact): convert 1.8
    8.2 → 4.6 s), and pynndescent barely does (9.8 → 9.3 s). scanpy's cold run spends about 27 s
    compiling numba here, almost all of its 29 to 34 s cold-over-warm gap.
 3. **kyto's approximate search is broken at 50k cells** (a correctness bug, not a
-   difference from scanpy). Against kyto's exact neighbours, 986 of 49,888 cells (2.0%)
+   difference from scanpy; fixed by task 6.17, below). Against kyto's exact neighbours, 986 of 49,888 cells (2.0%)
    get recall 0 and 997 get recall below 0.5. Those cells' HNSW neighbours lie in
    other clusters (neighbour purity 0.21), so Leiden misassigns 370 cells (ARI 0.983 against both
    scanpy and the true clusters). scanpy's pynndescent has a lower mean recall (0.889)
@@ -182,6 +182,39 @@ The single plan run end to end (`run_kyto.py`, all 10 cores, exact): convert 1.8
 New tasks for the steps over 1.2x (added Nov 20, 2026, from this measurement): 5.22
 (preprocessing on 1 thread), 5.23 (PCA in the workflow on 1 thread), 5.24 (the write),
 6.17 (approximate search recall), 6.18 (neighbours on 1 thread).
+
+## Approximate neighbours without lost cells (task 6.17)
+
+An accuracy fix, not a speed task (speed waits for M6, task 6.18); its time cost is
+recorded as AGENTS.md asks. `neighbors(search="approximate")` now builds kyto's own HNSW
+index (`neighbors_hnsw.rs`) instead of `hnsw_rs` 0.3.5; every cell's search starts at its
+own node. Data: 10.8's 50k atlas (`make_data.py 50000`, 49,888 cells after QC, 50 PCA
+components, `n_neighbors=15`), Apple M4 (4P+6E), Nov 22, 2026. **The machine was shared
+with two other agent sessions (load average 15 to 20 throughout)**, so every time below is
+inflated; old and new ran interleaved, three times each, and are comparable only with
+each other. A step's seconds: the `neighbors` graph's `to_scipy` minus the `pca`
+embedding's `to_numpy`, each in a fresh process.
+
+| Search | Threads | Runs (s) | Median (s) |
+| --- | --- | --- | --- |
+| HNSW, `hnsw_rs` (before) | 1 | 37.80, 29.88, 26.15 | 29.88 |
+| HNSW, kyto's (6.17) | 1 | 13.35, 10.57, 10.41 | 10.57 |
+| exact | 1 | 30.21, 36.71, 38.37 | 36.71 |
+| HNSW, `hnsw_rs` (before) | 10 | 54.30, 42.32, 31.56 | 42.32 |
+| HNSW, kyto's (6.17) | 10 | 20.42, 22.50, 13.96 | 20.42 |
+| exact | 10 | 14.87, 11.92, 11.78 | 11.92 |
+
+- **The fix costs no time: it is 2.8x faster on 1 thread and 2.1x on 10** than `hnsw_rs`
+  under the same load (no `Arc`/lock per link, a stamp array instead of a hash set for
+  visited rows, no descent per query). The 1.5x stop rule of the task did not apply.
+- Insertion is still sequential (R11), so on 10 threads HNSW stays slower than exact
+  search (20.4 s against 11.9 s here; 10.8 measured exact at 4.6 s on a quiet machine).
+  That is 6.18's question.
+- Accuracy against kyto's exact search on the same data: mean recall 0.97935 → 0.99950,
+  cells below recall 0.5: 997 → 0 (recall 0: 986 → 0), minimum 0.857, Leiden ARI
+  0.983147 → 1.000000. Peak memory was not re-measured (the new index holds a `u32` per
+  link, about 28 links a row at layer 0: ~6 MB at 50k, less than `hnsw_rs`'s `Arc` per
+  link).
 
 ## PCA with its input held in memory (task 5.12)
 

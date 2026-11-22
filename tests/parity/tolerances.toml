@@ -143,8 +143,25 @@ reason = "Lets two zero distances (duplicate cells) compare equal next to neighb
 value = 0.99
 kind = "floor"
 task = "6.6"
-tests = ["crates/kyto-exec/tests/it/neighbors_parity.rs"]
-reason = "Approximate search against the exact graph; measured 0.99992 on pbmc3k, 1.0 on synthetic (6.17: 50k data loses cells)."
+tests = [
+    "crates/kyto-exec/tests/it/neighbors_parity.rs",
+    "crates/kyto-exec/tests/it/neighbors_recall.rs",
+]
+reason = "Approximate search against the exact graph (mean recall); 6.17's index: measured 0.99997 on pbmc3k, 0.99950 (generator at 50k: 0.99917) on 10.8's 50k data."
+
+[neighbors.hnsw_lost_cells]
+value = 1e-3
+kind = "absolute"
+task = "6.17"
+tests = ["crates/kyto-exec/tests/it/neighbors_recall.rs"]
+reason = "Share of cells with recall below 0.5 against exact search (the reference share is 0); hnsw_rs lost 2.0% at 50k, 6.17's index 0 (minimum recall 0.857)."
+
+[neighbors.hnsw_leiden_ari]
+value = 0.999
+kind = "floor"
+task = "6.17"
+tests = ["crates/kyto-exec/tests/it/neighbors_recall.rs"]
+reason = "Leiden on the approximate graph against Leiden on the exact one; hnsw_rs gave 0.983 at 50k, 6.17's index 1.0 (and 1.0 on the 50k generator)."
 
 [neighbors.pipeline_overlap]
 value = 0.995

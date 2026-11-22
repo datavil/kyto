@@ -45,8 +45,6 @@ tempfile = "3.27.0"
 # The small dense steps of the streamed PCA (task 6.5): QR, SVD and the symmetric
 # eigendecomposition of its Krylov basis, on one thread (`Par::Seq`, R11).
 faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
-# Approximate nearest neighbours (task 6.6): the HNSW index, named by the plan.
-hnsw_rs = "0.3.5"
 # Sinks record the plan in `provenance.json` and recomputed columns read it back (task 5.11).
 serde_json = "1.0.154"
 

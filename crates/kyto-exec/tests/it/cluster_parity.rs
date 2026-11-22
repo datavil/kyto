@@ -137,7 +137,7 @@ fn params(method: ClusterMethod, resolution: f64, seed: u64) -> Cluster {
 
 /// The adjusted Rand index of two labellings (Hubert and Arabie); 1 when both put
 /// every cell in one cluster.
-fn adjusted_rand_index(left: &[u32], right: &[u32]) -> f64 {
+pub(crate) fn adjusted_rand_index(left: &[u32], right: &[u32]) -> f64 {
     assert_eq!(left.len(), right.len());
     let pairs = |count: f64| count * (count - 1.0) / 2.0;
     let n_left = left.iter().max().map_or(0, |&label| label as usize + 1);

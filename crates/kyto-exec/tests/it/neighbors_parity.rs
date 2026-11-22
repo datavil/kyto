@@ -11,8 +11,8 @@
 //! cell), and scanpy keeping a cell as its own neighbour when a duplicate of it comes
 //! first (kyto excludes the cell by position). Measured: pbmc3k every row equal,
 //! distances to 1.2e-7 relative; synthetic 490 of 500 rows equal, the other 10 its
-//! duplicate cells (7 ties, 3 self loops). HNSW recall 0.99992 on pbmc3k, 1.0 on
-//! synthetic; on kyto's own PCA, 0.99989 overlap with scanpy. The whole pipeline (kyto's own PCA, then `neighbors`) is compared
+//! duplicate cells (7 ties, 3 self loops). HNSW recall 0.99997 on pbmc3k (0.99992
+//! with `hnsw_rs` before 6.17), 1.0 on synthetic; on kyto's own PCA, 0.99989 overlap with scanpy. The whole pipeline (kyto's own PCA, then `neighbors`) is compared
 //! as a neighbour overlap, since kyto's PCA differs from scanpy's in the last digits.
 //! Approximate search (HNSW) is compared with the exact graph; its recall is printed
 //! (`--nocapture`) and must stay at or above `neighbors.hnsw_recall`.

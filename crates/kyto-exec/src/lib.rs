@@ -96,9 +96,7 @@ pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
 };
 pub use neighbors::{NeighborGraph, NeighborStatistics, nearest_neighbors};
-pub use neighbors_hnsw::{
-    CANDIDATES_PER_NEIGHBOR, HNSW_EF_CONSTRUCTION, HNSW_EF_SEARCH, HNSW_MAX_CONNECTIONS,
-};
+pub use neighbors_hnsw::{HNSW_EF_CONSTRUCTION, HNSW_EF_SEARCH, HNSW_MAX_CONNECTIONS};
 pub use pca::PcaStatistics;
 pub use pipeline::{ExecuteOptions, Pipeline};
 pub use pipeline_block::PipelineBlock;

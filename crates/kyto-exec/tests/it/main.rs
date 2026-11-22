@@ -29,6 +29,7 @@ mod loess_parity;
 mod multi_pass;
 mod neighbors;
 mod neighbors_parity;
+mod neighbors_recall;
 mod normalize_log1p_parity;
 mod pca;
 mod pca_parity;
