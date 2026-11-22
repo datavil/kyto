@@ -16,12 +16,18 @@
 //! both keep zeros at zero, so a block keeps its structure.
 //! A median `normalize_total` runs here once its statistics pass found the median
 //! ([`ElementwiseMaps::with_median`], task 5.4).
+//! **On a GPU** (task 9.2, [`ElementwiseMaps::on_gpu`]): the same steps through the
+//! 9.2 CubeCL kernels (`kyto_gpu::DeviceKernels`), each map copying the block to the
+//! device and its output back. The totals of `u32` counts are exact there, as on the
+//! CPU; `f32` totals, the `f32` division and `log1p` are within 1e-6 relative of the
+//! CPU's bits, not equal to them (deviations.md), and the same run to run.
 //! Does not: find the median (`cross_cell.rs`), or scanpy's other parameters
 //! (`exclude_highly_expressed`, `log1p`'s `base`: not asked for by 6.2).
 
 use std::collections::BTreeSet;
 
 use kyto_error::KytoError;
+use kyto_gpu::{DeviceKernels, RowValues};
 use kyto_plan::{ElementwiseOp, MapElementwise};
 use kyto_store::{CellBlock, CellData, CellValues, ValueDtype};
 
@@ -37,6 +43,8 @@ pub(crate) struct ElementwiseMaps {
     /// The target of a median `normalize_total`, once its statistics pass found it
     /// (task 5.4).
     median: Option<f64>,
+    /// The GPU the maps run on (task 9.2), `None` for the CPU.
+    gpu: Option<DeviceKernels>,
 }
 
 impl ElementwiseMaps {
@@ -57,7 +65,14 @@ impl ElementwiseMaps {
             maps,
             drop,
             median: None,
+            gpu: None,
         }
+    }
+
+    /// These maps on the GPU of `gpu` (`None`: the CPU), as the plan placed them.
+    pub(crate) fn on_gpu(mut self, gpu: Option<DeviceKernels>) -> Self {
+        self.gpu = gpu;
+        self
     }
 
     /// These maps with `median` as the target of a median `normalize_total`.
@@ -105,7 +120,7 @@ impl ElementwiseMaps {
                 }
                 op => op,
             };
-            let output = map_block(op, input, pool)?;
+            let output = map_block(op, input, pool, self.gpu.as_ref())?;
             if let Some(replaced) = block.layers.insert(map.output_layer().to_owned(), output) {
                 pool.recycle(replaced);
             }
@@ -126,11 +141,16 @@ impl ElementwiseMaps {
     }
 }
 
-/// `op` of every value of `input`, as a new `float32` block with the same structure.
+/// `op` of every value of `input`, as a new `float32` block with the same structure,
+/// on `gpu` if given.
+///
+/// # Errors
+/// `KY-E505` if a GPU kernel or copy fails.
 fn map_block(
     op: ElementwiseOp,
     input: &CellBlock,
     pool: &CellBlockPool,
+    gpu: Option<&DeviceKernels>,
 ) -> Result<CellBlock, KytoError> {
     let mut parts = pool.take(ValueDtype::F32);
     parts.indptr.extend_from_slice(input.indptr());
@@ -142,9 +162,16 @@ fn map_block(
         while data.len() < len {
             data.extend_from_slice(&ZEROS[..(len - data.len()).min(ZEROS.len())]);
         }
-        match input.data() {
-            CellValues::F32(values) => map_values(op, input.indptr(), values, data.as_mut_slice()),
-            CellValues::U32(values) => map_values(op, input.indptr(), values, data.as_mut_slice()),
+        let out = data.as_mut_slice();
+        match (gpu, input.data()) {
+            (Some(gpu), CellValues::F32(values)) => {
+                map_values_gpu(gpu, op, input.indptr(), RowValues::F32(values), out)?;
+            }
+            (Some(gpu), CellValues::U32(values)) => {
+                map_values_gpu(gpu, op, input.indptr(), RowValues::U32(values), out)?;
+            }
+            (None, CellValues::F32(values)) => map_values(op, input.indptr(), values, out),
+            (None, CellValues::U32(values)) => map_values(op, input.indptr(), values, out),
         }
     }
     CellBlock::from_parts(parts, input.n_genes())
@@ -168,6 +195,42 @@ fn map_values<T: KernelValue>(op: ElementwiseOp, indptr: &[u64], values: &[T], o
         }
         // A u32 count is rounded to f32 first: the input layer as stored.
         ElementwiseOp::Log1p => kernels.log1p(values, out),
+    }
+}
+
+/// [`map_values`] on `gpu`: the same steps through the 9.2 kernels.
+///
+/// # Errors
+/// `KY-E505` if a GPU kernel or copy fails.
+fn map_values_gpu(
+    gpu: &DeviceKernels,
+    op: ElementwiseOp,
+    indptr: &[u64],
+    values: RowValues<'_>,
+    out: &mut [f32],
+) -> Result<(), KytoError> {
+    match op {
+        ElementwiseOp::NormalizeTotal { target_sum } => {
+            let operation = "normalize_total";
+            // As `cell_totals`: counts above 2^24 that are not a float32 are rounded first.
+            let rounded: Option<Vec<f32>> = match values {
+                RowValues::U32(counts) if counts.iter().any(|&count| count > 1 << 24) => {
+                    let exact = counts
+                        .iter()
+                        .all(|&count| f64::from(count) == f64::from(count as f32));
+                    (!exact).then(|| counts.iter().map(|&count| count as f32).collect())
+                }
+                _ => None,
+            };
+            let summed = rounded.as_deref().map_or(values, RowValues::F32);
+            let divisors: Vec<f32> = gpu
+                .row_sums(indptr, summed, operation)?
+                .into_iter()
+                .map(|total| normalize_divisor(total, target_sum))
+                .collect();
+            gpu.divide_rows(indptr, values, &divisors, out, operation)
+        }
+        ElementwiseOp::Log1p => gpu.log1p(values, out, "log1p"),
     }
 }
 
@@ -283,6 +346,7 @@ mod tests {
             },
             &counts(),
             &pool,
+            None,
         )
         .unwrap();
         assert_eq!(values(&block), [2.5, 7.5, 10.0]);
@@ -300,6 +364,7 @@ mod tests {
             },
             &block,
             &pool,
+            None,
         )
         .unwrap();
         assert_eq!(values(&output), [-1.0, 1.0]);
@@ -318,6 +383,7 @@ mod tests {
             },
             &block,
             &pool,
+            None,
         )
         .unwrap();
         let first = 5.0_f32 / 1e4_f32;
@@ -344,6 +410,7 @@ mod tests {
             },
             &block,
             &pool,
+            None,
         )
         .unwrap();
         // scanpy 1.12.5 on this uint32 row.
@@ -368,7 +435,7 @@ mod tests {
     #[test]
     fn log1p_is_kyto_log1p() {
         let pool = CellBlockPool::new(2);
-        let block = map_block(ElementwiseOp::Log1p, &counts(), &pool).unwrap();
+        let block = map_block(ElementwiseOp::Log1p, &counts(), &pool, None).unwrap();
         assert_eq!(
             values(&block),
             [crate::log1p(1.0), crate::log1p(3.0), crate::log1p(2.0)]
@@ -386,7 +453,7 @@ mod tests {
             n as u64,
         )
         .unwrap();
-        let output = map_block(ElementwiseOp::Log1p, &block, &pool).unwrap();
+        let output = map_block(ElementwiseOp::Log1p, &block, &pool, None).unwrap();
         let expected: Vec<f32> = (0..n).map(|value| crate::log1p(value as f32)).collect();
         assert_eq!(values(&output), expected);
     }

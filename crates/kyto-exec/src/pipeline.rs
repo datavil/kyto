@@ -46,6 +46,7 @@ use std::time::Instant;
 
 use kyto_core::{AtlasSchema, Axis, ColumnDtype, Source};
 use kyto_error::KytoError;
+use kyto_gpu::DeviceKernels;
 use kyto_plan::{
     Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, Neighbors, Operation,
     PhysicalPlan, Plan, Predicate, Umap, loadings_name,
@@ -223,8 +224,9 @@ impl Pipeline {
     /// # Errors
     /// - `KY-E215` if there is no output `output`.
     /// - `KY-E504` if the plan asks for a device that was not found, `KY-E501` if a
-    ///   node of it has no kernel on the device asked for, or runs on a GPU (this
-    ///   executor runs only the CPU until task 9.2): never silently on the CPU.
+    ///   node of it has no kernel on the device asked for (or one placed on a GPU that
+    ///   this executor cannot dispatch there): never silently on the CPU.
+    /// - `KY-E505` if the GPU runtime of a node placed on a GPU does not start.
     /// - `KY-E601` for a node the executor does not run yet, naming the task that adds it.
     /// - `KY-E104` if the store's schema holds a tiling the reader rejects.
     pub fn new(plan: &PhysicalPlan, output: usize) -> Result<Self, KytoError> {
@@ -244,17 +246,7 @@ impl Pipeline {
         if let Some(error) = plan.device_error() {
             return Err(error);
         }
-        if let Some((node, device)) = nodes.iter().zip(executions).find_map(|(node, execution)| {
-            execution
-                .device()
-                .filter(|device| device.is_gpu())
-                .map(|device| (node, device))
-        }) {
-            return Err(KytoError::MissingKernel {
-                operation: node_operation(node).to_owned(),
-                device: device.name().to_owned(),
-            });
-        }
+        let mut gpus = GpuKernels::default();
         let mut stages = Vec::new();
         let mut stage_nodes = Vec::new();
         let mut next = Some(output_entry.node());
@@ -264,6 +256,7 @@ impl Pipeline {
         while let Some(index) = next {
             let node = &nodes[index];
             let passes = executions[index].statistics_passes();
+            let gpu = gpus.for_node(node, executions[index].device())?;
             let lowered = stages.len();
             match node.operation() {
                 Operation::Scan { plan, reads } => {
@@ -280,13 +273,13 @@ impl Pipeline {
                             CrossCellKind::MedianNormalize {
                                 maps: maps.clone(),
                                 keep: Some(writes.clone()),
+                                gpu,
                             },
                         )));
                     } else {
-                        stages.push(Stage::Maps(ElementwiseMaps::new(
-                            maps.clone(),
-                            Some(writes),
-                        )));
+                        stages.push(Stage::Maps(
+                            ElementwiseMaps::new(maps.clone(), Some(writes)).on_gpu(gpu),
+                        ));
                     }
                 }
                 Operation::Node(logical) if matches!(**logical, Plan::Sink(_)) => {
@@ -295,7 +288,7 @@ impl Pipeline {
                     sink = Some(spec);
                 }
                 Operation::Node(logical) => {
-                    if let Some(stage) = lower_node(logical, index, passes)? {
+                    if let Some(stage) = lower_node(logical, index, passes, gpu)? {
                         stages.push(stage);
                     }
                 }
@@ -824,6 +817,54 @@ fn run_device(
     device.name()
 }
 
+/// The GPU kernels of a pipeline's nodes (task 9.2), one client per device, opened
+/// when the first node placed on it is lowered.
+#[derive(Debug, Default)]
+struct GpuKernels {
+    opened: Vec<DeviceKernels>,
+}
+
+impl GpuKernels {
+    /// The kernels `node` runs on when placed on `device`: `None` on the CPU.
+    ///
+    /// # Errors
+    /// - `KY-E501` if `node` is placed on a GPU but is not a step this executor runs
+    ///   there (only the per-cell maps, `normalize_total` and `log1p`, have GPU
+    ///   kernels; the kernel table and this check move together).
+    /// - `KY-E505` if the device's runtime does not start.
+    fn for_node(
+        &mut self,
+        node: &kyto_plan::OptimizedNode,
+        device: Option<kyto_plan::Device>,
+    ) -> Result<Option<DeviceKernels>, KytoError> {
+        let Some(device) = device.filter(|device| device.is_gpu()) else {
+            return Ok(None);
+        };
+        let runs_on_gpu = match node.operation() {
+            Operation::Fused { .. } => true,
+            Operation::Node(plan) => matches!(**plan, Plan::MapElementwise(_)),
+            Operation::Scan { .. } => false,
+        };
+        let operation = node_operation(node);
+        if !runs_on_gpu {
+            return Err(KytoError::MissingKernel {
+                operation: operation.to_owned(),
+                device: device.name().to_owned(),
+            });
+        }
+        if let Some(kernels) = self
+            .opened
+            .iter()
+            .find(|kernels| kernels.device() == device)
+        {
+            return Ok(Some(kernels.clone()));
+        }
+        let kernels = DeviceKernels::open(device, operation)?;
+        self.opened.push(kernels.clone());
+        Ok(Some(kernels))
+    }
+}
+
 /// The plan method of an optimized node, as `KY-E501` names it: its logical node's, a
 /// fused pass's first map's, `scan`.
 fn node_operation(node: &kyto_plan::OptimizedNode) -> &'static str {
@@ -839,18 +880,29 @@ fn node_operation(node: &kyto_plan::OptimizedNode) -> &'static str {
 /// The stage of logical node `index` (with the plan's statistics `passes`), `None`
 /// for one with no work at run time, or `KY-E601` for one the executor does not run
 /// yet.
-fn lower_node(plan: &Plan, index: usize, passes: u32) -> Result<Option<Stage>, KytoError> {
+fn lower_node(
+    plan: &Plan,
+    index: usize,
+    passes: u32,
+    gpu: Option<DeviceKernels>,
+) -> Result<Option<Stage>, KytoError> {
     match plan {
         Plan::WithDefaultLayer(_) | Plan::OnDevice(_) => Ok(None),
         Plan::MapElementwise(node) => {
             let maps = vec![node.params().clone()];
             if starts_with_median(&maps) {
-                let kind = CrossCellKind::MedianNormalize { maps, keep: None };
+                let kind = CrossCellKind::MedianNormalize {
+                    maps,
+                    keep: None,
+                    gpu,
+                };
                 return Ok(Some(Stage::CrossCell(CrossCellStage::new(
                     index, passes, kind,
                 ))));
             }
-            Ok(Some(Stage::Maps(ElementwiseMaps::new(maps, None))))
+            Ok(Some(Stage::Maps(
+                ElementwiseMaps::new(maps, None).on_gpu(gpu),
+            )))
         }
         Plan::CrossCell(node) => match node.params().op() {
             CrossCellOp::HighlyVariableGenes {

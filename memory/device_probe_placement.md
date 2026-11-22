@@ -13,8 +13,10 @@
   so a CPU plan never waits for a GPU driver.
 - Rules in `kyto-plan/src/device_placement.rs` (`place`, injectable kernel table);
   kernels per runtime in `kyto-gpu/src/backend.rs` (`CUDA_KERNELS`, `WGPU_KERNELS`,
-  keyed by plan method). 9.2+ adds names there, and must replace the refusal of GPU
-  placements in `Pipeline::new` with real dispatch.
+  keyed by plan method). 9.2 registered `normalize_total` and `log1p` and dispatches
+  them in `Pipeline::new` (`GpuKernels::for_node`; any other GPU node is still `KY-E501`):
+  a new kernel needs both the name and the dispatch (memory `gpu_kernels_cubecl.md`).
+- A step placed on a GPU shows `(within 1e-6 of cpu)` in `explain()` (`GPU_NOTE`).
 - A CPU plan prints exactly what it printed before 9.1 (no device line, no notes);
   only the explain JSON gained `optimized.device` and `device_note`.
 

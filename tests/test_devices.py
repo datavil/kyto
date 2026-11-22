@@ -1,4 +1,5 @@
-"""Task 9.1: ``on(device=...)`` and the device of every step in ``explain()``.
+"""Tasks 9.1 and 9.2: ``on(device=...)``, the device of every step in ``explain()``,
+and ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in ``explain()``).
 
 The devices found depend on the machine and on the build (the default wheel has no GPU
 feature, so it finds only the CPU); the tests read them from ``explain(format="json")``
@@ -42,22 +43,26 @@ def test_explain_names_the_device_of_every_step(store: Path) -> None:
     assert device["requested"] == "auto"
     found = device["found"]
     assert found.startswith("cpu")
-    note = "auto: no gpu found" if found == "cpu" else "auto: no gpu kernel"
+    # log1p has a GPU kernel (9.2): on the first GPU found, noted; else the CPU.
+    gpu = found.split(", ")[1] if found != "cpu" else None
+    device_name, note = (
+        ("cpu", "auto: no gpu found") if gpu is None else (gpu, "within 1e-6 of cpu")
+    )
     nodes = {node["name"]: node for node in explained["optimized"]["nodes"]}
     assert set(nodes) == {
         "LOG1P",
         "SCAN",
     }  # `on` runs nothing: not in the optimized plan
-    # Host steps on the CPU; log1p has no GPU kernel before task 9.2, and says so.
     for host in ("SCAN",):
         assert (nodes[host]["device"], nodes[host]["device_note"]) == ("cpu", None)
-    assert (nodes["LOG1P"]["device"], nodes["LOG1P"]["device_note"]) == ("cpu", note)
+    log1p_node = nodes["LOG1P"]
+    assert (log1p_node["device"], log1p_node["device_note"]) == (device_name, note)
     text = _plan(store, "auto").explain()
     assert f"\n  device auto (found: {found})\n" in text
     log1p = next(
         line for line in text.splitlines() if " LOG1P " in line and "[device" in line
     )
-    assert f"[device=cpu ({note}) passes=1" in log1p
+    assert f"[device={device_name} ({note}) passes=1" in log1p
     # A CPU plan prints no device line and no note.
     cpu = _plan(store, "cpu").explain()
     assert "\n  device " not in cpu
@@ -70,17 +75,28 @@ def test_auto_runs_on_the_cpu_with_the_same_bits(store: Path) -> None:
         _plan(store, device).layer("log").to_dense(max_bytes=1_000)
         for device in ("cpu", "auto")
     ]
-    np.testing.assert_array_equal(results[0], results[1])
     assert results[0].dtype == results[1].dtype
+    found = _plan(store, "auto").explain(format="json")["optimized"]["device"]["found"]
+    if found == "cpu":
+        np.testing.assert_array_equal(results[0], results[1])
+    else:
+        # On a GPU (9.2): within 1e-6 relative, not the same bits.
+        np.testing.assert_allclose(results[1], results[0], rtol=1e-6, atol=0)
 
 
 @pytest.mark.parametrize("device", ["cuda", "metal", "wgpu"])
-def test_a_named_gpu_is_refused_before_the_run(store: Path, device: str) -> None:
+def test_a_named_gpu_runs_log1p_or_is_refused_first(store: Path, device: str) -> None:
     plan = _plan(store, device)
     explained = plan.explain(format="json")
     log1p = next(
         node for node in explained["optimized"]["nodes"] if node["name"] == "LOG1P"
     )
+    if log1p["device_note"] == "within 1e-6 of cpu":
+        # The GPU was found: log1p runs there (9.2), within 1e-6 of the CPU.
+        on_gpu = plan.layer("log").to_dense(max_bytes=1_000)
+        on_cpu = _plan(store, "cpu").layer("log").to_dense(max_bytes=1_000)
+        np.testing.assert_allclose(on_gpu, on_cpu, rtol=1e-6, atol=0)
+        return
     with pytest.raises(kyto.DeviceError) as raised:
         plan.collect()
     if log1p["device_note"] == "not found: KY-E504 when run":
@@ -90,10 +106,7 @@ def test_a_named_gpu_is_refused_before_the_run(store: Path, device: str) -> None
             raised.value
         )
     else:
-        # The GPU was found, but it has no kernel for log1p before task 9.2.
-        assert log1p["device_note"] == "no kernel: KY-E501 when run"
-        assert raised.value.code == "KY-E501"
-        assert "'log1p'" in str(raised.value)
+        pytest.fail(f"unexpected note {log1p['device_note']!r}: {raised.value}")
 
 
 def test_the_device_is_part_of_the_plan(store: Path) -> None:
@@ -118,8 +131,10 @@ def test_provenance_records_the_device_the_run_used(
     # The resolved device, not the request: every step ran where explain() said.
     explained = plan.explain(format="json")
     ran = {node["device"] for node in explained["optimized"]["nodes"]}
-    assert ran == {"cpu"}
-    assert provenance["device"] == "cpu"
+    gpus = ran - {"cpu"}
+    # A GPU only where `auto` put log1p on one (9.2): provenance names it.
+    assert len(gpus) <= 1 and (device == "auto" or not gpus)
+    assert provenance["device"] == (gpus.pop() if gpus else "cpu")
     # The request is the plan's `on` step, which provenance() rebuilds.
     steps = [node["step"] for node in provenance["plan"]["nodes"]]
     assert {"method": "on", "device": device} in steps

@@ -125,6 +125,10 @@ impl fmt::Display for DeviceRequest {
     }
 }
 
+/// The note on a step that runs on a GPU (task 9.2): its kernels compute in `f32`
+/// (Metal has no `f64`), so the result is within 1e-6 relative of the CPU's, not equal.
+pub const GPU_NOTE: &str = "within 1e-6 of cpu";
+
 /// Where one node runs, and why when it is not where it was asked to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -166,9 +170,12 @@ impl Placement {
         }
     }
 
-    /// Why it runs elsewhere than asked, or cannot run (`None` when it runs as asked).
+    /// Why it runs elsewhere than asked, or cannot run; for a step on a GPU, that its
+    /// bits are not the CPU's (`f32` GPU arithmetic, task 9.2: within 1e-6 relative,
+    /// the same run to run). `None` on the CPU as asked.
     pub fn note(self) -> Option<&'static str> {
         match self {
+            Self::On(device) if device.is_gpu() => Some(GPU_NOTE),
             Self::On(_) => None,
             Self::Fallback { gpu_found: false } => Some("auto: no gpu found"),
             Self::Fallback { gpu_found: true } => Some("auto: no gpu kernel"),
@@ -321,7 +328,10 @@ mod tests {
         };
         assert_eq!(auto(BOTH, &["pca"]), Placement::On(Device::Cuda));
         assert_eq!(auto(MAC, &["log1p"]), Placement::On(METAL));
-        assert_eq!(auto(MAC, &["log1p"]).to_string(), "metal");
+        assert_eq!(
+            auto(MAC, &["log1p"]).to_string(),
+            "metal (within 1e-6 of cpu)"
+        );
         // A fused pass goes to a GPU only if it has every map's kernel.
         assert_eq!(
             auto(MAC, &["normalize_total", "log1p"]).to_string(),
@@ -332,9 +342,12 @@ mod tests {
             auto(NONE, &["log1p"]).to_string(),
             "cpu (auto: no gpu found)"
         );
-        // The real table has no GPU kernel before 9.2: everything falls back.
-        let real = place(DeviceRequest::Auto, MAC, &["log1p"], Device::has_kernel);
-        assert_eq!(real, Placement::Fallback { gpu_found: true });
+        // The real table (9.2): the per-cell maps run on the GPU, PCA does not yet.
+        let real = |operations: &[&'static str]| {
+            place(DeviceRequest::Auto, MAC, operations, Device::has_kernel)
+        };
+        assert_eq!(real(&["normalize_total", "log1p"]), Placement::On(METAL));
+        assert_eq!(real(&["pca"]), Placement::Fallback { gpu_found: true });
     }
 
     #[test]

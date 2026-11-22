@@ -16,12 +16,14 @@ workspace = true
 # (no CUDA toolkit needed to build). The versions are CubeCL 0.11's (task 9.2), so its
 # runtimes reuse them.
 [features]
-wgpu = ["dep:wgpu", "dep:pollster"]
-cuda = ["dep:cudarc"]
+wgpu = ["dep:wgpu", "dep:pollster", "dep:cubecl", "cubecl/wgpu"]
+cuda = ["dep:cudarc", "dep:cubecl", "cubecl/cuda"]
 
 [dependencies]
 kyto-error = { path = "../kyto-error" }
 cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "fallback-dynamic-loading", "cuda-version-from-build-system", "fallback-latest"] }
+# The kernels (task 9.2): written once, compiled by its CUDA and wgpu runtimes.
+cubecl = { version = "0.11.4", optional = true, default-features = false, features = ["std"] }
 # Only the native backends: no WebGL, no GLES.
 wgpu = { version = "30.0.2", optional = true, default-features = false, features = ["metal", "vulkan", "dx12", "std"] }
 # Blocks on wgpu's async adapter request; the probe runs once, on the calling thread.

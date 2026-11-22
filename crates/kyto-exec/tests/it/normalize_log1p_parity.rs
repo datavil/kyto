@@ -53,7 +53,7 @@ for key, array in load_reference(name, 'normalize_log1p').items():
 ";
 
 /// Write fixture `name` to `h5ad` and its reference to `out`; `false` without anndata.
-fn write_fixture(name: &str, h5ad: &Path, out: &Path) -> bool {
+pub(crate) fn write_fixture(name: &str, h5ad: &Path, out: &Path) -> bool {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
     let status = Command::new(std::env::var("PYTHON").unwrap_or_else(|_| "python".to_owned()))
         .current_dir(tests)
@@ -98,7 +98,7 @@ fn read_f32(path: &Path) -> Vec<f32> {
         .collect()
 }
 
-fn scan(store: &Path) -> Arc<Plan> {
+pub(crate) fn scan(store: &Path) -> Arc<Plan> {
     let schema = open_atlas_schema(store).unwrap();
     let gene_ids = GeneIds::new(read_ids(store, TableAxis::Genes, schema.n_genes).unwrap());
     Plan::scan(store.display().to_string(), schema, gene_ids)
@@ -106,10 +106,10 @@ fn scan(store: &Path) -> Arc<Plan> {
 
 /// One layer of the output as CSR: row pointer, gene indices, values.
 #[derive(Debug, PartialEq)]
-struct Csr {
-    indptr: Vec<u64>,
-    indices: Vec<u32>,
-    values: Vec<f32>,
+pub(crate) struct Csr {
+    pub(crate) indptr: Vec<u64>,
+    pub(crate) indices: Vec<u32>,
+    pub(crate) values: Vec<f32>,
 }
 
 impl Csr {
@@ -133,7 +133,7 @@ impl Csr {
         sums
     }
 
-    fn bits(&self) -> Vec<u32> {
+    pub(crate) fn bits(&self) -> Vec<u32> {
         self.values.iter().map(|value| value.to_bits()).collect()
     }
 }

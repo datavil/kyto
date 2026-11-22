@@ -3,12 +3,14 @@
 //! Does: say whether a runtime is built in, find its device on this machine, and say
 //! which operations it has a kernel for, by the plan method that names the step
 //! (`log1p`, `pca`, as `explain` and `KY-E501` name them).
-//! Does not: run kernels (9.2 adds them, and the methods to launch them, to this
-//! interface) or choose among devices (kyto-plan's `device_placement.rs`).
+//! Does not: run kernels (`launch.rs`, `kernels.rs`) or choose among devices
+//! (kyto-plan's `device_placement.rs`).
 //!
-//! **Adding a kernel** (9.2, 9.3, 9.8): implement it, then add its operation to the
-//! runtime's list below ([`CUDA_KERNELS`], [`WGPU_KERNELS`]); the physical plan then
-//! places that step on the GPU, and `explain` shows it.
+//! **Adding a kernel** (9.2, 9.3, 9.8): implement it, add its operation to the
+//! runtime's list below ([`CUDA_KERNELS`], [`WGPU_KERNELS`]), and dispatch the step to
+//! it in kyto-exec (`Pipeline::new` refuses a GPU step it cannot dispatch with
+//! `KY-E501`); the physical plan then places that step on the GPU, and `explain` shows
+//! it.
 
 use crate::device::{Device, WgpuBackend};
 
@@ -73,13 +75,13 @@ pub trait Backend: Sync {
     fn has_kernel(&self, operation: &str) -> bool;
 }
 
-/// The operations with a CUDA kernel. Empty until 9.2 (CubeCL: `normalize_total`,
-/// `log1p`, the QC sums) and 9.3 (`pca` through cuSPARSE and cuBLAS).
-pub const CUDA_KERNELS: &[&str] = &[];
+/// The operations with a CUDA kernel: the per-cell maps of 9.2 (CubeCL, `kernels.rs`);
+/// 9.3 adds `pca` through cuSPARSE and cuBLAS.
+pub const CUDA_KERNELS: &[&str] = &["normalize_total", "log1p"];
 
-/// The operations with a wgpu kernel. Empty until 9.2 (CubeCL) and 9.8 (`pca`,
-/// `neighbors`).
-pub const WGPU_KERNELS: &[&str] = &[];
+/// The operations with a wgpu kernel: the per-cell maps of 9.2 (CubeCL, the same
+/// kernels as CUDA's); 9.8 adds `pca` and `neighbors`.
+pub const WGPU_KERNELS: &[&str] = &["normalize_total", "log1p"];
 
 /// Every backend, in the order `device="auto"` prefers their GPUs after the CPU's
 /// place: CPU, CUDA, wgpu.
@@ -239,10 +241,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cpu_has_every_kernel_and_gpus_none_yet() {
+    fn cpu_has_every_kernel_and_gpus_the_9_2_maps() {
         assert!(Device::Cpu.has_kernel("pca"));
-        assert!(!Device::Cuda.has_kernel("log1p"));
-        assert!(!Device::Wgpu(WgpuBackend::Metal).has_kernel("log1p"));
+        for gpu in [Device::Cuda, Device::Wgpu(WgpuBackend::Metal)] {
+            assert!(gpu.has_kernel("log1p") && gpu.has_kernel("normalize_total"));
+            assert!(!gpu.has_kernel("pca") && !gpu.has_kernel("scale"));
+        }
         for backend in BACKENDS {
             assert_eq!(backend.runtime().backend().runtime(), backend.runtime());
         }

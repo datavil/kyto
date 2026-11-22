@@ -1436,10 +1436,13 @@ impl Atlas {
     ///    the GPU was not found (``KY-E504``) or has no kernel for a step
     ///    (``KY-E501``); ``explain()`` marks those steps.
     ///
-    /// GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature; the
-    /// GPU kernels arrive with tasks 9.2 to 9.8, so today ``"auto"`` runs every step on
-    /// the CPU and says so. The data size plays no part in the rules, and steps on the
-    /// CPU give the same bits whatever device was asked for (R11).
+    /// GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature. Today
+    /// ``normalize_total`` and ``log1p`` have GPU kernels (task 9.2; PCA and neighbours
+    /// arrive with 9.3 to 9.8). A GPU computes them in ``float32`` (Metal has no
+    /// ``float64``), so its values are within 1e-6 relative of the CPU's, not the same
+    /// bits, and ``explain()`` notes it on each such step (``within 1e-6 of cpu``); a
+    /// GPU gives the same bits run to run. The data size plays no part in the rules,
+    /// and steps on the CPU give the same bits whatever device was asked for (R11).
     ///
     /// Parameters
     /// ----------
@@ -1461,7 +1464,7 @@ impl Atlas {
     /// >>> scan(store).on(device="cpu").estimate()["device"]
     /// 'cpu'
     /// >>> plan = scan(store).log1p(layer="counts", into="log").on(device="auto")
-    /// >>> "(auto: no gpu" in plan.explain()
+    /// >>> "device auto (found: cpu" in plan.explain()
     /// True
     #[pyo3(signature = (*, device))]
     fn on(

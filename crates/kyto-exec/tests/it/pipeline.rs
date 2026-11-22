@@ -7,9 +7,11 @@
 //! pass (every optimizer rule) equals the maps run one by one (no rule), bit for bit
 //! (task 4.4 Open (1) and (2) for these nodes); nodes the executor does not run yet give
 //! `KY-E601` before anything is read; a slow consumer stops the reading (backpressure);
-//! dropping the stream early stops the producer. Task 9.1: `on(device="auto")` runs on
-//! the CPU with the same bits (no GPU kernel yet), and a GPU asked for by name is
-//! refused (`KY-E504` not found, `KY-E501` no kernel) before anything is read.
+//! dropping the stream early stops the producer. Task 9.1: `on(device="auto")` on a
+//! machine without a GPU runs on the CPU with the same bits, and a GPU asked for by name
+//! is refused (`KY-E504` not found) before anything is read; task 9.2: a GPU found by a
+//! build without its runtime is refused with `KY-E505` (the GPU runs are in
+//! `gpu_kernels.rs`).
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -243,24 +245,31 @@ fn devices_auto_runs_the_same_bits_and_named_gpus_are_refused_first() {
         };
         physical_plan(&[output], OptimizeOptions::ALL, options)
     };
-    // `auto` (no GPU kernel before 9.2): every step on the CPU, the same bits (R11).
+    // `auto` without a GPU: every step on the CPU, the same bits (R11).
     let cpu = rows_of(&collect(&on(DeviceRequest::Cpu, mac), threads(2)), "log1p");
-    for devices in [Devices::CPU_ONLY, mac] {
-        let auto = rows_of(
-            &collect(&on(DeviceRequest::Auto, devices), threads(2)),
-            "log1p",
-        );
-        assert!(auto == cpu, "auto on {devices}");
-    }
+    let auto = rows_of(
+        &collect(&on(DeviceRequest::Auto, Devices::CPU_ONLY), threads(2)),
+        "log1p",
+    );
+    assert!(auto == cpu, "auto without a GPU");
     assert!(cpu.2 == expected_rows());
-    // A named GPU: refused by `Pipeline::new`, before the store is opened.
+    // Refused by `Pipeline::new`, before the store is opened.
     std::fs::remove_dir_all(store.join("layers")).unwrap();
-    let cases = [
+    let mut cases = vec![
         (DeviceRequest::Cuda, mac, "KY-E504"),
         (DeviceRequest::Metal, Devices::CPU_ONLY, "KY-E504"),
-        (DeviceRequest::Metal, mac, "KY-E501"),
-        (DeviceRequest::Wgpu, mac, "KY-E501"),
     ];
+    // A GPU "found" (injected) by a build without its runtime: the maps are placed on
+    // it, and its kernels cannot start.
+    if !cfg!(feature = "wgpu") {
+        for request in [
+            DeviceRequest::Metal,
+            DeviceRequest::Wgpu,
+            DeviceRequest::Auto,
+        ] {
+            cases.push((request, mac, "KY-E505"));
+        }
+    }
     for (request, devices, code) in cases {
         let error = Pipeline::new(&on(request, devices), 0).err().unwrap();
         assert_eq!(error.code(), code, "{request} on {devices}: {error}");

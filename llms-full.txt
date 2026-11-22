@@ -1629,10 +1629,13 @@ whole plan, the steps before it too; a plan without one runs on the CPU.
    the GPU was not found (``KY-E504``) or has no kernel for a step
    (``KY-E501``); ``explain()`` marks those steps.
 
-GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature; the
-GPU kernels arrive with tasks 9.2 to 9.8, so today ``"auto"`` runs every step on
-the CPU and says so. The data size plays no part in the rules, and steps on the
-CPU give the same bits whatever device was asked for (R11).
+GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature. Today
+``normalize_total`` and ``log1p`` have GPU kernels (task 9.2; PCA and neighbours
+arrive with 9.3 to 9.8). A GPU computes them in ``float32`` (Metal has no
+``float64``), so its values are within 1e-6 relative of the CPU's, not the same
+bits, and ``explain()`` notes it on each such step (``within 1e-6 of cpu``); a
+GPU gives the same bits run to run. The data size plays no part in the rules,
+and steps on the CPU give the same bits whatever device was asked for (R11).
 
 Parameters
 ----------
@@ -1654,7 +1657,7 @@ Examples
 >>> scan(store).on(device="cpu").estimate()["device"]
 'cpu'
 >>> plan = scan(store).log1p(layer="counts", into="log").on(device="auto")
->>> "(auto: no gpu" in plan.explain()
+>>> "device auto (found: cpu" in plan.explain()
 True
 
 ### Atlas.collect
@@ -4368,6 +4371,7 @@ Subclasses `KytoError` and `RuntimeError`. Raised with these codes:
 - ``KY-E501``: The requested device has no kernel for an operation.
 - ``KY-E502``: The CPU executor cannot start the threads it was asked for.
 - ``KY-E504``: The device a plan asks for is not on this machine, or not in this build.
+- ``KY-E505``: A GPU kernel or a copy to or from the GPU failed while a plan ran.
 
 See `KytoError` for the parameters and attributes.
 

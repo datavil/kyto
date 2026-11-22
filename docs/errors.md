@@ -37,7 +37,7 @@ Ranges:
 | `StaleColumnError` | `ValueError` | A derived column is read after its inputs changed upstream. | [KY-E301](#ky-e301) |
 | `LineageError` | `ValueError` | A column is asked to be recomputed but records no lineage to recompute it from. | [KY-E302](#ky-e302), [KY-E303](#ky-e303), [KY-E304](#ky-e304) |
 | `MemoryLimitError` | `MemoryError` | A plan cannot run within its memory limit. | [KY-E401](#ky-e401), [KY-E402](#ky-e402) |
-| `DeviceError` | `RuntimeError` | The requested device cannot run part of the plan. | [KY-E501](#ky-e501), [KY-E502](#ky-e502), [KY-E504](#ky-e504) |
+| `DeviceError` | `RuntimeError` | The requested device cannot run part of the plan. | [KY-E501](#ky-e501), [KY-E502](#ky-e502), [KY-E504](#ky-e504), [KY-E505](#ky-e505) |
 | `StoreInputError` | `ValueError` | Data, names, parameters or selections given to a store writer or reader break the store format (docs/format.md). | [KY-E102](#ky-e102), [KY-E103](#ky-e103), [KY-E104](#ky-e104), [KY-E105](#ky-e105), [KY-E106](#ky-e106), [KY-E111](#ky-e111), [KY-E112](#ky-e112), [KY-E114](#ky-e114), [KY-E117](#ky-e117), [KY-E118](#ky-e118), [KY-E119](#ky-e119), [KY-E123](#ky-e123), [KY-E124](#ky-e124), [KY-E125](#ky-e125) |
 | `CorruptStoreError` | `ValueError` | A store on disk breaks the store format (docs/format.md). | [KY-E107](#ky-e107), [KY-E113](#ky-e113), [KY-E116](#ky-e116), [KY-E122](#ky-e122), [KY-E126](#ky-e126), [KY-E127](#ky-e127) |
 | `FormatVersionError` | `ValueError` | A store has a format_version this kyto does not read (format.md section 11). | [KY-E115](#ky-e115) |
@@ -723,6 +723,18 @@ The device a plan asks for is not on this machine, or not in this build.
     - `device` (str): The device asked for with on(device=...). Example: `cuda`.
     - `problem` (str): Why it is missing: no such GPU or driver, or a build without its feature. Example: `this kyto was built without the 'cuda' feature`.
     - `found` (str): The devices found, as explain() names them. Example: `cpu, metal`.
+
+## KY-E505
+
+A GPU kernel or a copy to or from the GPU failed while a plan ran.
+
+- Class: `DeviceError`
+- Message: `the {device} kernel for '{operation}' failed: {problem}`
+- Hint: `run the plan with on(device='cpu'); if the GPU ran out of memory, pass a smaller memory_limit so blocks are smaller`
+- Fields:
+    - `device` (str): The device the step ran on, as explain() names it. Example: `metal`.
+    - `operation` (str): The plan method whose kernel failed. Example: `log1p`.
+    - `problem` (str): What the GPU runtime said. Example: `out of memory`.
 
 ## KY-E601
 

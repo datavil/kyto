@@ -328,6 +328,7 @@ class DeviceError(KytoError, RuntimeError):
     - ``KY-E501``: The requested device has no kernel for an operation.
     - ``KY-E502``: The CPU executor cannot start the threads it was asked for.
     - ``KY-E504``: The device a plan asks for is not on this machine, or not in this build.
+    - ``KY-E505``: A GPU kernel or a copy to or from the GPU failed while a plan ran.
 
     See `KytoError` for the parameters and attributes.
 
@@ -1193,6 +1194,17 @@ _REGISTRY: Final[dict[str, _Entry]] = {
             _Field("device", "str"),
             _Field("problem", "str"),
             _Field("found", "str"),
+        ),
+    ),
+    "KY-E505": _Entry(
+        class_name="DeviceError",
+        message="the {device} kernel for '{operation}' failed: {problem}",
+        hint="run the plan with on(device='cpu'); if the GPU ran out of memory, pass a smaller memory_limit so blocks are smaller",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e505",
+        fields=(
+            _Field("device", "str"),
+            _Field("operation", "str"),
+            _Field("problem", "str"),
         ),
     ),
     "KY-E601": _Entry(

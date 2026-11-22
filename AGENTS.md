@@ -335,6 +335,7 @@ uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (cri
 uv run python benchmarks/suite/suite.py   # 10.3 benchmark suite vs scanpy (pbmc3k, 10k; --sizes 50k,100k opt-in): table + baseline check, exit 1 on a regression
 uv run cargo test --release -p kyto-exec --test it -- kernels:: --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
 uv run cargo test -p kyto-gpu --features wgpu -- --ignored   # 9.1: the probe finds Metal (on an Apple GPU; CI's macOS runners have none)
+uv run cargo test -p kyto-exec --features wgpu --test it -- gpu_kernels:: --nocapture   # 9.2: each GPU kernel and normalize_total + log1p on pbmc3k vs the CPU, 1e-6 relative, with a timing (prints SKIPPED without a GPU; `--features cuda` for CUDA)
 KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run cargo test --workspace   # 10.1 long proptest run: 20x the cases, other seed
 KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run pytest tests/test_properties.py   # 10.1 long hypothesis run
 ```

@@ -10,7 +10,15 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# GPU kernels (task 9.2), off by default as in kyto-gpu: `cargo test -p kyto-exec
+# --features wgpu` runs the GPU checks on this machine's GPU.
+[features]
+wgpu = ["kyto-gpu/wgpu"]
+cuda = ["kyto-gpu/cuda"]
+
 [dependencies]
+# Runs the steps placed on a GPU through its 9.2 kernels.
+kyto-gpu = { path = "../kyto-gpu" }
 kyto-store = { path = "../kyto-store" }
 kyto-error = { path = "../kyto-error" }
 # The executor runs a physical plan (task 4.5).

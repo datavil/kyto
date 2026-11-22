@@ -4,9 +4,11 @@
 //! The devices found are an argument of the physical plan (`PhysicalOptions::devices`),
 //! so one test plans for every machine: no GPU, an Apple GPU (Metal), an NVIDIA GPU
 //! (CUDA), and both kinds. Each optimized node's line names its device; host steps stay
-//! on the CPU; `auto` falls back to the CPU out loud (no GPU kernel exists before 9.2);
-//! an explicit GPU is refused before the run with `KY-E504` (not found) or `KY-E501`
-//! (no kernel). The `on` step round-trips through the plan JSON.
+//! on the CPU; `auto` puts the fused `normalize_total` + `log1p` pass on the GPU (its 9.2
+//! kernels, noted as not bit-identical to the CPU) and falls back to the CPU out loud for
+//! `pca` (no GPU kernel before 9.3/9.8); an explicit GPU is refused before the run with
+//! `KY-E504` (not found) or `KY-E501` (no kernel). The `on` step round-trips through the
+//! plan JSON.
 #![allow(clippy::unwrap_used)]
 
 use crate::support;
@@ -79,11 +81,27 @@ fn device_of<'a>(nodes: &'a [(String, String)], name: &str) -> &'a str {
 
 #[test]
 fn every_node_names_its_device_with_and_without_a_gpu() {
-    for (devices, auto) in [
-        (NO_GPU, "cpu (auto: no gpu found)"),
-        (MAC, "cpu (auto: no gpu kernel)"),
-        (CUDA, "cpu (auto: no gpu kernel)"),
-        (BOTH, "cpu (auto: no gpu kernel)"),
+    for (devices, maps, auto) in [
+        (
+            NO_GPU,
+            "cpu (auto: no gpu found)",
+            "cpu (auto: no gpu found)",
+        ),
+        (
+            MAC,
+            "metal (within 1e-6 of cpu)",
+            "cpu (auto: no gpu kernel)",
+        ),
+        (
+            CUDA,
+            "cuda (within 1e-6 of cpu)",
+            "cpu (auto: no gpu kernel)",
+        ),
+        (
+            BOTH,
+            "cuda (within 1e-6 of cpu)",
+            "cpu (auto: no gpu kernel)",
+        ),
     ] {
         let nodes = devices_per_node(&pipeline(DeviceRequest::Auto), devices);
         assert_eq!(nodes.len(), 4, "{nodes:?}");
@@ -91,10 +109,9 @@ fn every_node_names_its_device_with_and_without_a_gpu() {
         for host in ["FILTER_CELLS", "SCAN"] {
             assert_eq!(device_of(&nodes, host), "cpu", "{devices}: {host}");
         }
-        // Compute steps: auto has no GPU kernel to use yet, and says so.
-        for compute in ["FUSED_ELEMENTWISE", "PCA"] {
-            assert_eq!(device_of(&nodes, compute), auto, "{devices}: {compute}");
-        }
+        // Compute steps: the maps on the first GPU (CUDA first), PCA on the CPU out loud.
+        assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), maps, "{devices}");
+        assert_eq!(device_of(&nodes, "PCA"), auto, "{devices}");
         // The header names the request and the devices found.
         let text = Explain::new(
             &pipeline(DeviceRequest::Auto),
@@ -158,14 +175,21 @@ fn explicit_gpus_are_marked_and_refused_before_the_run() {
         let plan = pipeline(request);
         let nodes = devices_per_node(&plan, devices);
         assert_eq!(device_of(&nodes, "PCA"), shown, "{request} on {devices}");
-        assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), shown);
+        if code == "KY-E501" {
+            // The maps have their 9.2 kernels: on the GPU asked for.
+            let gpu = shown.split(' ').next().unwrap();
+            let maps = format!("{gpu} (within 1e-6 of cpu)");
+            assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), maps);
+        } else {
+            assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), shown);
+        }
         assert_eq!(device_of(&nodes, "SCAN"), "cpu");
         let error = physical(&plan, devices).device_error().unwrap();
         assert_eq!(error.code(), code, "{request} on {devices}");
         let message = error.to_string();
         if code == "KY-E501" {
-            // The first step (from the scan up) without a kernel: the fused pass's first map.
-            assert!(message.contains("'normalize_total'"), "{message}");
+            // The first step (from the scan up) without a kernel: PCA.
+            assert!(message.contains("'pca'"), "{message}");
         } else {
             assert!(
                 message.contains(&format!("(found: {devices})")),

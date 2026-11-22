@@ -61,6 +61,9 @@ pub(crate) enum CrossCellKind {
     MedianNormalize {
         maps: Vec<MapElementwise>,
         keep: Option<BTreeSet<String>>,
+        /// The GPU its apply pass runs on (task 9.2), `None` for the CPU. The
+        /// statistics pass's totals run on the CPU.
+        gpu: Option<kyto_gpu::DeviceKernels>,
     },
     /// `highly_variable_genes` of `layer`, per batch of the cell column `batch_key`.
     HighlyVariableGenes {
@@ -208,9 +211,14 @@ impl CrossCellStage {
     /// table: see `hvg::columns`), and the operator of its apply pass if it has one.
     pub(crate) fn finish(&self, accumulator: Accumulator) -> (NodeStatistics, Option<Operator>) {
         match (accumulator, &self.kind) {
-            (Accumulator::Totals(mut totals), CrossCellKind::MedianNormalize { maps, keep }) => {
+            (
+                Accumulator::Totals(mut totals),
+                CrossCellKind::MedianNormalize { maps, keep, gpu },
+            ) => {
                 let median = median(&mut totals);
-                let apply = ElementwiseMaps::new(maps.clone(), keep.as_ref()).with_median(median);
+                let apply = ElementwiseMaps::new(maps.clone(), keep.as_ref())
+                    .with_median(median)
+                    .on_gpu(gpu.clone());
                 (
                     NodeStatistics::MedianTotal(median),
                     Some(Operator::Maps(apply)),

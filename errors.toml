@@ -836,6 +836,19 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E505"
+variant = "DeviceFailure"
+class = "DeviceError"
+summary = "A GPU kernel or a copy to or from the GPU failed while a plan ran."
+message = "the {device} kernel for '{operation}' failed: {problem}"
+hint = "run the plan with on(device='cpu'); if the GPU ran out of memory, pass a smaller memory_limit so blocks are smaller"
+fields = [
+    { name = "device", type = "str", doc = "The device the step ran on, as explain() names it.", example = "metal" },
+    { name = "operation", type = "str", doc = "The plan method whose kernel failed.", example = "log1p" },
+    { name = "problem", type = "str", doc = "What the GPU runtime said.", example = "out of memory" },
+]
+
+[[errors]]
 code = "KY-E601"
 variant = "NotImplementedYet"
 class = "NotImplementedYetError"
