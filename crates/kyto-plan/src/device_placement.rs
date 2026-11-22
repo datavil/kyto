@@ -19,10 +19,23 @@
 //!    the step shows `(not found)` and the run raises `KY-E504`; if the device has no
 //!    kernel for the step, it shows `(no kernel)` and the run raises `KY-E501`, before
 //!    anything is read (task 9.6 keeps these rules).
+//! 5. **Blocks live on the host between steps** (task 9.6). A step on a GPU copies each
+//!    block of its input from the host to the GPU, runs its kernels there and copies
+//!    its output back before the next step reads it ([`BlockMoves`]: the route, not
+//!    the count of copies; 9.2's dispatch makes one round trip per block and map, so a
+//!    fused pass copies each block in and back once per map, and `normalize_total`
+//!    uploads the values once for its totals and once for the division). So a step's input is always in host memory,
+//!    whatever device the step below it ran on, and steps on different devices follow
+//!    each other in any order (a CPU step reading a GPU step's output, a GPU step
+//!    reading a CPU step's) with no other rule. `explain` shows the moves on each GPU
+//!    step (`moves=cpu->metal->cpu`). For a median `normalize_total` placed on a GPU,
+//!    the moves are those of its apply pass: its statistics pass (the cells' totals)
+//!    runs on the CPU (9.2).
 //!
 //! The data size plays no part, so the same plan, request and devices always give the
 //! same placement.
-//! Does not: find the devices (`kyto_gpu::probe`), or move data between devices (9.2).
+//! Does not: find the devices (`kyto_gpu::probe`), or move the data (the executor:
+//! `kyto-exec`'s GPU maps); keeping blocks on a GPU between steps is M6's (12.2).
 
 use std::fmt;
 
@@ -184,6 +197,16 @@ impl Placement {
         }
     }
 
+    /// The copies of each block a run of this step makes between the host and a GPU
+    /// (rule 5): `None` on the CPU, and for a step that cannot run (`KY-E501`,
+    /// `KY-E504`).
+    pub fn moves(self) -> Option<BlockMoves> {
+        match self {
+            Self::On(device) if device.is_gpu() => Some(BlockMoves { device }),
+            Self::On(_) | Self::Fallback { .. } | Self::NoKernel { .. } | Self::NotFound(_) => None,
+        }
+    }
+
     /// The error a run of this node raises, if it cannot run as asked.
     pub fn error(self, devices: Devices) -> Option<KytoError> {
         match self {
@@ -198,6 +221,24 @@ impl Placement {
                 found: devices.to_string(),
             }),
         }
+    }
+}
+
+/// Where every block of a step on a GPU goes (rule 5): from the host to the GPU
+/// before its kernels run, and back to the host after, so the next step, on any
+/// device, reads it from the host. The route, not the number of copies (each map of
+/// a fused pass makes its own round trip, task 9.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockMoves {
+    /// The GPU each block is copied to and back from.
+    pub device: Device,
+}
+
+/// `cpu->metal->cpu`.
+impl fmt::Display for BlockMoves {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let host = Device::Cpu.name();
+        write!(formatter, "{host}->{}->{host}", self.device.name())
     }
 }
 
@@ -385,6 +426,32 @@ mod tests {
             place(DeviceRequest::Cuda, NONE, &["pca"], table).name(),
             "cuda"
         );
+    }
+
+    #[test]
+    fn only_a_step_on_a_gpu_moves_its_blocks() {
+        let on_metal = place(DeviceRequest::Auto, MAC, &["log1p"], table);
+        assert_eq!(
+            on_metal.moves().map(|moves| moves.to_string()),
+            Some("cpu->metal->cpu".to_owned())
+        );
+        let on_cuda = place(DeviceRequest::Cuda, BOTH, &["pca"], table);
+        assert_eq!(
+            on_cuda.moves(),
+            Some(BlockMoves {
+                device: Device::Cuda
+            })
+        );
+        for placement in [
+            place(DeviceRequest::Cpu, BOTH, &["log1p"], table),
+            place(DeviceRequest::Auto, MAC, &[], table),
+            place(DeviceRequest::Auto, MAC, &["pca"], table),
+            place(DeviceRequest::Auto, NONE, &["log1p"], table),
+            place(DeviceRequest::Metal, MAC, &["pca"], table),
+            place(DeviceRequest::Cuda, MAC, &["log1p"], table),
+        ] {
+            assert_eq!(placement.moves(), None, "{placement}");
+        }
     }
 
     #[test]

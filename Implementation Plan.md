@@ -131,7 +131,7 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Im
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-Done (9.1, 9.2, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+Done (9.1, 9.2, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
 
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
@@ -143,10 +143,6 @@ Done (9.1, 9.2, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%
   - Depends: 7.5, 9.1
   - Done when: a torch tensor from kyto shares the device pointer (test).
   - Note (7.3): `Embedding.to_torch(device=)` exists and copies through NumPy (`torch.from_numpy(array).to(device)`); no `__dlpack__` and no `Matrix.to_torch` yet.
-- [ ] **9.6 Fallback rules.** `device="cuda"` with a missing kernel raises `KY-E501`; `device="auto"` falls back to CPU and says so in `explain()`. Never silent.
-  - Depends: 9.1, 8.1
-  - Done when: both cases are tested.
-  - Note (9.1): the interim rules are in place and tested for a plan with no GPU kernel (`kyto-plan/tests/it/devices.rs`, `tests/test_devices.py`): a named GPU raises `KY-E501` (no kernel) or `KY-E504` (not found) before anything is read, `auto` runs on the CPU with `(auto: no gpu kernel)` or `(auto: no gpu found)` on each step. Left for this task: the rules once some steps have kernels (moving blocks between devices mid-plan, a step whose input lives on another device).
 - [ ] **9.7 GPU CI.** GPU tests on a self-hosted runner; skipped with a visible notice elsewhere.
   - Depends: 1.4, 9.2
   - Done when: the GPU job runs on every PR that touches `kyto-gpu` or `kyto-exec`.

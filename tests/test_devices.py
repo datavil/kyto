@@ -1,6 +1,11 @@
-"""Tasks 9.1 and 9.2: ``on(device=...)``, the device of every step in ``explain()``,
-and ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in ``explain()``);
-9.9: ``provenance.json`` records the request, the devices found and each step's device.
+"""Tasks 9.1, 9.2, 9.6 and 9.9: ``on(device=...)``, the device of every step in
+``explain()``, ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in
+``explain()``), the fallback rules once some steps have GPU kernels (9.6): ``auto``
+puts a chain's steps on a GPU or the CPU one by one, says why at each CPU step and
+names each GPU step's block moves (``cpu->metal->cpu``: blocks live on the host
+between steps); a named GPU without a kernel for one step refuses the whole run with
+``KY-E501``, never the CPU; and 9.9: ``provenance.json`` records the request, the
+devices found and each step's device.
 
 The devices found depend on the machine and on the build (the default wheel has no GPU
 feature, so it finds only the CPU); the tests read them from ``explain(format="json")``
@@ -13,6 +18,7 @@ import json
 from pathlib import Path
 
 import kyto
+import kyto.qc
 import numpy as np
 import pytest
 from kyto import _kyto
@@ -187,3 +193,82 @@ def test_provenance_records_each_steps_device(store: Path, tmp_path: Path) -> No
     assert provenance["device"] == (gpus.pop() if gpus else "cpu")
     # Byte-identical on any thread count, `run` aside (R11).
     assert _files(written[0]) == _files(written[1])
+
+
+def _alternating(store: Path, device: str) -> _kyto.Atlas:
+    """GPU maps, a cell filter on their output (no GPU kernel), a GPU map on its output."""
+    return (
+        kyto.scan(store)
+        .normalize_total(1e4, layer="counts", into="norm")
+        .log1p(layer="norm", into="logn")
+        .filter(kyto.qc.total_counts(layer="logn") > 0)
+        .normalize_total(1e4, layer="logn", into="renorm")
+        .on(device=device)  # pyright: ignore[reportArgumentType]
+    )
+
+
+def test_auto_alternates_devices_and_says_so_at_every_step(store: Path) -> None:
+    plan = _alternating(store, "auto")
+    explained = plan.explain(format="json")
+    found = explained["optimized"]["device"]["found"]
+    gpu = found.split(", ")[1] if found != "cpu" else None
+    nodes = [(node["name"], node) for node in explained["optimized"]["nodes"]]
+    assert [name for name, _ in nodes] == [
+        "NORMALIZE_TOTAL",
+        "FILTER_CELLS",
+        "FUSED_ELEMENTWISE",
+        "SCAN",
+    ]
+    fallback = "auto: no gpu found" if gpu is None else "auto: no gpu kernel"
+    for name, node in nodes:
+        on_gpu = gpu is not None and name in ("NORMALIZE_TOTAL", "FUSED_ELEMENTWISE")
+        if on_gpu:
+            expected = (gpu, "within 1e-6 of cpu", f"cpu->{gpu}->cpu")
+        elif name == "SCAN":
+            expected = ("cpu", None, None)
+        else:
+            # Never silent: every compute step on the CPU says why.
+            expected = ("cpu", fallback, None)
+        assert (node["device"], node["device_note"], node["moves"]) == expected, name
+    text = plan.explain()
+    filter_line = next(
+        line
+        for line in text.splitlines()
+        if " FILTER_CELLS " in line and "[device" in line
+    )
+    assert f"[device=cpu ({fallback}) passes=1" in filter_line
+    if gpu is not None:
+        moved = [line for line in text.splitlines() if f"moves=cpu->{gpu}->cpu" in line]
+        assert len(moved) == 2
+    # It runs, each step reading the previous one's output through the host.
+    results = [
+        _alternating(store, device).layer("renorm").to_dense(max_bytes=1_000)
+        for device in ("cpu", "auto")
+    ]
+    assert results[0].shape == (2, 3)
+    if gpu is None:
+        np.testing.assert_array_equal(results[0], results[1])
+    else:
+        np.testing.assert_allclose(results[1], results[0], rtol=1e-6, atol=0)
+
+
+@pytest.mark.parametrize("device", ["cuda", "metal", "wgpu"])
+def test_a_named_gpu_without_a_kernel_for_a_step_raises_e501(
+    store: Path, device: str
+) -> None:
+    plan = _alternating(store, device)
+    nodes = {
+        node["name"]: node for node in plan.explain(format="json")["optimized"]["nodes"]
+    }
+    note = nodes["FILTER_CELLS"]["device_note"]
+    with pytest.raises(kyto.DeviceError) as raised:
+        plan.layer("renorm").to_dense(max_bytes=1_000)
+    if note == "no kernel: KY-E501 when run":
+        # The GPU was found: it has the maps' kernels, not the filter's.
+        assert nodes["FUSED_ELEMENTWISE"]["device_note"] == "within 1e-6 of cpu"
+        assert raised.value.code == "KY-E501"
+        assert "'filter_cells'" in str(raised.value)
+        assert "device='auto'" in str(raised.value)  # the hint: fall back out loud
+    else:
+        assert note == "not found: KY-E504 when run"
+        assert raised.value.code == "KY-E504"

@@ -17,6 +17,12 @@
   them in `Pipeline::new` (`GpuKernels::for_node`; any other GPU node is still `KY-E501`):
   a new kernel needs both the name and the dispatch (memory `gpu_kernels_cubecl.md`).
 - A step placed on a GPU shows `(within 1e-6 of cpu)` in `explain()` (`GPU_NOTE`).
+- Rule 5 (task 9.6): blocks live on the host between steps; a GPU step copies each
+  block in and back (`Placement::moves`, `BlockMoves`, shown as `moves=cpu->metal->cpu`
+  and the explain JSON key `moves`). `moves` is the route, not the count: each map of
+  a fused pass makes its own round trip (9.2). So mixed CPU/GPU chains need no extra rule. If M6
+  keeps blocks on a device between steps, `moves` must change with it (the executor and
+  the placement say the same thing, or explain lies).
 - A CPU plan prints exactly what it printed before 9.1 (no device line, no notes);
   only the explain JSON gained `optimized.device` and `device_note`.
 

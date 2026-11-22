@@ -9,13 +9,22 @@
 //! `pca` (no GPU kernel before 9.3/9.8); an explicit GPU is refused before the run with
 //! `KY-E504` (not found) or `KY-E501` (no kernel). The `on` step round-trips through the
 //! plan JSON.
+//!
+//! Task 9.6 Done when: `device="cuda"` with a missing kernel raises `KY-E501`, and
+//! `device="auto"` falls back to the CPU and says so in `explain()`, now that some steps
+//! have kernels: a chain whose steps alternate between a GPU and the CPU (each step's
+//! input computed on another device) shows the CPU steps' fallback notes and each GPU
+//! step's block moves (`moves=cpu->metal->cpu`, rule 5: blocks live on the host between
+//! steps), in text and JSON; `cuda` refuses the same chain with `KY-E501` naming the
+//! first step without a kernel. The runs of such chains are in kyto-exec's
+//! `pipeline.rs` (`a_chain_alternating_devices_...`) and `tests/test_devices.py`.
 #![allow(clippy::unwrap_used)]
 
 use crate::support;
 
 use std::sync::Arc;
 
-use kyto_core::{BinaryOp, CellExpr, Expr, Literal};
+use kyto_core::{BinaryOp, CellExpr, Expr, Literal, QcMetric};
 use kyto_plan::{
     Device, DeviceRequest, Devices, Explain, PhysicalOptions, PhysicalPlan, Plan, WgpuBackend,
 };
@@ -89,17 +98,17 @@ fn every_node_names_its_device_with_and_without_a_gpu() {
         ),
         (
             MAC,
-            "metal (within 1e-6 of cpu)",
+            "metal (within 1e-6 of cpu) moves=cpu->metal->cpu",
             "cpu (auto: no gpu kernel)",
         ),
         (
             CUDA,
-            "cuda (within 1e-6 of cpu)",
+            "cuda (within 1e-6 of cpu) moves=cpu->cuda->cpu",
             "cpu (auto: no gpu kernel)",
         ),
         (
             BOTH,
-            "cuda (within 1e-6 of cpu)",
+            "cuda (within 1e-6 of cpu) moves=cpu->cuda->cpu",
             "cpu (auto: no gpu kernel)",
         ),
     ] {
@@ -178,7 +187,7 @@ fn explicit_gpus_are_marked_and_refused_before_the_run() {
         if code == "KY-E501" {
             // The maps have their 9.2 kernels: on the GPU asked for.
             let gpu = shown.split(' ').next().unwrap();
-            let maps = format!("{gpu} (within 1e-6 of cpu)");
+            let maps = format!("{gpu} (within 1e-6 of cpu) moves=cpu->{gpu}->cpu");
             assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), maps);
         } else {
             assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), shown);
@@ -315,4 +324,123 @@ fn an_on_between_maps_does_not_stop_their_fusion() {
         .unwrap();
     assert_eq!(fused(middle.clone()), fused(end));
     assert_eq!(fused(middle).0, ["SCAN", "FUSED_ELEMENTWISE"]);
+}
+
+/// A chain alternating devices under `auto` on a GPU: the fused `normalize_total` +
+/// `log1p` pass (GPU kernels), a cell filter on the data (no GPU kernel: the CPU), a
+/// second `normalize_total` (GPU) reading the filter's output, then `pca` (CPU).
+fn alternating(request: DeviceRequest) -> Arc<Plan> {
+    let total = CellExpr::qc(Some("logn".to_owned()), QcMetric::TotalCounts).unwrap();
+    let expressed = Expr::binary(total, BinaryOp::Gt, Literal::Float(0.0)).unwrap();
+    scan()
+        .normalize_total(Some(1e4), Some("counts"), "norm")
+        .unwrap()
+        .log1p(Some("norm"), "logn")
+        .unwrap()
+        .filter_cells(&expressed)
+        .unwrap()
+        .normalize_total(Some(1e4), Some("logn"), "renorm")
+        .unwrap()
+        .pca(Some("renorm"), "X_new", 2, 0, None)
+        .unwrap()
+        .on_device(request)
+        .unwrap()
+}
+
+#[test]
+fn auto_moves_blocks_between_devices_and_says_so_at_each_step() {
+    let gpu = |name: &str| format!("{name} (within 1e-6 of cpu) moves=cpu->{name}->cpu");
+    for (devices, on_gpu, on_cpu) in [
+        (MAC, gpu("metal"), "cpu (auto: no gpu kernel)"),
+        (CUDA, gpu("cuda"), "cpu (auto: no gpu kernel)"),
+        (BOTH, gpu("cuda"), "cpu (auto: no gpu kernel)"),
+    ] {
+        let plan = alternating(DeviceRequest::Auto);
+        let nodes = devices_per_node(&plan, devices);
+        let expected = [
+            ("PCA", on_cpu),
+            ("NORMALIZE_TOTAL", on_gpu.as_str()),
+            ("FILTER_CELLS", on_cpu),
+            ("FUSED_ELEMENTWISE", on_gpu.as_str()),
+            ("SCAN", "cpu"),
+        ];
+        let shown: Vec<(&str, &str)> = nodes
+            .iter()
+            .map(|(name, device)| (name.as_str(), device.as_str()))
+            .collect();
+        assert_eq!(shown, expected, "{devices}");
+        // Each compute step's input was computed on another device, and it runs.
+        let physical = physical(&plan, devices);
+        assert!(physical.device_error().is_none(), "{devices}");
+        let optimized = physical.optimized().nodes();
+        let device_of_node = |index: usize| physical.executions()[index].device().unwrap();
+        let mut crossings = 0;
+        for (index, node) in optimized.iter().enumerate() {
+            let Some(input) = node.input() else { continue };
+            if node.name() != "SCAN" && device_of_node(index) != device_of_node(input) {
+                crossings += 1;
+            }
+        }
+        // scan -> gpu maps -> cpu filter -> gpu normalize -> cpu pca.
+        assert_eq!(crossings, 4, "{devices}");
+        // The JSON says the same: moves on the GPU steps, `null` on the CPU ones.
+        let json: serde_json::Value =
+            serde_json::from_str(&Explain::new(&plan, &physical).to_json()).unwrap();
+        let moves: Vec<(&str, Option<&str>)> = json["optimized"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| (node["name"].as_str().unwrap(), node["moves"].as_str()))
+            .collect();
+        let gpu_name = on_gpu.split(' ').next().unwrap();
+        let moved = format!("cpu->{gpu_name}->cpu");
+        assert_eq!(
+            moves,
+            [
+                ("PCA", None),
+                ("NORMALIZE_TOTAL", Some(moved.as_str())),
+                ("FILTER_CELLS", None),
+                ("FUSED_ELEMENTWISE", Some(moved.as_str())),
+                ("SCAN", None),
+            ],
+            "{devices}"
+        );
+    }
+    // No GPU: every compute step on the CPU, said so, and nothing moves.
+    let nodes = devices_per_node(&alternating(DeviceRequest::Auto), NO_GPU);
+    for (name, device) in &nodes {
+        let expected = if name == "SCAN" {
+            "cpu"
+        } else {
+            "cpu (auto: no gpu found)"
+        };
+        assert_eq!(device, expected, "{name}");
+    }
+}
+
+#[test]
+fn a_named_gpu_refuses_a_chain_with_a_step_it_has_no_kernel_for() {
+    for (request, devices, gpu) in [
+        (DeviceRequest::Cuda, CUDA, "cuda"),
+        (DeviceRequest::Cuda, BOTH, "cuda"),
+        (DeviceRequest::Metal, MAC, "metal"),
+        (DeviceRequest::Wgpu, BOTH, "vulkan"),
+    ] {
+        let plan = alternating(request);
+        let nodes = devices_per_node(&plan, devices);
+        let refused = format!("{gpu} (no kernel: KY-E501 when run)");
+        let runs = format!("{gpu} (within 1e-6 of cpu) moves=cpu->{gpu}->cpu");
+        assert_eq!(device_of(&nodes, "FILTER_CELLS"), refused);
+        assert_eq!(device_of(&nodes, "PCA"), refused);
+        assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), runs);
+        assert_eq!(device_of(&nodes, "NORMALIZE_TOTAL"), runs);
+        // Never a silent fall back to the CPU: the whole run is refused, naming the
+        // first step (from the scan up) the GPU has no kernel for.
+        let error = physical(&plan, devices).device_error().unwrap();
+        assert_eq!(error.code(), "KY-E501", "{request} on {devices}");
+        let message = error.to_string();
+        assert!(message.contains("'filter_cells'"), "{message}");
+        assert!(message.contains(gpu), "{message}");
+        assert!(!message.contains("'pca'"), "{message}");
+    }
 }

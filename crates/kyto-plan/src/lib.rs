@@ -75,7 +75,7 @@ mod with_default_layer;
 pub use chain_defaults::ChainStep;
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
-pub use device_placement::{DEVICE_NAMES, DeviceRequest, Placement, place};
+pub use device_placement::{BlockMoves, DEVICE_NAMES, DeviceRequest, Placement, place};
 pub use estimate::{
     ASSUMED_NNZ_CHUNK_SIZE, ASSUMED_NNZ_SHARD_SIZE, CostEstimate, HELD_BLOCK_BYTES,
     PCA_OVERSAMPLES, SCRUBLET_ASSUMED_GENES,

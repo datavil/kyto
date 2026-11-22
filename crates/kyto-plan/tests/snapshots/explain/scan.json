@@ -55,6 +55,7 @@
         ],
         "device": "cpu",
         "device_note": null,
+        "moves": null,
         "passes": 1,
         "statistics_passes": 0,
         "apply_pass": true,

@@ -145,6 +145,7 @@ class ExplainedNode(TypedDict):
     origin: list[int]
     device: Literal["cpu", "cuda", "metal", "vulkan", "dx12", "wgpu"]
     device_note: str | None
+    moves: str | None
     passes: int
     statistics_passes: int
     apply_pass: bool

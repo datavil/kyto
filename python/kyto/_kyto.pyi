@@ -1097,7 +1097,12 @@ class Atlas:
         4. ``"cuda"``, ``"metal"`` or ``"wgpu"`` (any of Metal, Vulkan, DX12): every
            other step on that GPU. Running the plan raises, before anything is read, if
            the GPU was not found (``KY-E504``) or has no kernel for a step
-           (``KY-E501``); ``explain()`` marks those steps.
+           (``KY-E501``); ``explain()`` marks those steps. A plan with a step the GPU has
+           no kernel for never falls back to the CPU: ask for ``"auto"`` for that.
+        5. Blocks live in host memory between steps. A step on a GPU copies each block
+           to the GPU and its result back (once per map in a fused pass), so the next step reads it from the host on any
+           device, and steps on the GPU and the CPU can follow each other in any order.
+           ``explain()`` names these copies on each GPU step (``moves=cpu->metal->cpu``).
 
         GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature. Today
         ``normalize_total`` and ``log1p`` have GPU kernels (task 9.2; PCA and neighbours
@@ -2180,7 +2185,8 @@ class Atlas:
             (``device``: ``requested``, ``found``; ``outputs``:
             ``node``, ``reads``; ``nodes``: ``index``, ``name``, ``parameters``,
             ``reads`` (a scan's, else ``None``), ``input``, ``origin``, ``device``,
-            ``device_note`` (``None`` when it runs as asked), ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
+            ``device_note`` (``None`` when it runs as asked), ``moves`` (the route of a
+            GPU step's blocks, ``"cpu->metal->cpu"``, else ``None``), ``passes``, ``statistics_passes``, ``apply_pass``, ``blocks`` (``"cells"``,
             ``"in_memory"`` or ``"none"``), ``block_cells`` and ``holds_input``), in the
             text's order.
         threads : int or None, default=None
@@ -3838,6 +3844,7 @@ class ExplainedNode(TypedDict):
     origin: list[int]
     device: Literal["cpu", "cuda", "metal", "vulkan", "dx12", "wgpu"]
     device_note: str | None
+    moves: str | None
     passes: int
     statistics_passes: int
     apply_pass: bool

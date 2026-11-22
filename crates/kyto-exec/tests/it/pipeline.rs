@@ -11,7 +11,10 @@
 //! machine without a GPU runs on the CPU with the same bits, and a GPU asked for by name
 //! is refused (`KY-E504` not found) before anything is read; task 9.2: a GPU found by a
 //! build without its runtime is refused with `KY-E505` (the GPU runs are in
-//! `gpu_kernels.rs`).
+//! `gpu_kernels.rs`). Task 9.6: a chain alternating devices (GPU maps, a CPU cell
+//! filter on their output, a GPU `normalize_total` on the filter's output) runs: on
+//! `auto` without a GPU with the CPU's bits, and on each GPU found (`--features wgpu`
+//! or `cuda`; `SKIPPED` otherwise) within 1e-6 relative of the CPU.
 
 // A test crate: helpers outside `#[test]` fns may unwrap too (clippy.toml allows it in tests).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -22,7 +25,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use kyto_core::{GeneIds, Tiling};
+use kyto_core::{BinaryOp, CellExpr, Expr, GeneIds, Literal, QcMetric, Tiling};
 use kyto_exec::{
     CellGraph, CellValues, ExecuteOptions, NodeStatistics, Pipeline, PipelineBlock, cluster,
     connectivities, nearest_neighbors, umap_layout,
@@ -273,6 +276,110 @@ fn devices_auto_runs_the_same_bits_and_named_gpus_are_refused_first() {
     for (request, devices, code) in cases {
         let error = Pipeline::new(&on(request, devices), 0).err().unwrap();
         assert_eq!(error.code(), code, "{request} on {devices}: {error}");
+    }
+}
+
+/// `preprocess`, then a cell filter on the `log1p` layer's totals (no GPU kernel) and a
+/// second `normalize_total` of `log1p` into `renorm`, reading the filter's output.
+fn alternating(store: &Path, request: DeviceRequest, devices: Devices) -> PhysicalPlan {
+    let total = CellExpr::qc(Some("log1p".to_owned()), QcMetric::TotalCounts).unwrap();
+    let expressed = Expr::binary(total, BinaryOp::Gt, Literal::Float(0.0)).unwrap();
+    let plan = preprocess(store)
+        .filter_cells(&expressed)
+        .unwrap()
+        .normalize_total(Some(TARGET_SUM), Some("log1p"), "renorm")
+        .unwrap()
+        .on_device(request)
+        .unwrap();
+    let layers = ["log1p", "renorm"].map(|layer| Member::Layer(layer.to_owned()));
+    let output = Output::members(&plan, layers).unwrap();
+    let options = PhysicalOptions {
+        devices,
+        ..PhysicalOptions::default()
+    };
+    physical_plan(&[output], OptimizeOptions::ALL, options)
+}
+
+#[test]
+fn a_chain_alternating_devices_runs_like_the_cpu() {
+    let work = tempfile::tempdir().unwrap();
+    let store = work.path().join("atlas.kyto");
+    write_store(&store);
+    let layers = ["log1p", "renorm"];
+    let run = |plan: &PhysicalPlan| {
+        let blocks = collect(plan, threads(3));
+        layers.map(|layer| rows_of(&blocks, layer))
+    };
+    let cpu = run(&alternating(&store, DeviceRequest::Cpu, Devices::CPU_ONLY));
+    // The filter dropped the all-zero cell and kept the others.
+    assert_eq!(cpu[0].0.len(), N_CELLS - 1);
+    assert!(!cpu[0].0.contains(&(ZERO_CELL as u64)));
+    // `auto` without a GPU: every step on the CPU, the same bits (R11).
+    let auto = run(&alternating(&store, DeviceRequest::Auto, Devices::CPU_ONLY));
+    assert!(auto == cpu, "auto without a GPU");
+    // On each GPU found: the maps there, the filter on the CPU, each reading the
+    // other's output through the host (rule 5), within 1e-6 relative of the CPU.
+    let found = kyto_gpu::probe();
+    let mut gpus = Vec::new();
+    if found.cuda() {
+        gpus.push((DeviceRequest::Cuda, Devices::new(true, None)));
+    }
+    if let Some(backend) = found.wgpu() {
+        gpus.push((DeviceRequest::Wgpu, Devices::new(false, Some(backend))));
+    }
+    if gpus.is_empty() {
+        eprintln!("SKIPPED alternating devices on a GPU: none found by this build ({found})");
+        return;
+    }
+    for (request, devices) in gpus {
+        // A named GPU has no kernel for the data filter: refused, never the CPU.
+        let error = Pipeline::new(&alternating(&store, request, devices), 0)
+            .err()
+            .unwrap();
+        assert_eq!(error.code(), "KY-E501", "{request}: {error}");
+        assert!(error.to_string().contains("'filter_cells'"), "{error}");
+    }
+    let devices = found;
+    let plan = alternating(&store, DeviceRequest::Auto, devices);
+    let placed: Vec<bool> = plan
+        .executions()
+        .iter()
+        .map(|execution| execution.device().unwrap().is_gpu())
+        .collect();
+    // scan, maps (gpu), filter (cpu), normalize_total (gpu).
+    assert_eq!(placed, [false, true, false, true], "{devices}");
+    let on_gpu = run(&plan);
+    for ((layer, on_gpu), cpu) in layers.iter().zip(&on_gpu).zip(&cpu) {
+        assert_eq!(on_gpu.0, cpu.0, "{layer}: cells");
+        assert_eq!(on_gpu.2.len(), cpu.2.len(), "{layer}: rows");
+        let mut worst = 0.0_f64;
+        let mut other_bits = 0_usize;
+        for (gpu_row, cpu_row) in on_gpu.2.iter().zip(&cpu.2) {
+            assert_eq!(gpu_row.len(), cpu_row.len(), "{layer}: structure");
+            for (&(gpu_gene, gpu_bits), &(cpu_gene, cpu_bits)) in gpu_row.iter().zip(cpu_row) {
+                assert_eq!(gpu_gene, cpu_gene, "{layer}: structure");
+                let (gpu_value, cpu_value) = (
+                    f64::from(f32::from_bits(gpu_bits)),
+                    f64::from(f32::from_bits(cpu_bits)),
+                );
+                let error = (gpu_value - cpu_value).abs() / cpu_value.abs().max(f64::MIN_POSITIVE);
+                worst = worst.max(error);
+                other_bits += usize::from(gpu_bits != cpu_bits);
+            }
+        }
+        assert!(
+            worst <= 1e-6,
+            "{devices} {layer}: worst relative error {worst:e}"
+        );
+        // The GPU's f32 arithmetic (9.2) gives other bits for some values: the steps
+        // placed on it ran there, not on the CPU.
+        assert!(
+            other_bits > 0,
+            "{devices} {layer}: the CPU's bits everywhere"
+        );
+        eprintln!(
+            "{devices} alternating {layer}: worst relative error {worst:e}, {other_bits} values with other bits"
+        );
     }
 }
 

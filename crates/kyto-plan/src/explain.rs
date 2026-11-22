@@ -29,8 +29,12 @@
 //! optimized plan
 //!   device auto (found: cpu, metal)
 //!   output #1 reads [...]
-//!   #1 LOG1P "counts" -> "log1p" <- #0 (node 1) [device=cpu (auto: no gpu kernel) passes=1 blocks=4096 cells]
+//!   #2 LOG1P "norm" -> "log1p" <- #1 (node 2) [device=cpu (auto: no gpu kernel) passes=1 blocks=4096 cells]
+//!   #1 NORMALIZE_TOTAL ... <- #0 (node 1) [device=metal (within 1e-6 of cpu) moves=cpu->metal->cpu passes=1 blocks=4096 cells]
 //! ```
+//!
+//! A step on a GPU names the copies of each of its blocks (`moves=`, task 9.6): blocks
+//! live on the host between steps, so the next step reads them there on any device.
 //!
 //! JSON: `{"logical": [...], "optimized": {"device": {...}, "outputs": [...], "nodes":
 //! [...]}}`, the entries in the text's order, with the keys of [`LogicalEntry`],
@@ -121,6 +125,10 @@ pub struct OptimizedEntry {
     /// Why it does not run where the plan asked (`auto: no gpu kernel`), or cannot
     /// (`no kernel: KY-E501 when run`); `None` when it runs as asked.
     pub device_note: Option<&'static str>,
+    /// The route of each block between the host and the GPU it runs on
+    /// (`cpu->metal->cpu`, task 9.6; each map of a fused pass makes this round
+    /// trip); `None` for a step on the CPU.
+    pub moves: Option<String>,
     /// Its passes over its input's blocks (statistics passes plus the apply pass).
     pub passes: u32,
     /// Passes over all of its input's blocks before it outputs anything.
@@ -184,6 +192,7 @@ impl Explain {
                     origin: node.origin().iter().map(|id| id.0).collect(),
                     device: execution.placement().name(),
                     device_note: execution.placement().note(),
+                    moves: execution.placement().moves().map(|moves| moves.to_string()),
                     passes: execution.passes(),
                     statistics_passes: execution.statistics_passes(),
                     apply_pass: execution.apply_pass(),
@@ -340,6 +349,9 @@ impl fmt::Display for Explain {
             )?;
             if let Some(note) = entry.device_note {
                 write!(formatter, " ({note})")?;
+            }
+            if let Some(moves) = &entry.moves {
+                write!(formatter, " moves={moves}")?;
             }
             write!(formatter, " passes={}", entry.passes)?;
             if entry.statistics_passes > 0 {
