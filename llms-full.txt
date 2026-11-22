@@ -2787,6 +2787,11 @@ Taken from ``Atlas.embedding(name)``. It reads nothing: ``names()``, ``schema()`
 and ``estimate()`` answer from metadata, and the terminals ``to_numpy()`` and
 ``to_torch(device=...)`` run the plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing (R8). It has no method that changes it or the plan (R2).
 
+It speaks the DLPack protocol (task 9.5): ``torch.from_dlpack(embedding)`` or
+``numpy.from_dlpack(embedding)`` runs the plan with the default arguments (as
+``to_numpy()``) and takes the result without a copy. Use ``to_numpy`` or
+``to_torch`` to pass ``memory_limit``, ``threads`` or ``progress``.
+
 Examples
 --------
 >>> scan(store_with_members).embedding("X_pca")
@@ -2906,10 +2911,11 @@ Embedding.to_torch(*, device: str, memory_limit: str | int | None = None, thread
 
 Run the plan and return the embedding as a PyTorch tensor on ``device``.
 
-As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: on the CPU the
-tensor shares the new array's memory (no further copy); any other device gets
-one more copy, from the host. A tensor made on the device without the host
-copy (DLPack) is task 9.5. Needs ``torch`` installed.
+As ``to_numpy``, then ``torch.from_dlpack(array).to(device=device)`` (task
+9.5): on the CPU the tensor shares the memory kyto read the embedding into,
+through DLPack (no further copy); any other device gets one more copy, from the
+host, made by PyTorch (kyto's results are on the host). Needs ``torch``
+installed.
 
 Parameters
 ----------
@@ -2943,6 +2949,10 @@ NotImplementedYetError
     ``KY-E601``: the plan has a step the executor does not run yet.
 ModuleNotFoundError
     ``torch`` is not installed.
+RuntimeError
+    PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+    ``device`` it does not know or that is not available, checked before the
+    plan runs.
 
 Examples
 --------
@@ -3299,6 +3309,66 @@ array([[5, 0, 1],
 Traceback (most recent call last):
 ...
 kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
+
+### Matrix.to_torch
+
+```python
+Matrix.to_torch(*, device: str, max_bytes: int, memory_limit: str | int | None = None, threads: int | None = None, progress: Callable[[int, int], object] | None = None) -> Any
+```
+
+Run the plan and return the matrix as a dense PyTorch tensor on ``device``, if
+it fits.
+
+As ``to_dense``, then ``torch.from_dlpack(array).to(device=device)`` (task 9.5):
+on the CPU the tensor shares the memory kyto densified into, through DLPack (no
+further copy); any other device gets one more copy, from the host, made by
+PyTorch (kyto's results are on the host). ``max_bytes`` is required as for
+``to_dense`` (R8). Needs ``torch`` installed.
+
+Parameters
+----------
+device : str
+    A device PyTorch accepts, such as ``"cpu"``, ``"cuda"``, ``"cuda:1"`` or
+    ``"mps"``. Required (R7: the device is always an argument).
+max_bytes : int
+    The largest array, in bytes, the caller accepts, as ``to_dense`` takes it.
+memory_limit : str or int or None, default=None
+    The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    the result is held in memory besides.
+threads : int or None, default=None
+    Threads that run the plan; ``None`` for one per CPU core. The result does
+    not depend on it (R11).
+progress : callable or None, default=None
+    Called as ``progress(done, total)`` on the calling thread while the plan
+    runs; never for a plain ``scan``, which runs nothing.
+
+Returns
+-------
+torch.Tensor
+    Cells x genes in the layer's stored dtype (``torch.float32`` or
+    ``torch.uint32``), on ``device``; a copy the caller owns (R2).
+
+Raises
+------
+MemoryLimitError
+    ``KY-E402``: the array is larger than ``max_bytes``, or cannot be
+    allocated. ``KY-E401``: the plan cannot run within ``memory_limit``.
+PlanError
+    ``KY-E215``: a ``max_bytes`` that is not an int of 0 or more, or a
+    ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+NotImplementedYetError
+    ``KY-E601``: the plan has a step the executor does not run yet.
+ModuleNotFoundError
+    ``torch`` is not installed.
+RuntimeError
+    PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+    ``device`` it does not know or that is not available, checked before the
+    plan runs.
+
+Examples
+--------
+>>> scan(store).layer("counts").to_torch(device="cpu", max_bytes=1024).shape  # doctest: +SKIP
+torch.Size([2, 3])
 
 ### Modality
 

@@ -5,10 +5,14 @@
 //! `schema.json`, format.md §8, as new dicts and lists) and `estimate()` to Python; give
 //! each handle its fixed `to_*` terminals (task 7.3): they run the plan into a store
 //! (`materialize.rs`; a bare scan is read in place), read the member and hand it over
-//! as a new Polars, NumPy or SciPy object (`handoff.rs`). Every handle keeps the
-//! temporary store of a `collect()`ed `Atlas` alive (7.2 Open (4)).
+//! as a new Polars, NumPy or SciPy object (`handoff.rs`), or a PyTorch tensor through
+//! DLPack (task 9.5). An `Embedding`, dense by nature, also speaks the DLPack protocol
+//! (`__dlpack__`, `__dlpack_device__`), a terminal for `torch.from_dlpack` and
+//! `numpy.from_dlpack`. Every handle keeps the temporary store of a `collect()`ed
+//! `Atlas` alive (7.2 Open (4)).
 //! Does not: read data outside the terminals, or expose `__getitem__`,
-//! `.X`, `obs`, `var` (R4) or `__array__` (no implicit dense array, R8).
+//! `.X`, `obs`, `var` (R4), or `__array__` or `__dlpack__` on a `Matrix` (no implicit
+//! dense array, R8: its dense output takes `max_bytes`).
 
 use std::sync::Arc;
 
@@ -536,6 +540,39 @@ impl PyMatrix {
         })
         .map_err(|error: KytoError| to_py_err(py, &error))
     }
+
+    /// Run the plan and densify the layer into a new NumPy array within `max_bytes`
+    /// (R8), for `to_dense` and `to_torch`: refused (`KY-E402`) before the plan runs
+    /// when the size is known from metadata, else before the layer is read.
+    fn dense<'py>(
+        &self,
+        py: Python<'py>,
+        method: &str,
+        max_bytes: &Bound<'_, PyAny>,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let max_bytes = crate::chain::integer(py, method, "max_bytes", max_bytes, 0)?;
+        let estimate = self.handle.estimate();
+        if let (Some(rows), Some(columns), Some(bytes)) =
+            (estimate.n_rows, estimate.n_columns, estimate.dense_bytes)
+            && bytes > u128::from(max_bytes)
+        {
+            let error = handoff::dense_too_large(
+                method,
+                rows,
+                columns,
+                bytes,
+                format!("max_bytes is {max_bytes}"),
+            );
+            return Err(to_py_err(py, &error));
+        }
+        match self.read(py, method, Some(max_bytes), memory_limit, threads, progress)? {
+            Layer::Float32(matrix) => handoff::to_dense(py, method, &matrix, max_bytes),
+            Layer::Uint32(matrix) => handoff::to_dense(py, method, &matrix, max_bytes),
+        }
+    }
 }
 
 #[gen_stub_pymethods]
@@ -715,26 +752,92 @@ impl PyMatrix {
         threads: Option<&Bound<'_, PyAny>>,
         progress: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        const METHOD: &str = "Matrix.to_dense";
-        let max_bytes = crate::chain::integer(py, METHOD, "max_bytes", max_bytes, 0)?;
-        let estimate = self.handle.estimate();
-        if let (Some(rows), Some(columns), Some(bytes)) =
-            (estimate.n_rows, estimate.n_columns, estimate.dense_bytes)
-            && bytes > u128::from(max_bytes)
-        {
-            let error = handoff::dense_too_large(
-                METHOD,
-                rows,
-                columns,
-                bytes,
-                format!("max_bytes is {max_bytes}"),
-            );
-            return Err(to_py_err(py, &error));
-        }
-        match self.read(py, METHOD, Some(max_bytes), memory_limit, threads, progress)? {
-            Layer::Float32(matrix) => handoff::to_dense(py, METHOD, &matrix, max_bytes),
-            Layer::Uint32(matrix) => handoff::to_dense(py, METHOD, &matrix, max_bytes),
-        }
+        self.dense(
+            py,
+            "Matrix.to_dense",
+            max_bytes,
+            memory_limit,
+            threads,
+            progress,
+        )
+    }
+
+    /// Run the plan and return the matrix as a dense PyTorch tensor on ``device``, if
+    /// it fits.
+    ///
+    /// As ``to_dense``, then ``torch.from_dlpack(array).to(device=device)`` (task 9.5):
+    /// on the CPU the tensor shares the memory kyto densified into, through DLPack (no
+    /// further copy); any other device gets one more copy, from the host, made by
+    /// PyTorch (kyto's results are on the host). ``max_bytes`` is required as for
+    /// ``to_dense`` (R8). Needs ``torch`` installed.
+    ///
+    /// Parameters
+    /// ----------
+    /// device : str
+    ///     A device PyTorch accepts, such as ``"cpu"``, ``"cuda"``, ``"cuda:1"`` or
+    ///     ``"mps"``. Required (R7: the device is always an argument).
+    /// max_bytes : int
+    ///     The largest array, in bytes, the caller accepts, as ``to_dense`` takes it.
+    /// memory_limit : str or int or None, default=None
+    ///     The most memory running the plan may use, as ``Atlas.collect`` takes it;
+    ///     the result is held in memory besides.
+    /// threads : int or None, default=None
+    ///     Threads that run the plan; ``None`` for one per CPU core. The result does
+    ///     not depend on it (R11).
+    /// progress : callable or None, default=None
+    ///     Called as ``progress(done, total)`` on the calling thread while the plan
+    ///     runs; never for a plain ``scan``, which runs nothing.
+    ///
+    /// Returns
+    /// -------
+    /// torch.Tensor
+    ///     Cells x genes in the layer's stored dtype (``torch.float32`` or
+    ///     ``torch.uint32``), on ``device``; a copy the caller owns (R2).
+    ///
+    /// Raises
+    /// ------
+    /// MemoryLimitError
+    ///     ``KY-E402``: the array is larger than ``max_bytes``, or cannot be
+    ///     allocated. ``KY-E401``: the plan cannot run within ``memory_limit``.
+    /// PlanError
+    ///     ``KY-E215``: a ``max_bytes`` that is not an int of 0 or more, or a
+    ///     ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    /// ModuleNotFoundError
+    ///     ``torch`` is not installed.
+    /// RuntimeError
+    ///     PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+    ///     ``device`` it does not know or that is not available, checked before the
+    ///     plan runs.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store).layer("counts").to_torch(device="cpu", max_bytes=1024).shape  # doctest: +SKIP
+    /// torch.Size([2, 3])
+    #[pyo3(signature = (*, device, max_bytes, memory_limit = None, threads = None, progress = None))]
+    fn to_torch<'py>(
+        &self,
+        py: Python<'py>,
+        device: &str,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] max_bytes: &Bound<
+            '_,
+            PyAny,
+        >,
+        memory_limit: Option<&Bound<'_, PyAny>>,
+        threads: Option<&Bound<'_, PyAny>>,
+        progress: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let torch = handoff::torch_on(py, device)?;
+        let array = self.dense(
+            py,
+            "Matrix.to_torch",
+            max_bytes,
+            memory_limit,
+            threads,
+            progress,
+        )?;
+        handoff::to_torch(py, &torch, array, device)
     }
 
     /// One line, from metadata only.
@@ -758,6 +861,11 @@ impl PyMatrix {
 /// Taken from ``Atlas.embedding(name)``. It reads nothing: ``names()``, ``schema()``
 /// and ``estimate()`` answer from metadata, and the terminals ``to_numpy()`` and
 /// ``to_torch(device=...)`` run the plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing (R8). It has no method that changes it or the plan (R2).
+///
+/// It speaks the DLPack protocol (task 9.5): ``torch.from_dlpack(embedding)`` or
+/// ``numpy.from_dlpack(embedding)`` runs the plan with the default arguments (as
+/// ``to_numpy()``) and takes the result without a copy. Use ``to_numpy`` or
+/// ``to_torch`` to pass ``memory_limit``, ``threads`` or ``progress``.
 ///
 /// Examples
 /// --------
@@ -917,10 +1025,11 @@ impl PyEmbedding {
 
     /// Run the plan and return the embedding as a PyTorch tensor on ``device``.
     ///
-    /// As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: on the CPU the
-    /// tensor shares the new array's memory (no further copy); any other device gets
-    /// one more copy, from the host. A tensor made on the device without the host
-    /// copy (DLPack) is task 9.5. Needs ``torch`` installed.
+    /// As ``to_numpy``, then ``torch.from_dlpack(array).to(device=device)`` (task
+    /// 9.5): on the CPU the tensor shares the memory kyto read the embedding into,
+    /// through DLPack (no further copy); any other device gets one more copy, from the
+    /// host, made by PyTorch (kyto's results are on the host). Needs ``torch``
+    /// installed.
     ///
     /// Parameters
     /// ----------
@@ -954,6 +1063,10 @@ impl PyEmbedding {
     ///     ``KY-E601``: the plan has a step the executor does not run yet.
     /// ModuleNotFoundError
     ///     ``torch`` is not installed.
+    /// RuntimeError
+    ///     PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+    ///     ``device`` it does not know or that is not available, checked before the
+    ///     plan runs.
     ///
     /// Examples
     /// --------
@@ -969,12 +1082,98 @@ impl PyEmbedding {
         threads: Option<&Bound<'_, PyAny>>,
         progress: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let torch = handoff::torch_on(py, device)?;
         let array = self.array(py, "Embedding.to_torch", memory_limit, threads, progress)?;
+        handoff::to_torch(py, &torch, array, device)
+    }
+
+    /// Run the plan and export the embedding as a DLPack capsule (task 9.5).
+    ///
+    /// The DLPack protocol's producer side, called by ``torch.from_dlpack(embedding)``
+    /// or ``numpy.from_dlpack(embedding)``, not by hand. It runs the plan as
+    /// ``to_numpy()`` with the default arguments and exports that new array through
+    /// NumPy's ``__dlpack__``: the consumer takes over the memory kyto read the
+    /// embedding into, without a copy. Each call runs the plan again.
+    ///
+    /// Parameters
+    /// ----------
+    /// stream : int or None, default=None
+    ///     The consumer's stream; ``None`` on the CPU, where kyto's results are.
+    /// max_version : tuple of (int, int) or None, default=None
+    ///     The highest DLPack version the consumer reads; ``None`` for the legacy
+    ///     unversioned capsule.
+    /// dl_device : tuple of (int, int) or None, default=None
+    ///     The device the consumer asks for; only the CPU, ``(1, 0)``, is accepted.
+    /// copy : bool or None, default=None
+    ///     ``True`` to force a copy, ``False`` to refuse one, ``None`` for none
+    ///     unless needed (never on the CPU).
+    ///
+    /// Returns
+    /// -------
+    /// CapsuleType
+    ///     A DLPack capsule (``"dltensor"``, or ``"dltensor_versioned"`` when
+    ///     ``max_version`` allows 1.0) of a rows x components, C-order array in the
+    ///     stored dtype on the CPU; the consumer owns it (R2).
+    ///
+    /// Raises
+    /// ------
+    /// BufferError
+    ///     ``dl_device`` names a device other than the CPU.
+    /// MemoryLimitError
+    ///     ``KY-E401``: the plan cannot run within the default memory limit.
+    /// NotImplementedYetError
+    ///     ``KY-E601``: the plan has a step the executor does not run yet.
+    ///
+    /// Examples
+    /// --------
+    /// >>> import numpy as np
+    /// >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+    /// >>> np.from_dlpack(atlas.embedding("X_pca")).shape
+    /// (2, 1)
+    #[pyo3(signature = (*, stream = None, max_version = None, dl_device = None, copy = None))]
+    #[gen_stub(override_return_type(type_repr = "typing_extensions.CapsuleType", imports = ("typing_extensions",)))]
+    fn __dlpack__<'py>(
+        &self,
+        py: Python<'py>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))] stream: Option<
+            &Bound<'_, PyAny>,
+        >,
+        #[gen_stub(override_type(type_repr = "tuple[builtins.int, builtins.int] | None", imports = ()))]
+        max_version: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "tuple[builtins.int, builtins.int] | None", imports = ()))]
+        dl_device: Option<&Bound<'_, PyAny>>,
+        copy: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let array = self.array(py, "Embedding.__dlpack__", None, None, None)?;
+        // Only the arguments the consumer gave, so NumPy applies its own defaults.
         let keywords = PyDict::new(py);
-        keywords.set_item("device", device)?;
-        py.import("torch")?
-            .call_method1("from_numpy", (array,))?
-            .call_method("to", (), Some(&keywords))
+        keywords.set_item("stream", stream)?;
+        for (name, value) in [("max_version", max_version), ("dl_device", dl_device)] {
+            if let Some(value) = value {
+                keywords.set_item(name, value)?;
+            }
+        }
+        if let Some(copy) = copy {
+            keywords.set_item("copy", copy)?;
+        }
+        array.call_method("__dlpack__", (), Some(&keywords))
+    }
+
+    /// The device of the DLPack export: the CPU, from metadata only (task 9.5).
+    ///
+    /// Returns
+    /// -------
+    /// tuple of (int, int)
+    ///     ``(1, 0)``: DLPack's ``kDLCPU`` and device 0. kyto's results are on the
+    ///     host, also for a plan whose steps ran on a GPU.
+    ///
+    /// Examples
+    /// --------
+    /// >>> scan(store_with_members).embedding("X_pca").__dlpack_device__()
+    /// (1, 0)
+    fn __dlpack_device__(&self) -> (u8, u8) {
+        // DLPack's `DLDeviceType::kDLCPU` is 1.
+        (1, 0)
     }
 
     /// One line, from metadata only.

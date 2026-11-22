@@ -26,6 +26,7 @@ import numpy
 import numpy.typing
 import polars
 import scipy.sparse
+import typing_extensions
 
 from kyto.dtypes import Boolean, ExprDtype, Numeric, String, Unknown
 
@@ -2340,6 +2341,11 @@ class Embedding:
     and ``estimate()`` answer from metadata, and the terminals ``to_numpy()`` and
     ``to_torch(device=...)`` run the plan (task 7.3). An embedding is stored dense, so ``to_numpy()`` densifies nothing (R8). It has no method that changes it or the plan (R2).
 
+    It speaks the DLPack protocol (task 9.5): ``torch.from_dlpack(embedding)`` or
+    ``numpy.from_dlpack(embedding)`` runs the plan with the default arguments (as
+    ``to_numpy()``) and takes the result without a copy. Use ``to_numpy`` or
+    ``to_torch`` to pass ``memory_limit``, ``threads`` or ``progress``.
+
     Examples
     --------
     >>> scan(store_with_members).embedding("X_pca")
@@ -2458,10 +2464,11 @@ class Embedding:
         r"""
         Run the plan and return the embedding as a PyTorch tensor on ``device``.
 
-        As ``to_numpy``, then ``torch.from_numpy(array).to(device)``: on the CPU the
-        tensor shares the new array's memory (no further copy); any other device gets
-        one more copy, from the host. A tensor made on the device without the host
-        copy (DLPack) is task 9.5. Needs ``torch`` installed.
+        As ``to_numpy``, then ``torch.from_dlpack(array).to(device=device)`` (task
+        9.5): on the CPU the tensor shares the memory kyto read the embedding into,
+        through DLPack (no further copy); any other device gets one more copy, from the
+        host, made by PyTorch (kyto's results are on the host). Needs ``torch``
+        installed.
 
         Parameters
         ----------
@@ -2495,12 +2502,84 @@ class Embedding:
             ``KY-E601``: the plan has a step the executor does not run yet.
         ModuleNotFoundError
             ``torch`` is not installed.
+        RuntimeError
+            PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+            ``device`` it does not know or that is not available, checked before the
+            plan runs.
 
         Examples
         --------
         >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
         >>> atlas.embedding("X_pca").to_torch(device="cpu").shape  # doctest: +SKIP
         torch.Size([2, 1])
+        """
+    def __dlpack__(
+        self,
+        *,
+        stream: builtins.int | None = None,
+        max_version: tuple[builtins.int, builtins.int] | None = None,
+        dl_device: tuple[builtins.int, builtins.int] | None = None,
+        copy: builtins.bool | None = None,
+    ) -> typing_extensions.CapsuleType:
+        r"""
+        Run the plan and export the embedding as a DLPack capsule (task 9.5).
+
+        The DLPack protocol's producer side, called by ``torch.from_dlpack(embedding)``
+        or ``numpy.from_dlpack(embedding)``, not by hand. It runs the plan as
+        ``to_numpy()`` with the default arguments and exports that new array through
+        NumPy's ``__dlpack__``: the consumer takes over the memory kyto read the
+        embedding into, without a copy. Each call runs the plan again.
+
+        Parameters
+        ----------
+        stream : int or None, default=None
+            The consumer's stream; ``None`` on the CPU, where kyto's results are.
+        max_version : tuple of (int, int) or None, default=None
+            The highest DLPack version the consumer reads; ``None`` for the legacy
+            unversioned capsule.
+        dl_device : tuple of (int, int) or None, default=None
+            The device the consumer asks for; only the CPU, ``(1, 0)``, is accepted.
+        copy : bool or None, default=None
+            ``True`` to force a copy, ``False`` to refuse one, ``None`` for none
+            unless needed (never on the CPU).
+
+        Returns
+        -------
+        CapsuleType
+            A DLPack capsule (``"dltensor"``, or ``"dltensor_versioned"`` when
+            ``max_version`` allows 1.0) of a rows x components, C-order array in the
+            stored dtype on the CPU; the consumer owns it (R2).
+
+        Raises
+        ------
+        BufferError
+            ``dl_device`` names a device other than the CPU.
+        MemoryLimitError
+            ``KY-E401``: the plan cannot run within the default memory limit.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> atlas = scan(store).log1p(layer="counts", into="log1p").pca(layer="log1p", into="X_pca", n_components=1, seed=0)
+        >>> np.from_dlpack(atlas.embedding("X_pca")).shape
+        (2, 1)
+        """
+    def __dlpack_device__(self) -> tuple[builtins.int, builtins.int]:
+        r"""
+        The device of the DLPack export: the CPU, from metadata only (task 9.5).
+
+        Returns
+        -------
+        tuple of (int, int)
+            ``(1, 0)``: DLPack's ``kDLCPU`` and device 0. kyto's results are on the
+            host, also for a plan whose steps ran on a GPU.
+
+        Examples
+        --------
+        >>> scan(store_with_members).embedding("X_pca").__dlpack_device__()
+        (1, 0)
         """
 
 @typing.final
@@ -2844,6 +2923,73 @@ class Matrix:
         Traceback (most recent call last):
         ...
         kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
+        """
+    def to_torch(
+        self,
+        *,
+        device: builtins.str,
+        max_bytes: builtins.int,
+        memory_limit: builtins.str | builtins.int | None = None,
+        threads: builtins.int | None = None,
+        progress: collections.abc.Callable[
+            [builtins.int, builtins.int], builtins.object
+        ]
+        | None = None,
+    ) -> typing.Any:
+        r"""
+        Run the plan and return the matrix as a dense PyTorch tensor on ``device``, if
+        it fits.
+
+        As ``to_dense``, then ``torch.from_dlpack(array).to(device=device)`` (task 9.5):
+        on the CPU the tensor shares the memory kyto densified into, through DLPack (no
+        further copy); any other device gets one more copy, from the host, made by
+        PyTorch (kyto's results are on the host). ``max_bytes`` is required as for
+        ``to_dense`` (R8). Needs ``torch`` installed.
+
+        Parameters
+        ----------
+        device : str
+            A device PyTorch accepts, such as ``"cpu"``, ``"cuda"``, ``"cuda:1"`` or
+            ``"mps"``. Required (R7: the device is always an argument).
+        max_bytes : int
+            The largest array, in bytes, the caller accepts, as ``to_dense`` takes it.
+        memory_limit : str or int or None, default=None
+            The most memory running the plan may use, as ``Atlas.collect`` takes it;
+            the result is held in memory besides.
+        threads : int or None, default=None
+            Threads that run the plan; ``None`` for one per CPU core. The result does
+            not depend on it (R11).
+        progress : callable or None, default=None
+            Called as ``progress(done, total)`` on the calling thread while the plan
+            runs; never for a plain ``scan``, which runs nothing.
+
+        Returns
+        -------
+        torch.Tensor
+            Cells x genes in the layer's stored dtype (``torch.float32`` or
+            ``torch.uint32``), on ``device``; a copy the caller owns (R2).
+
+        Raises
+        ------
+        MemoryLimitError
+            ``KY-E402``: the array is larger than ``max_bytes``, or cannot be
+            allocated. ``KY-E401``: the plan cannot run within ``memory_limit``.
+        PlanError
+            ``KY-E215``: a ``max_bytes`` that is not an int of 0 or more, or a
+            ``memory_limit``, ``threads`` or ``progress`` that is not accepted.
+        NotImplementedYetError
+            ``KY-E601``: the plan has a step the executor does not run yet.
+        ModuleNotFoundError
+            ``torch`` is not installed.
+        RuntimeError
+            PyTorch's own error (or ``AssertionError``, as PyTorch raises it) for a
+            ``device`` it does not know or that is not available, checked before the
+            plan runs.
+
+        Examples
+        --------
+        >>> scan(store).layer("counts").to_torch(device="cpu", max_bytes=1024).shape  # doctest: +SKIP
+        torch.Size([2, 3])
         """
 
 @typing.final

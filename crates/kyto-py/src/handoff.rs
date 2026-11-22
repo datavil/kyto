@@ -14,9 +14,12 @@
 //! only within `max_bytes` (R8, `KY-E402`).
 //! Every object returned is new and owned by the caller alone: nothing kyto keeps
 //! shares its memory (R2).
-//! Does not: hand over a GPU tensor (DLPack, 9.5), use `pyo3-polars` (it pins an older
-//! pyo3; the C stream interface it uses is called directly here), or stream: each
-//! terminal holds its whole result in memory.
+//! Hand such an array to PyTorch through DLPack (task 9.5, `to_torch`): the CPU tensor
+//! shares the array's memory, the one buffer Rust filled.
+//! Does not: hand over memory on a GPU (kyto's results are on the host, so any other
+//! device gets one copy, made by PyTorch), use `pyo3-polars` (it pins an older pyo3;
+//! the C stream interface it uses is called directly here), or stream: each terminal
+//! holds its whole result in memory.
 
 use kyto_error::KytoError;
 use kyto_store::CsrMatrix;
@@ -231,6 +234,35 @@ pub fn to_array2<'py, T: Element>(
         unreachable!("a stored embedding holds rows x width values (kyto-store checks it)")
     };
     Ok(PyArray2::from_owned_array(py, array).into_any())
+}
+
+/// The `torch` module, once `device` is checked (task 9.5): `torch.empty(0,
+/// device=device)` raises PyTorch's own error for a device it does not know or that
+/// is not available, so a `to_torch` fails before its plan runs. Raises
+/// `ModuleNotFoundError` without `torch`.
+pub fn torch_on<'py>(py: Python<'py>, device: &str) -> PyResult<Bound<'py, PyModule>> {
+    let torch = py.import("torch")?;
+    let keywords = PyDict::new(py);
+    keywords.set_item("device", device)?;
+    torch.call_method("empty", (0,), Some(&keywords))?;
+    Ok(torch)
+}
+
+/// The NumPy `array` (a new array from this module) as a PyTorch tensor on `device`
+/// (task 9.5), with `torch` from `torch_on`: `torch.from_dlpack(array)` makes a CPU
+/// tensor that shares the array's memory (no copy), then `.to(device=device)` returns
+/// that same tensor on the CPU and one copy on any other device.
+pub fn to_torch<'py>(
+    py: Python<'py>,
+    torch: &Bound<'py, PyModule>,
+    array: Bound<'py, PyAny>,
+    device: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let keywords = PyDict::new(py);
+    keywords.set_item("device", device)?;
+    torch
+        .call_method1("from_dlpack", (array,))?
+        .call_method("to", (), Some(&keywords))
 }
 
 /// A graph's edges as a frame: `source` and `target` cell positions (`UInt32`) and

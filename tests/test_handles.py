@@ -41,7 +41,7 @@ HANDLES: dict[str, type] = {
 INSPECTION = {"names", "schema", "estimate"}
 TERMINALS = {
     "Table": {"to_polars", "lazy"},
-    "Matrix": {"to_scipy", "to_dense"},
+    "Matrix": {"to_scipy", "to_dense", "to_torch"},
     "Embedding": {"to_numpy", "to_torch"},
     "Graph": {"to_scipy", "to_edges"},
     "Modality": set[str](),
@@ -49,6 +49,10 @@ TERMINALS = {
 # The only dunders a handle defines. No __setattr__/__delattr__/__setitem__/
 # __delitem__ (mutation), no __getitem__ (R4), no __array__ (R8), no __iter__.
 ALLOWED_DUNDERS = {"__repr__"}
+# The DLPack protocol (task 9.5): only on an Embedding, which is dense by nature. A
+# Matrix has none: its dense output takes max_bytes (R8).
+DLPACK = {"__dlpack__", "__dlpack_device__"}
+STUB_DUNDERS = {name: DLPACK if name == "Embedding" else set[str]() for name in HANDLES}
 
 
 def _allowed_public(name: str) -> bool:
@@ -263,7 +267,7 @@ def test_stub_handles_expose_no_mutation() -> None:
         dunders = members - public
         assert all(_allowed_public(member) for member in public), (name, public)
         assert public == INSPECTION | TERMINALS[name], name
-        assert dunders <= ALLOWED_DUNDERS, (name, dunders)
+        assert dunders == STUB_DUNDERS[name], (name, dunders)
 
 
 def _decorator_names_of_class(node: ast.ClassDef) -> list[str]:
@@ -288,7 +292,10 @@ def test_runtime_handles_match_stub() -> None:
         with pytest.raises(TypeError, match="cannot create"):
             cls()
         assert not hasattr(cls, "__dict__") or "__dict__" not in vars(cls)
-        for absent in ("X", "obs", "var", "__getitem__", "__array__", "__setitem__"):
+        absent_members = ("X", "obs", "var", "__getitem__", "__array__", "__setitem__")
+        if name != "Embedding":
+            absent_members = (*absent_members, "__dlpack__", "__dlpack_device__")
+        for absent in absent_members:
             assert not hasattr(cls, absent), f"{name}.{absent}"
 
 

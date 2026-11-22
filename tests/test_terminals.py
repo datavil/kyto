@@ -40,6 +40,7 @@ STUB_RETURNS = {
     ("Matrix", "to_scipy"): "scipy.sparse.csr_matrix",
     ("Matrix", "to_dense"): "numpy.typing.NDArray[numpy.float32 | numpy.uint32]",
     ("Embedding", "to_numpy"): "numpy.typing.NDArray[numpy.float32 | numpy.float64]",
+    ("Matrix", "to_torch"): "typing.Any",
     ("Embedding", "to_torch"): "typing.Any",
     ("Graph", "to_scipy"): "scipy.sparse.csr_matrix",
     ("Graph", "to_edges"): "polars.DataFrame",

@@ -1285,6 +1285,19 @@ Traceback (most recent call last):
 kyto.errors.MemoryLimitError: KY-E402: 'Matrix.to_dense' cannot allocate a dense 2 x 3 array of 24 bytes: max_bytes is 8...
 ```
 
+### Matrix.to_torch
+
+```python
+Matrix.to_torch(*, device: str, max_bytes: int, memory_limit: str | int | None = None, threads: int | None = None, progress: Callable[[int, int], object] | None = None) -> Any
+```
+
+Run the plan and return the matrix as a dense PyTorch tensor on ``device``, if it fits.
+
+```python
+>>> scan(store).layer("counts").to_torch(device="cpu", max_bytes=1024).shape  # doctest: +SKIP
+torch.Size([2, 3])
+```
+
 ### Modality
 
 ```python

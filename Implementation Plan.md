@@ -100,6 +100,7 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14, 6.17)
   - Depends: 9.5, 7.3
   - Done when: a notebook example runs scvi on a kyto atlas and stores the latent space back.
   - Parity: none yet: the exports have no scanpy counterpart; the task adds a round-trip test (kyto -> NumPy/DLPack -> `with_embedding`, bit for bit) and, for scvi/Harmony outputs, a comparison with the same tool run on scanpy's AnnData, its tolerances in [tolerances](tests/parity/tolerances.toml).
+  - Note (9.5): the DLPack side exists: `Embedding.__dlpack__` (`torch.from_dlpack(embedding)`, `numpy.from_dlpack`), `Embedding.to_torch(device=)` and `Matrix.to_torch(device=, max_bytes=)`, all copy-free on the CPU; a `Matrix` has no `__dlpack__` (R8), its `to_dense` array speaks DLPack through NumPy. Harmony and scvi-tools take NumPy or torch tensors, so 6.11 needs no new export, only the hooks.
 - [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.
@@ -131,7 +132,7 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Im
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-Done (9.1, 9.2, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+Done (9.1, 9.2, 9.5, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
 
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
@@ -139,10 +140,6 @@ Done (9.1, 9.2, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20
 - [ ] **9.4 GPU neighbours.** Tiled brute-force distance via GEMM plus top-k selection.
   - Depends: 9.3, 6.6
   - Done when: results equal CPU exact mode.
-- [ ] **9.5 DLPack export.** `to_torch(device=)` and `__dlpack__` on embeddings and dense matrices, copy-free on the same device.
-  - Depends: 7.5, 9.1
-  - Done when: a torch tensor from kyto shares the device pointer (test).
-  - Note (7.3): `Embedding.to_torch(device=)` exists and copies through NumPy (`torch.from_numpy(array).to(device)`); no `__dlpack__` and no `Matrix.to_torch` yet.
 - [ ] **9.7 GPU CI.** GPU tests on a self-hosted runner; skipped with a visible notice elsewhere.
   - Depends: 1.4, 9.2
   - Done when: the GPU job runs on every PR that touches `kyto-gpu` or `kyto-exec`.
@@ -151,6 +148,9 @@ Done (9.1, 9.2, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20
   - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
 - [ ] **9.10 QC metrics on the GPU.** 9.2's `row_sums` and `row_nnz` CubeCL kernels (`kyto_gpu::DeviceKernels`) are tested against the CPU but no plan step dispatches to them: the QC metrics (`total_counts`, `genes_detected`, `percent_counts_in`) are leaves of cell expressions inside `with_cells` and `filter_cells`, which mix metadata and matrix work in one node. Decide how such a node is placed (the whole node, or only its matrix leaves), register the method in `CUDA_KERNELS`/`WGPU_KERNELS`, and dispatch in `qc.rs`. (added Nov 22, 2026, by 9.2)
   - Depends: 9.2
+- [ ] **9.11 DLPack from device memory.** Since 9.5, `to_torch` and `__dlpack__` hand over host memory (`kDLCPU`): kyto's results are read back to the host, so `to_torch(device="cuda")` copies once, through PyTorch. Once a step keeps its output on the GPU (9.3, 12.2), export it as a `kDLCUDA` (or ROCm) DLPack tensor from `kyto-gpu`'s buffer, honouring the consumer's `stream`, so a CUDA tensor shares kyto's device pointer. Also decide whether `torch` joins the dev dependencies (today the torch tests of `tests/test_dlpack.py` skip without it; 9.5 ran them with `uv run --with torch`). (added Nov 22, 2026, by 9.5)
+  - Depends: 9.3, 9.5
+  - Done when: on a CUDA machine, a tensor from `to_torch(device="cuda")` of a GPU-computed embedding has the `data_ptr()` of kyto's device buffer (test, skipped visibly elsewhere).
   - Done when: `with_cells(total_counts=...)` on a GPU equals the CPU column (counts: the same bits; `float32` layers: 1e-6 relative), and `explain()` shows the step's device.
 
 ## 10. Testing, benchmarks, docs, release
