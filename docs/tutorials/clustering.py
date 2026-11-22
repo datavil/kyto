@@ -150,8 +150,8 @@ lap("filters")
 # %%
 preprocessed = (
     filtered.scrublet(batch_key="sample", seed=0)
-    .normalize_total(into="normalized")
-    .log1p(layer="normalized", into="log1p")
+    .normalize_total()
+    .log1p()
     .with_default_layer("log1p")
     .highly_variable_genes(n_top_genes=2000, batch_key="sample")
     .collect()
@@ -174,12 +174,10 @@ lap("scrublet, normalize, log1p, hvg")
 # %%
 resolutions = (0.02, 0.5, 2.0)
 plan = (
-    preprocessed.pca(
-        into="pca", n_components=50, seed=0, genes=gene_column("highly_variable")
-    )
-    .neighbors("pca")
-    .umap(into="umap", seed=0)
-    .leiden(into="leiden", seed=0)
+    preprocessed.pca(n_components=50, seed=0, genes=gene_column("highly_variable"))
+    .neighbors()
+    .umap(seed=0)
+    .leiden(seed=0)
 )
 for resolution in resolutions:
     plan = plan.leiden(

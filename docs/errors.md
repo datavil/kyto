@@ -46,7 +46,7 @@ Ranges:
 | `LayerDtypeError` | `TypeError` | A layer is read with a value dtype other than the one it stores. | [KY-E108](#ky-e108) |
 | `ExpressionError` | `TypeError` | An expression is given an operand, or used in a context, that it does not support. | [KY-E205](#ky-e205), [KY-E206](#ky-e206), [KY-E207](#ky-e207), [KY-E209](#ky-e209), [KY-E212](#ky-e212), [KY-E213](#ky-e213) |
 | `InputFileError` | `ValueError` | An input file given to convert has a format, encoding or value kyto cannot import. | [KY-E120](#ky-e120), [KY-E121](#ky-e121) |
-| `PlanError` | `ValueError` | A plan method is given an argument outside what it accepts, or cannot extend this plan. | [KY-E215](#ky-e215), [KY-E216](#ky-e216), [KY-E217](#ky-e217), [KY-E218](#ky-e218), [KY-E219](#ky-e219) |
+| `PlanError` | `ValueError` | A plan method is given an argument outside what it accepts, or cannot extend this plan. | [KY-E215](#ky-e215), [KY-E216](#ky-e216), [KY-E217](#ky-e217), [KY-E218](#ky-e218), [KY-E219](#ky-e219), [KY-E220](#ky-e220) |
 | `RunCancelledError` | `RuntimeError` | A run was cancelled before it finished (Ctrl-C, or its progress callback raised). | [KY-E503](#ky-e503) |
 | `NotImplementedYetError` | `NotImplementedError` | A documented method is not implemented yet in this kyto version; its task in the implementation plan adds it. | [KY-E601](#ky-e601) |
 
@@ -593,6 +593,19 @@ peek() is called on a plan whose cell table cannot be read from metadata alone.
 - Fields:
     - `step` (str): The plan method whose step reads data. Example: `with_cells`.
     - `member` (str): What it reads, as kind:name. Example: `layer:counts`.
+
+## KY-E220
+
+A step called without into= would write its default name, which the plan already has.
+
+- Class: `PlanError`
+- Message: `{method}() without into= writes the {kind} '{name}', but the plan already has a {kind} '{existing}'`
+- Hint: `pass into= with a new name (such as into='{name}_2'), or into='{existing}' to replace it`
+- Fields:
+    - `method` (str): The plan method called without into=. Example: `log1p`.
+    - `kind` (str): What the step writes: layer, embedding or cell column. Example: `layer`.
+    - `name` (str): The default name the step would write. Example: `log1p`.
+    - `existing` (str): The plan's member of that name (compared ignoring case). Example: `log1p`.
 
 ## KY-E301
 

@@ -11,9 +11,12 @@ Three differences explain most rows:
   once; the kyto ones add a step to a plan. `collect`, `sink_*`, `pull`, `select` and
   `to_*` run it.
 - **No in-place changes** (R2, R4). Every method returns a new plan, so there is no
-  `adata.copy()`. A step that makes a matrix names it with `into=` and reads one with
-  `layer=` (or the plan's default layer, `with_default_layer`), instead of overwriting
-  `.X`.
+  `adata.copy()`. A step that makes a matrix writes a new layer instead of
+  overwriting `.X`, named after the step (`normalized`, `log1p`, `scaled`) unless
+  `into=` names it, and a step given no `layer=` reads the layer the step before it
+  wrote (or the plan's default layer, `with_default_layer`). So scanpy's bare calls
+  are bare kyto calls too. The names are fixed when the plan is built (R6), and
+  `explain()` shows them.
 - **No hidden settings** (R7). Seeds, threads, devices and memory limits are arguments
   of the call that uses them: `seed=` has no default where the result is random, and
   there is no `sc.settings`.
@@ -52,21 +55,21 @@ plan at the end of this page.
 | AnnData / scanpy | kyto | Notes |
 | --- | --- | --- |
 | `adata.layers["counts"] = adata.X.copy()` | `atlas.with_default_layer("counts")` | Layers are never overwritten; the default layer is the one steps read when given no `layer=`. |
-| `sc.pp.normalize_total(adata, target_sum=1e4)` | `atlas.normalize_total(1e4, into="normalized")` | Writes a new layer. |
-| `sc.pp.log1p(adata)` | `atlas.log1p(layer="normalized", into="log1p")` | |
+| `sc.pp.normalize_total(adata, target_sum=1e4)` | `atlas.normalize_total(1e4)` | Writes the new layer `normalized` (`into=` names it otherwise). |
+| `sc.pp.log1p(adata)` | `atlas.log1p()` | Reads the layer the step before wrote, writes `log1p`; `layer=` and `into=` pick others. |
 | `sc.pp.highly_variable_genes(adata, n_top_genes=2000, batch_key="sample")` | `atlas.highly_variable_genes(n_top_genes=2000, batch_key="sample")` | Adds `highly_variable` and the flavour's statistics as gene columns. |
 | `adata[:, adata.var["highly_variable"]]` | `atlas.filter(gene_column("highly_variable"))` | |
-| `sc.pp.scale(adata, max_value=10)` | `atlas.scale(into="scaled", max_value=10)` | |
+| `sc.pp.scale(adata, max_value=10)` | `atlas.scale(max_value=10)` | Writes `scaled`. |
 
 ## Embeddings, graphs and clustering
 
 | AnnData / scanpy | kyto | Notes |
 | --- | --- | --- |
-| `sc.pp.pca(adata, n_comps=50)` | `atlas.pca(into="pca", n_components=50, seed=0)` | scanpy's default `mask_var="highly_variable"` is `genes=gene_column("highly_variable")`, never implicit. |
-| `sc.pp.neighbors(adata, n_neighbors=15)` | `atlas.neighbors("pca", n_neighbors=15)` | Names the embedding to read; writes the `distances` and `connectivities` graphs. |
-| `sc.tl.umap(adata)` | `atlas.umap(into="umap", seed=0)` | |
-| `sc.tl.leiden(adata, resolution=1.0)` | `atlas.leiden(resolution=1.0, seed=0, into="leiden")` | |
-| `sc.tl.louvain(adata)` | `atlas.louvain(seed=0, into="louvain")` | |
+| `sc.pp.pca(adata, n_comps=50)` | `atlas.pca(n_components=50, seed=0)` | scanpy's default `mask_var="highly_variable"` is `genes=gene_column("highly_variable")`, never implicit. |
+| `sc.pp.neighbors(adata, n_neighbors=15)` | `atlas.neighbors(n_neighbors=15)` | Searches the embedding the latest `pca` wrote, else `X_pca` (scanpy's `use_rep`; name another as the first argument); writes the `distances` and `connectivities` graphs. |
+| `sc.tl.umap(adata)` | `atlas.umap(seed=0)` | Writes `X_umap`. |
+| `sc.tl.leiden(adata, resolution=1.0)` | `atlas.leiden(resolution=1.0, seed=0)` | Writes the cell column `leiden`. |
+| `sc.tl.louvain(adata)` | `atlas.louvain(seed=0)` | Writes the cell column `louvain`. |
 | `sc.tl.rank_genes_groups(adata, "leiden", method="wilcoxon")` | `atlas.rank_genes_groups("leiden", method="wilcoxon")` | Returns a `pl.LazyFrame` (one row per group and gene) instead of filling `adata.uns`; `sc.get.rank_genes_groups_df` is its `collect()`. |
 
 ## Reading results
@@ -108,19 +111,13 @@ plan = (
     )
     .filter(cell_column("n_genes_by_counts") >= 1)
     .filter(qc.cells_detected() >= 1)
-    .normalize_total(1e4, into="normalized")
-    .log1p(layer="normalized", into="log1p")
-    .highly_variable_genes(layer="log1p", n_top_genes=2)
-    .pca(
-        layer="log1p",
-        into="pca",
-        n_components=1,
-        seed=0,
-        genes=gene_column("highly_variable"),
-    )
-    .neighbors("pca", n_neighbors=2)
-    .umap(into="umap", seed=0)
-    .leiden(into="leiden", seed=0)
+    .normalize_total(1e4)
+    .log1p()
+    .highly_variable_genes(n_top_genes=2)
+    .pca(n_components=1, seed=0, genes=gene_column("highly_variable"))
+    .neighbors(n_neighbors=2)
+    .umap(seed=0)
+    .leiden(seed=0)
 )
 print(plan.explain())
 ```

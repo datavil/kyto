@@ -451,6 +451,18 @@ pub enum KytoError {
         /// What it reads, as kind:name.
         member: String,
     },
+    /// KY-E220: A step called without into= would write its default name, which the plan already has.
+    #[error("KY-E220: {method}() without into= writes the {kind} '{name}', but the plan already has a {kind} '{existing}'")]
+    DefaultNameTaken {
+        /// The plan method called without into=.
+        method: String,
+        /// What the step writes: layer, embedding or cell column.
+        kind: String,
+        /// The default name the step would write.
+        name: String,
+        /// The plan's member of that name (compared ignoring case).
+        existing: String,
+    },
     /// KY-E301: A derived column is read after an upstream step changed its inputs.
     #[error("KY-E301: column '{column}' was computed before '{changed_by}' changed its inputs")]
     StaleColumn {
@@ -557,7 +569,7 @@ pub enum KytoError {
 
 impl KytoError {
     /// Every registered code, in `errors.toml` order.
-    pub const CODES: [&'static str; 57] = [
+    pub const CODES: [&'static str; 58] = [
         "KY-E101",
         "KY-E102",
         "KY-E103",
@@ -604,6 +616,7 @@ impl KytoError {
         "KY-E217",
         "KY-E218",
         "KY-E219",
+        "KY-E220",
         "KY-E301",
         "KY-E302",
         "KY-E303",
@@ -666,6 +679,7 @@ impl KytoError {
             Self::InvalidPlanJson { .. } => "KY-E217",
             Self::PlanJsonVersion { .. } => "KY-E218",
             Self::PeekNeedsData { .. } => "KY-E219",
+            Self::DefaultNameTaken { .. } => "KY-E220",
             Self::StaleColumn { .. } => "KY-E301",
             Self::NoLineage { .. } => "KY-E302",
             Self::NoRecipe { .. } => "KY-E303",
@@ -729,6 +743,7 @@ impl KytoError {
             Self::InvalidPlanJson { .. } => "PlanError",
             Self::PlanJsonVersion { .. } => "PlanError",
             Self::PeekNeedsData { .. } => "PlanError",
+            Self::DefaultNameTaken { .. } => "PlanError",
             Self::StaleColumn { .. } => "StaleColumnError",
             Self::NoLineage { .. } => "LineageError",
             Self::NoRecipe { .. } => "LineageError",
@@ -883,6 +898,9 @@ impl KytoError {
             }
             Self::PeekNeedsData { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e219"
+            }
+            Self::DefaultNameTaken { .. } => {
+                "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e220"
             }
             Self::StaleColumn { .. } => {
                 "https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e301"
@@ -1060,6 +1078,9 @@ impl KytoError {
             }
             Self::PeekNeedsData { step, .. } => {
                 format!("run the plan for its cell table with cells.to_polars() or select(...), or call peek() on the plan before '{step}'")
+            }
+            Self::DefaultNameTaken { name, existing, .. } => {
+                format!("pass into= with a new name (such as into='{name}_2'), or into='{existing}' to replace it")
             }
             Self::StaleColumn { column, changed_by } => {
                 format!("call .recompute() on '{column}' after '{changed_by}', or read it before that step")
@@ -1321,6 +1342,12 @@ impl KytoError {
             Self::PeekNeedsData { step, member } => vec![
                 ("step", FieldValue::Str(step.clone())),
                 ("member", FieldValue::Str(member.clone())),
+            ],
+            Self::DefaultNameTaken { method, kind, name, existing } => vec![
+                ("method", FieldValue::Str(method.clone())),
+                ("kind", FieldValue::Str(kind.clone())),
+                ("name", FieldValue::Str(name.clone())),
+                ("existing", FieldValue::Str(existing.clone())),
             ],
             Self::StaleColumn { column, changed_by } => vec![
                 ("column", FieldValue::Str(column.clone())),
@@ -1601,6 +1628,12 @@ impl KytoError {
             Self::PeekNeedsData {
                 step: "with_cells".to_owned(),
                 member: "layer:counts".to_owned(),
+            },
+            Self::DefaultNameTaken {
+                method: "log1p".to_owned(),
+                kind: "layer".to_owned(),
+                name: "log1p".to_owned(),
+                existing: "log1p".to_owned(),
             },
             Self::StaleColumn {
                 column: "n_genes".to_owned(),

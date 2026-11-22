@@ -340,6 +340,15 @@ impl Transform for CrossCell {
             | CrossCellOp::Scrublet { .. } => None,
         }
     }
+
+    fn writes_representation(&self) -> Option<&str> {
+        match &self.op {
+            CrossCellOp::Pca { into, .. } => Some(into),
+            CrossCellOp::Scale { .. }
+            | CrossCellOp::HighlyVariableGenes { .. }
+            | CrossCellOp::Scrublet { .. } => None,
+        }
+    }
 }
 
 impl Plan {

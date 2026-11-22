@@ -25,21 +25,7 @@ use crate::errors::to_py_err;
 /// Check `parameters` against `plan` without reading data: the layer (or the default
 /// layer, `KY-E211`) and the `groupby` column must be in the plan's output (`KY-E109`).
 pub fn check(plan: &Arc<Plan>, parameters: &RankGenesGroups) -> Result<(), KytoError> {
-    let layer =
-        match &parameters.layer {
-            Some(layer) => layer.clone(),
-            None => plan.default_layer().map(str::to_owned).ok_or_else(|| {
-                KytoError::NoDefaultLayer {
-                    expression: "rank_genes_groups(layer=None)".to_owned(),
-                    layers: plan
-                        .schema()
-                        .layers
-                        .iter()
-                        .map(|layer| layer.name.clone())
-                        .collect(),
-                }
-            })?,
-        };
+    let layer = plan.input_layer("rank_genes_groups", parameters.layer.as_deref())?;
     Output::members(
         plan,
         [

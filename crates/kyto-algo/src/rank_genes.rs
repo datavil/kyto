@@ -84,7 +84,8 @@ pub struct RankGenesGroups {
     pub groupby: String,
     /// The test.
     pub method: DifferentialTest,
-    /// The layer tested; `None` takes the plan's default layer.
+    /// The layer tested; `None` takes the layer the latest step of the plan wrote, or
+    /// its default layer ([`Plan::input_layer`]).
     pub layer: Option<String>,
     /// The groups tested, in this order; `None` tests every group (sorted). Against
     /// `"rest"`, the rest is still every other cell.
@@ -154,21 +155,7 @@ pub fn rank_genes_groups(
     physical: PhysicalOptions,
     execute: &ExecuteOptions,
 ) -> Result<DataFrame, KytoError> {
-    let layer =
-        match &parameters.layer {
-            Some(layer) => layer.clone(),
-            None => plan.default_layer().map(str::to_owned).ok_or_else(|| {
-                KytoError::NoDefaultLayer {
-                    expression: format!("{FUNCTION}(layer=None)"),
-                    layers: plan
-                        .schema()
-                        .layers
-                        .iter()
-                        .map(|layer| layer.name.clone())
-                        .collect(),
-                }
-            })?,
-        };
+    let layer = plan.input_layer(FUNCTION, parameters.layer.as_deref())?;
     let selection = Selection::new(parameters)?;
     let output = Output::members(
         plan,

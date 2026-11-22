@@ -377,17 +377,18 @@ impl Plan {
             .ok_or_else(|| self.missing_member("layer", name))
     }
 
-    /// The layer a step `method` reads: `layer`, checked (`KY-E109`), or the default
-    /// layer written in full (R6; `KY-E211` without one).
-    pub(crate) fn input_layer(
-        &self,
-        method: &str,
-        layer: Option<&str>,
-    ) -> Result<String, KytoError> {
+    /// The layer a matrix step `method` reads: `layer`, checked (`KY-E109`), or, for
+    /// `None`, [`Plan::chain_layer`] (the layer the latest step wrote, or the default
+    /// layer) written in full (R6, task 7.10; `KY-E211` without one).
+    ///
+    /// # Errors
+    /// `KY-E109` for a `layer` not in the plan; `KY-E211` for `None` when no step
+    /// wrote a layer and the plan has no default layer.
+    pub fn input_layer(&self, method: &str, layer: Option<&str>) -> Result<String, KytoError> {
         match layer {
             Some(layer) => Ok(self.layer_named(layer)?.name.clone()),
             None => {
-                self.default_layer()
+                self.chain_layer()
                     .map(str::to_owned)
                     .ok_or_else(|| KytoError::NoDefaultLayer {
                         expression: format!("{method}(layer=None)"),

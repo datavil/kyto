@@ -123,12 +123,7 @@ Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.12, 6.13, 6.14): see 
 
 Goal: a small, chainable surface where every method has one return type and a typed stub.
 
-Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
-
-- [ ] **7.10 Layer defaults that follow the chain.** The basic workflow spells out every layer today: `.normalize_total(1e4, into="normalized").log1p(layer="normalized", into="log1p").highly_variable_genes(layer="log1p", ...).pca(layer="log1p", into="X_pca", ...)`, where scanpy writes bare calls. Defaults are wanted (decided by the user, Nov 21, 2026, after the breast cancer atlas comparison). Proposal: a matrix step with no `layer=` reads the layer the previous matrix step wrote (else the default layer), and a step with no `into=` writes a layer or embedding named after itself (`normalize_total` -> `normalized`, `log1p` -> `log1p`, `pca` -> `X_pca`, `umap` -> `X_umap`, `leiden` -> `leiden`). The default is resolved once when the plan is built and stored in full (R6), so it is not hidden state (R7): it depends only on the plan, never on a global setting, and `explain()` shows the resolved names. Explicit `layer=`/`into=` keep working unchanged. Also consider letting one `.filter` take `&`-combined predicates in the docs examples, so the QC filters read as one line. (added Nov 21, 2026)
-  - Depends: none
-  - Decided (user, Nov 22, 2026): a chain-derived default keeps R7 as written, because it is resolved once when the plan is built from the plan alone, so no wording change.
-  - Done when: the basic workflow written with no `layer=`/`into=` on any step builds a plan equal to the explicit one (same `explain()`, same plan JSON) and gives bit-identical output on pbmc3k; a name clash (a default `into` that already exists) fails at plan build with a coded error that suggests passing `into=`; stubs, docstrings and examples updated.
+Done (7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 7.10): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#7-python-api-kyto-py-pythonkyto).
 
 ## 8. Agent-friendliness
 

@@ -34,6 +34,7 @@
 //! tables alone answer (`KY-E219` when it needs a layer, an embedding or a graph).
 #![forbid(unsafe_code)]
 
+mod chain_defaults;
 mod cluster;
 mod cross_cell;
 mod device_placement;
@@ -71,6 +72,7 @@ mod umap;
 mod with_columns;
 mod with_default_layer;
 
+pub use chain_defaults::ChainStep;
 pub use cluster::{Cluster, ClusterMethod};
 pub use cross_cell::{CrossCell, CrossCellOp, HvgFlavor, hvg_columns, loadings_name};
 pub use device_placement::{DEVICE_NAMES, DeviceRequest, Placement, place};

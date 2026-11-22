@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use kyto_core::{BinaryOp, CellExpr, GeneExpr, GeneIds, Literal};
 use kyto_error::KytoError;
-use kyto_plan::{Cluster, ClusterMethod, HvgFlavor, Metric, NeighborSearch, Neighbors, Plan, Sink};
+use kyto_plan::{
+    ChainStep, Cluster, ClusterMethod, HvgFlavor, Metric, NeighborSearch, Neighbors, Plan, Sink,
+};
 
 const SCHEMA: &str = r#"{
   "n_cells": 4,
@@ -160,6 +162,8 @@ fn plan_build_errors() -> Vec<KytoError> {
                 )])
                 .and_then(|plan| plan.peek_output()),
         ),
+        // A step without `into` whose default name the plan has (task 7.10).
+        error(layered().into_or_default(ChainStep::Log1p, None)),
     ]
 }
 

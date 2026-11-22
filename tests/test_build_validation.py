@@ -107,6 +107,8 @@ def test_every_ky_e2xx_code_fires_without_reading_the_store(tmp_path: Path) -> N
         "KY-E219": lambda: atlas.with_cells(
             total=kyto.qc.total_counts(layer="counts")
         ).peek(),
+        # A bare step whose default name the plan already has (task 7.10).
+        "KY-E220": lambda: atlas.log1p().log1p(),
     }
     for code, build in cases.items():
         with pytest.raises(kyto.KytoError) as raised:

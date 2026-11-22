@@ -78,6 +78,12 @@ pub trait Transform: LogicalNode {
         None
     }
 
+    /// The cell embedding the node writes for `neighbors` to search by default
+    /// (scanpy's `use_rep`, task 7.10): `pca`'s.
+    fn writes_representation(&self) -> Option<&str> {
+        None
+    }
+
     /// The default layer the node sets for everything downstream.
     fn sets_default_layer(&self) -> Option<&str> {
         None
@@ -176,6 +182,11 @@ pub(crate) struct NodeState {
     pub(crate) gene_ids: Arc<GeneIds>,
     /// The default layer set nearest to this node.
     pub(crate) default_layer: Option<Arc<str>>,
+    /// The layer a matrix step without `layer=` reads (task 7.10): the one the nearest
+    /// node that writes a layer wrote, or the default layer a nearer node set.
+    pub(crate) chain_layer: Option<Arc<str>>,
+    /// The cell embedding the nearest `pca` wrote (`neighbors`' default, task 7.10).
+    pub(crate) chain_embedding: Option<Arc<str>>,
     /// The device the last `on` below or at this node asked for (the CPU without one).
     pub(crate) device: DeviceRequest,
     /// The genes that may remain, in order, when a selection set them; `None` means
@@ -199,6 +210,8 @@ impl NodeState {
             source,
             gene_ids,
             default_layer: None,
+            chain_layer: None,
+            chain_embedding: None,
             device: DeviceRequest::Cpu,
             kept_genes: None,
             removed_genes: Arc::new(RemovedGenes::new()),
@@ -231,8 +244,15 @@ impl NodeState {
         {
             Arc::make_mut(&mut state.rewritten_layers).insert(layer.to_owned(), method.to_owned());
         }
+        if let Some(layer) = node.writes_layer() {
+            state.chain_layer = Some(Arc::from(layer));
+        }
         if let Some(layer) = node.sets_default_layer() {
             state.default_layer = Some(Arc::from(layer));
+            state.chain_layer = Some(Arc::from(layer));
+        }
+        if let Some(embedding) = node.writes_representation() {
+            state.chain_embedding = Some(Arc::from(embedding));
         }
         if let Some(device) = node.sets_device() {
             state.device = device;

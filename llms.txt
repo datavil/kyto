@@ -459,7 +459,7 @@ kyto.errors.NotImplementedYetError: KY-E601: 'Atlas.with_embedding' is not imple
 ### Atlas.normalize_total
 
 ```python
-Atlas.normalize_total(target_sum: float | None = None, *, layer: str | None = None, into: str) -> Atlas
+Atlas.normalize_total(target_sum: float | None = None, *, layer: str | None = None, into: str | None = None) -> Atlas
 ```
 
 Scale every cell to the same total count (scanpy's ``normalize_total``).
@@ -469,18 +469,27 @@ Scale every cell to the same total count (scanpy's ``normalize_total``).
 >>> print(atlas)
 NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
 SCAN "..." (2 cells x 3 genes)
+
+Without ``layer`` and ``into``, each step reads what the one before it wrote
+and names its output after itself; the plan stores the names in full:
+
+>>> print(scan(store).with_default_layer("counts").normalize_total(1e4).log1p())
+LOG1P "normalized" -> "log1p"
+NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
+WITH_DEFAULT_LAYER "counts"
+SCAN "..." (2 cells x 3 genes)
 ```
 
 ### Atlas.log1p
 
 ```python
-Atlas.log1p(*, layer: str | None = None, into: str) -> Atlas
+Atlas.log1p(*, layer: str | None = None, into: str | None = None) -> Atlas
 ```
 
 Take ``log(1 + x)`` of every value (natural log, scanpy's ``log1p``).
 
 ```python
->>> print(scan(store).with_default_layer("counts").log1p(into="log1p"))
+>>> print(scan(store).with_default_layer("counts").log1p())
 LOG1P "counts" -> "log1p"
 WITH_DEFAULT_LAYER "counts"
 SCAN "..." (2 cells x 3 genes)
@@ -489,7 +498,7 @@ SCAN "..." (2 cells x 3 genes)
 ### Atlas.scale
 
 ```python
-Atlas.scale(*, layer: str | None = None, into: str, zero_center: bool = True, max_value: float | None = None) -> Atlas
+Atlas.scale(*, layer: str | None = None, into: str | None = None, zero_center: bool = True, max_value: float | None = None) -> Atlas
 ```
 
 Scale every gene to mean 0 and variance 1 (scanpy's ``scale``).
@@ -518,7 +527,7 @@ SCAN "..." (2 cells x 3 genes)
 ### Atlas.pca
 
 ```python
-Atlas.pca(*, layer: str | None = None, into: str, n_components: int | None = None, seed: int, genes: _GeneExprBoolean | None = None) -> Atlas
+Atlas.pca(*, layer: str | None = None, into: str | None = None, n_components: int | None = None, seed: int, genes: _GeneExprBoolean | None = None) -> Atlas
 ```
 
 Principal components of a layer (scanpy's ``pca``, implicit centring).
@@ -531,19 +540,23 @@ SCAN "..." (2 cells x 3 genes)
 >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0, genes=genes))
 PCA "counts" -> "pca" n_components=1 seed=0 genes=gene_column('symbol') != 'CD3E'
 SCAN "..." (2 cells x 3 genes)
+>>> print(scan(store).with_default_layer("counts").pca(n_components=1, seed=0))
+PCA "counts" -> "X_pca" n_components=1 seed=0
+WITH_DEFAULT_LAYER "counts"
+SCAN "..." (2 cells x 3 genes)
 ```
 
 ### Atlas.neighbors
 
 ```python
-Atlas.neighbors(embedding: str, /, *, n_neighbors: int | None = None, n_components: int | None = None, metric: Literal['euclidean', 'cosine'] = 'euclidean', search: Literal['exact', 'approximate'] = 'exact', seed: int | None = None, into: str | None = None) -> Atlas
+Atlas.neighbors(embedding: str | None = None, /, *, n_neighbors: int | None = None, n_components: int | None = None, metric: Literal['euclidean', 'cosine'] = 'euclidean', search: Literal['exact', 'approximate'] = 'exact', seed: int | None = None, into: str | None = None) -> Atlas
 ```
 
 The k nearest neighbours of every cell in a cell embedding (scanpy's ``neighbors``).
 
 ```python
 >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
->>> print(atlas.neighbors("pca", n_neighbors=2))
+>>> print(atlas.neighbors(n_neighbors=2))
 NEIGHBORS "pca" -> "distances", "connectivities" n_neighbors=2 metric=Euclidean search=Exact seed=0
 PCA "counts" -> "pca" n_components=1 seed=0
 SCAN "..." (2 cells x 3 genes)
@@ -552,14 +565,14 @@ SCAN "..." (2 cells x 3 genes)
 ### Atlas.leiden
 
 ```python
-Atlas.leiden(*, graph: str = 'connectivities', resolution: float | None = None, seed: int, into: str) -> Atlas
+Atlas.leiden(*, graph: str = 'connectivities', resolution: float | None = None, seed: int, into: str | None = None) -> Atlas
 ```
 
 Cluster the cells of a cell graph with Leiden (scanpy's ``leiden``).
 
 ```python
 >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
->>> atlas = atlas.neighbors("pca", n_neighbors=2).leiden(into="leiden", seed=0)
+>>> atlas = atlas.neighbors(n_neighbors=2).leiden(seed=0)
 >>> print(str(atlas).splitlines()[0])
 LEIDEN "connectivities" -> "leiden" resolution=1 seed=0
 ```
@@ -567,14 +580,14 @@ LEIDEN "connectivities" -> "leiden" resolution=1 seed=0
 ### Atlas.louvain
 
 ```python
-Atlas.louvain(*, graph: str = 'connectivities', resolution: float | None = None, seed: int, into: str) -> Atlas
+Atlas.louvain(*, graph: str = 'connectivities', resolution: float | None = None, seed: int, into: str | None = None) -> Atlas
 ```
 
 Cluster the cells of a cell graph with Louvain (scanpy's ``louvain``).
 
 ```python
 >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
->>> atlas = atlas.neighbors("pca", n_neighbors=2).louvain(into="louvain", seed=0)
+>>> atlas = atlas.neighbors(n_neighbors=2).louvain(seed=0)
 >>> print(str(atlas).splitlines()[0])
 LOUVAIN "connectivities" -> "louvain" resolution=1 seed=0
 ```
@@ -582,14 +595,14 @@ LOUVAIN "connectivities" -> "louvain" resolution=1 seed=0
 ### Atlas.umap
 
 ```python
-Atlas.umap(*, graph: str = 'connectivities', into: str, n_components: int | None = None, min_dist: float | None = None, spread: float | None = None, n_epochs: int | None = None, alpha: float | None = None, gamma: float | None = None, negative_sample_rate: int | None = None, init: Literal['spectral', 'random'] = 'spectral', seed: int) -> Atlas
+Atlas.umap(*, graph: str = 'connectivities', into: str | None = None, n_components: int | None = None, min_dist: float | None = None, spread: float | None = None, n_epochs: int | None = None, alpha: float | None = None, gamma: float | None = None, negative_sample_rate: int | None = None, init: Literal['spectral', 'random'] = 'spectral', seed: int) -> Atlas
 ```
 
 Lay the cells of a cell graph out in a few dimensions (scanpy's ``umap``).
 
 ```python
 >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
->>> atlas = atlas.neighbors("pca", n_neighbors=2).umap(into="X_umap", seed=0)
+>>> atlas = atlas.neighbors(n_neighbors=2).umap(seed=0)
 >>> print(str(atlas).splitlines()[0])
 UMAP "connectivities" -> "X_umap" n_components=2 min_dist=0.5 spread=1 n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0
 ```

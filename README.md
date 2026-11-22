@@ -27,12 +27,14 @@ hvg = (
         total_counts=qc.total_counts(),
         pct_counts_mt=qc.percent_counts_in(mito),
     )
-    .filter(cell_column("n_genes_by_counts") >= 200)
-    .filter(cell_column("n_genes_by_counts") < 2500)
-    .filter(cell_column("pct_counts_mt") < 5)
-    .normalize_total(1e4, into="normalized")
-    .log1p(layer="normalized", into="log1p")
-    .highly_variable_genes(layer="log1p", n_top_genes=2000)
+    .filter(
+        (cell_column("n_genes_by_counts") >= 200)
+        & (cell_column("n_genes_by_counts") < 2500)
+        & (cell_column("pct_counts_mt") < 5)
+    )
+    .normalize_total(1e4)  # writes the layer "normalized"
+    .log1p()  # reads "normalized", writes "log1p"
+    .highly_variable_genes(n_top_genes=2000)  # reads "log1p"
     .filter(gene_column("highly_variable"))
 )
 print(hvg.explain())  # the logical and optimized plans; nothing is read yet
@@ -48,6 +50,8 @@ markers = (
 print(markers)
 
 # PCA and neighbours build lazily too (sinks write their outputs; reading them from Python arrives with 7.3).
-graph = result.pca(into="pca", n_components=50, seed=0).neighbors("pca")
+graph = result.pca(
+    n_components=50, seed=0
+).neighbors()  # into "X_pca", then searches it
 print(graph.estimate())
 ```

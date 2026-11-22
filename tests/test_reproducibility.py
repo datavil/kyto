@@ -64,6 +64,23 @@ def _pipeline(store: Path) -> _kyto.Atlas:
     )
 
 
+def _bare_pipeline(store: Path) -> _kyto.Atlas:
+    """``_pipeline`` with no ``layer=``, ``into=`` or embedding on any step: each step
+    reads what the one before it wrote and names its output after itself (7.10)."""
+    return (
+        _kyto.scan(store)
+        .with_default_layer("counts")
+        .with_cells(total=kyto.qc.total_counts())
+        .normalize_total(1e4)
+        .log1p()
+        .highly_variable_genes(n_top_genes=1000)
+        .pca(n_components=30, seed=0, genes=kyto.gene_column("highly_variable"))
+        .neighbors(n_neighbors=15, search="approximate", seed=1)
+        .leiden(seed=2)
+        .umap(n_epochs=100, seed=3)
+    )
+
+
 def _kyto_checksums(store: Path) -> dict[str, str]:
     """SHA-256 of every file of ``store`` by relative path (format.md section 10.3):
     ``provenance.json`` is hashed without ``run`` and ``source.path``, the rest as is."""
@@ -153,3 +170,15 @@ def test_h5ad_is_byte_identical_on_any_thread_count(
     times = _object_times(one)
     assert times.keys() > {"/", "/obs", "/X/data"}
     assert set(times.values()) == {(0, 0, 0, 0)}
+
+
+def test_bare_pipeline_is_the_explicit_one(pbmc3k: Path, tmp_path: Path) -> None:
+    """7.10's Done-when: the chain-derived defaults build the explicit plan (same JSON,
+    same explain()) and write the same bytes."""
+    explicit, bare = _pipeline(pbmc3k), _bare_pipeline(pbmc3k)
+    assert bare.to_json() == explicit.to_json()
+    assert str(bare.explain()) == str(explicit.explain())
+    first, second = tmp_path / "explicit.kyto", tmp_path / "bare.kyto"
+    explicit.sink_zarr(first, threads=ALL_THREADS)
+    bare.sink_zarr(second, threads=ALL_THREADS)
+    assert _kyto_checksums(first) == _kyto_checksums(second)

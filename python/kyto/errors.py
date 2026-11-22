@@ -527,6 +527,7 @@ class PlanError(KytoError, ValueError):
     - ``KY-E217``: Text given to from_json is not a plan JSON, or breaks its format.
     - ``KY-E218``: A plan JSON has a version this kyto does not read.
     - ``KY-E219``: peek() is called on a plan whose cell table cannot be read from metadata alone.
+    - ``KY-E220``: A step called without into= would write its default name, which the plan already has.
 
     See `KytoError` for the parameters and attributes.
 
@@ -1073,6 +1074,18 @@ _REGISTRY: Final[dict[str, _Entry]] = {
         fields=(
             _Field("step", "str"),
             _Field("member", "str"),
+        ),
+    ),
+    "KY-E220": _Entry(
+        class_name="PlanError",
+        message="{method}() without into= writes the {kind} '{name}', but the plan already has a {kind} '{existing}'",
+        hint="pass into= with a new name (such as into='{name}_2'), or into='{existing}' to replace it",
+        docs_url="https://github.com/datavil/kyto/blob/main/docs/errors.md#ky-e220",
+        fields=(
+            _Field("method", "str"),
+            _Field("kind", "str"),
+            _Field("name", "str"),
+            _Field("existing", "str"),
         ),
     ),
     "KY-E301": _Entry(

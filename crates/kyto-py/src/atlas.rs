@@ -21,8 +21,8 @@ use kyto_algo::RankGenesGroups;
 use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
 use kyto_plan::{
-    Cluster, ClusterMethod, DeviceRequest, Explain, Neighbors, PhysicalOptions, Plan, Scrublet,
-    Umap,
+    ChainStep, Cluster, ClusterMethod, DeviceRequest, Explain, Neighbors, PhysicalOptions, Plan,
+    Scrublet, Umap,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
@@ -79,15 +79,21 @@ impl Atlas {
         graph: &str,
         resolution: Option<&Bound<'_, PyAny>>,
         seed: &Bound<'_, PyAny>,
-        into: &str,
+        into: Option<&str>,
     ) -> PyResult<Self> {
         let name = method.name();
+        let step = match method {
+            ClusterMethod::Leiden => ChainStep::Leiden,
+            ClusterMethod::Louvain => ChainStep::Louvain,
+        };
+        let into =
+            (self.plan.into_or_default(step, into)).map_err(|error| to_py_err(py, &error))?;
         let parameters = Cluster {
             method,
             graph: graph.to_owned(),
             resolution: chain::optional_float(py, name, "resolution", resolution)?.unwrap_or(1.0),
             seed: chain::integer(py, name, "seed", seed, 0)?,
-            into: into.to_owned(),
+            into,
         };
         self.derive(py, self.plan.cluster(parameters))
     }
@@ -501,9 +507,11 @@ impl Atlas {
     ///     The total of every cell afterwards; ``None`` for the median of the cells'
     ///     totals (one more pass over the cells).
     /// layer : str or None, default=None
-    ///     The layer read; ``None`` for the default layer.
-    /// into : str
-    ///     The layer written (a new name, or an existing layer to replace).
+    ///     The layer read; ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
+    /// into : str or None, default=None
+    ///     The layer written (a new name, or an existing layer to replace);
+    ///     ``None`` for ``"normalized"``.
     ///
     /// Returns
     /// -------
@@ -514,8 +522,11 @@ impl Atlas {
     /// ------
     /// PlanError
     ///     ``KY-E215``: ``target_sum`` is not a positive finite ``float32``.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the layer
+    ///     ``"normalized"``; pass ``into=`` to name the output.
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer is not in the plan.
     /// StoreInputError
@@ -527,17 +538,28 @@ impl Atlas {
     /// >>> print(atlas)
     /// NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
     /// SCAN "..." (2 cells x 3 genes)
-    #[pyo3(signature = (target_sum = None, *, layer = None, into))]
+    ///
+    /// Without ``layer`` and ``into``, each step reads what the one before it wrote
+    /// and names its output after itself; the plan stores the names in full:
+    ///
+    /// >>> print(scan(store).with_default_layer("counts").normalize_total(1e4).log1p())
+    /// LOG1P "normalized" -> "log1p"
+    /// NORMALIZE_TOTAL "counts" -> "normalized" target_sum=10000
+    /// WITH_DEFAULT_LAYER "counts"
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (target_sum = None, *, layer = None, into = None))]
     fn normalize_total(
         &self,
         py: Python<'_>,
         #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         target_sum: Option<&Bound<'_, PyAny>>,
         layer: Option<&str>,
-        into: &str,
+        into: Option<&str>,
     ) -> PyResult<Self> {
         let target_sum = chain::optional_float(py, "normalize_total", "target_sum", target_sum)?;
-        self.derive(py, self.plan.normalize_total(target_sum, layer, into))
+        let plan = (self.plan.into_or_default(ChainStep::NormalizeTotal, into))
+            .and_then(|into| self.plan.normalize_total(target_sum, layer, &into));
+        self.derive(py, plan)
     }
 
     /// Take ``log(1 + x)`` of every value (natural log, scanpy's ``log1p``).
@@ -547,9 +569,11 @@ impl Atlas {
     /// Parameters
     /// ----------
     /// layer : str or None, default=None
-    ///     The layer read; ``None`` for the default layer.
-    /// into : str
-    ///     The layer written (a new name, or an existing layer to replace).
+    ///     The layer read; ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
+    /// into : str or None, default=None
+    ///     The layer written (a new name, or an existing layer to replace);
+    ///     ``None`` for ``"log1p"``.
     ///
     /// Returns
     /// -------
@@ -558,20 +582,26 @@ impl Atlas {
     ///
     /// Raises
     /// ------
+    /// PlanError
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the layer
+    ///     ``"log1p"``; pass ``into=`` to name the output.
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer is not in the plan.
     ///
     /// Examples
     /// --------
-    /// >>> print(scan(store).with_default_layer("counts").log1p(into="log1p"))
+    /// >>> print(scan(store).with_default_layer("counts").log1p())
     /// LOG1P "counts" -> "log1p"
     /// WITH_DEFAULT_LAYER "counts"
     /// SCAN "..." (2 cells x 3 genes)
-    #[pyo3(signature = (*, layer = None, into))]
-    fn log1p(&self, py: Python<'_>, layer: Option<&str>, into: &str) -> PyResult<Self> {
-        self.derive(py, self.plan.log1p(layer, into))
+    #[pyo3(signature = (*, layer = None, into = None))]
+    fn log1p(&self, py: Python<'_>, layer: Option<&str>, into: Option<&str>) -> PyResult<Self> {
+        let plan = (self.plan.into_or_default(ChainStep::Log1p, into))
+            .and_then(|into| self.plan.log1p(layer, &into));
+        self.derive(py, plan)
     }
 
     /// Scale every gene to mean 0 and variance 1 (scanpy's ``scale``).
@@ -582,9 +612,11 @@ impl Atlas {
     /// Parameters
     /// ----------
     /// layer : str or None, default=None
-    ///     The layer read; ``None`` for the default layer.
-    /// into : str
-    ///     The layer written (a new name, or an existing layer to replace).
+    ///     The layer read; ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
+    /// into : str or None, default=None
+    ///     The layer written (a new name, or an existing layer to replace);
+    ///     ``None`` for ``"scaled"``.
     /// zero_center : bool, default=True
     ///     Subtract each gene's mean; ``False`` only divides by the standard deviation
     ///     (and keeps the data sparse).
@@ -601,8 +633,11 @@ impl Atlas {
     /// ------
     /// PlanError
     ///     ``KY-E215``: ``max_value`` is not positive.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the layer
+    ///     ``"scaled"``; pass ``into=`` to name the output.
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer is not in the plan.
     ///
@@ -611,18 +646,20 @@ impl Atlas {
     /// >>> print(scan(store).scale(layer="counts", into="scaled", max_value=10))
     /// SCALE "counts" -> "scaled" zero_center=true max_value=10
     /// SCAN "..." (2 cells x 3 genes)
-    #[pyo3(signature = (*, layer = None, into, zero_center = true, max_value = None))]
+    #[pyo3(signature = (*, layer = None, into = None, zero_center = true, max_value = None))]
     fn scale(
         &self,
         py: Python<'_>,
         layer: Option<&str>,
-        into: &str,
+        into: Option<&str>,
         zero_center: bool,
         #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
         max_value: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let max_value = chain::optional_float(py, "scale", "max_value", max_value)?;
-        self.derive(py, self.plan.scale(layer, into, zero_center, max_value))
+        let plan = (self.plan.into_or_default(ChainStep::Scale, into))
+            .and_then(|into| self.plan.scale(layer, &into, zero_center, max_value));
+        self.derive(py, plan)
     }
 
     /// Mark the highly variable genes (scanpy's ``highly_variable_genes``).
@@ -638,7 +675,8 @@ impl Atlas {
     /// ----------
     /// layer : str or None, default=None
     ///     The layer read (log data for ``seurat`` and ``cell_ranger``, counts for
-    ///     ``seurat_v3``); ``None`` for the default layer.
+    ///     ``seurat_v3``); ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
     /// flavor : {"seurat", "cell_ranger", "seurat_v3"}, default="seurat"
     ///     The method, as scanpy's.
     /// n_top_genes : int or None, default=None
@@ -658,7 +696,8 @@ impl Atlas {
     ///     ``KY-E215``: an unknown ``flavor``, ``n_top_genes`` below 1, or
     ///     ``seurat_v3`` without ``n_top_genes``.
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer or ``batch_key`` is not in the plan.
     ///
@@ -705,9 +744,10 @@ impl Atlas {
     /// Parameters
     /// ----------
     /// layer : str or None, default=None
-    ///     The layer read; ``None`` for the default layer.
-    /// into : str
-    ///     Name of the cell embedding written.
+    ///     The layer read; ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
+    /// into : str or None, default=None
+    ///     Name of the cell embedding written; ``None`` for ``"X_pca"``.
     /// n_components : int, default=50
     ///     Components computed.
     /// seed : int
@@ -728,11 +768,14 @@ impl Atlas {
     /// PlanError
     ///     ``KY-E215``: ``n_components`` is below 1 or above the cells or genes (those of
     ///     ``genes``, checked when the plan runs), or ``seed`` is negative.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the embedding
+    ///     ``"X_pca"`` (or ``"X_pca_loadings"``); pass ``into=`` to name the output.
     /// ExpressionError
     ///     ``KY-E205``: ``genes`` is not a ``GeneExpr``, not boolean, or reads more than
     ///     gene columns (store it with ``with_genes`` first).
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer is not in the plan.
     ///
@@ -745,12 +788,16 @@ impl Atlas {
     /// >>> print(scan(store).pca(layer="counts", into="pca", n_components=1, seed=0, genes=genes))
     /// PCA "counts" -> "pca" n_components=1 seed=0 genes=gene_column('symbol') != 'CD3E'
     /// SCAN "..." (2 cells x 3 genes)
-    #[pyo3(signature = (*, layer = None, into, n_components = None, seed, genes = None))]
+    /// >>> print(scan(store).with_default_layer("counts").pca(n_components=1, seed=0))
+    /// PCA "counts" -> "X_pca" n_components=1 seed=0
+    /// WITH_DEFAULT_LAYER "counts"
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (*, layer = None, into = None, n_components = None, seed, genes = None))]
     fn pca(
         &self,
         py: Python<'_>,
         layer: Option<&str>,
-        into: &str,
+        into: Option<&str>,
         #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_components: Option<&Bound<'_, PyAny>>,
         #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
@@ -773,9 +820,10 @@ impl Atlas {
             },
             None => None,
         };
-        let plan = self
-            .plan
-            .pca(layer, into, n_components, seed, genes.as_ref());
+        let plan = (self.plan.into_or_default(ChainStep::Pca, into)).and_then(|into| {
+            self.plan
+                .pca(layer, &into, n_components, seed, genes.as_ref())
+        });
         self.derive(py, plan)
     }
 
@@ -788,8 +836,10 @@ impl Atlas {
     ///
     /// Parameters
     /// ----------
-    /// embedding : str
-    ///     The cell embedding searched, such as the ``into`` of ``pca``.
+    /// embedding : str or None, default=None
+    ///     The cell embedding searched, such as the ``into`` of ``pca``; ``None`` for
+    ///     the one the latest ``pca`` of the plan wrote, else ``"X_pca"`` (scanpy's
+    ///     ``use_rep``).
     /// n_neighbors : int, default=15
     ///     Neighbours per cell, the cell itself included (scanpy's meaning).
     /// n_components : int or None, default=None
@@ -812,19 +862,21 @@ impl Atlas {
     /// ------
     /// PlanError
     ///     ``KY-E215``: ``n_neighbors`` below 2 or above the cells, ``n_components``
-    ///     out of range, a negative ``seed``, or an unknown ``metric`` or ``search``.
+    ///     out of range, a negative ``seed``, an unknown ``metric`` or ``search``, or
+    ///     no ``embedding`` when no ``pca`` of the plan wrote one and it has no
+    ///     ``"X_pca"``.
     /// MissingMemberError
     ///     ``KY-E109``: ``embedding`` is not a cell embedding of the plan.
     ///
     /// Examples
     /// --------
     /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
-    /// >>> print(atlas.neighbors("pca", n_neighbors=2))
+    /// >>> print(atlas.neighbors(n_neighbors=2))
     /// NEIGHBORS "pca" -> "distances", "connectivities" n_neighbors=2 metric=Euclidean search=Exact seed=0
     /// PCA "counts" -> "pca" n_components=1 seed=0
     /// SCAN "..." (2 cells x 3 genes)
     #[pyo3(signature = (
-        embedding,
+        embedding = None,
         /,
         *,
         n_neighbors = None,
@@ -838,7 +890,7 @@ impl Atlas {
     fn neighbors(
         &self,
         py: Python<'_>,
-        embedding: &str,
+        embedding: Option<&str>,
         #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_neighbors: Option<&Bound<'_, PyAny>>,
         #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
@@ -859,7 +911,7 @@ impl Atlas {
         let seed = chain::optional_integer(py, "neighbors", "seed", seed, 0)?.unwrap_or(0);
         let parameters = (|| {
             Ok::<_, KytoError>(Neighbors {
-                embedding: embedding.to_owned(),
+                embedding: self.plan.embedding_or_default("neighbors", embedding)?,
                 n_components,
                 n_neighbors,
                 metric: chain::metric(metric)?,
@@ -886,8 +938,8 @@ impl Atlas {
     ///     Higher values give more, smaller clusters.
     /// seed : int
     ///     Seed of the random steps (R7, R11: the same seed gives the same clusters).
-    /// into : str
-    ///     The cell column written.
+    /// into : str or None, default=None
+    ///     The cell column written; ``None`` for ``"leiden"``.
     ///
     /// Returns
     /// -------
@@ -899,16 +951,18 @@ impl Atlas {
     /// PlanError
     ///     ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
     ///     more, or ``into`` is not a valid column name.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the cell column
+    ///     ``"leiden"``; pass ``into=`` to name the output.
     /// MissingMemberError
     ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
     ///
     /// Examples
     /// --------
     /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
-    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).leiden(into="leiden", seed=0)
+    /// >>> atlas = atlas.neighbors(n_neighbors=2).leiden(seed=0)
     /// >>> print(str(atlas).splitlines()[0])
     /// LEIDEN "connectivities" -> "leiden" resolution=1 seed=0
-    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into))]
+    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into = None))]
     fn leiden(
         &self,
         py: Python<'_>,
@@ -919,7 +973,7 @@ impl Atlas {
             '_,
             PyAny,
         >,
-        into: &str,
+        into: Option<&str>,
     ) -> PyResult<Self> {
         self.cluster(py, ClusterMethod::Leiden, graph, resolution, seed, into)
     }
@@ -936,8 +990,8 @@ impl Atlas {
     ///     Higher values give more, smaller clusters.
     /// seed : int
     ///     Seed of the random steps (R7, R11: the same seed gives the same clusters).
-    /// into : str
-    ///     The cell column written.
+    /// into : str or None, default=None
+    ///     The cell column written; ``None`` for ``"louvain"``.
     ///
     /// Returns
     /// -------
@@ -949,16 +1003,18 @@ impl Atlas {
     /// PlanError
     ///     ``KY-E215``: ``resolution`` is not positive, ``seed`` is not an int of 0 or
     ///     more, or ``into`` is not a valid column name.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the cell column
+    ///     ``"louvain"``; pass ``into=`` to name the output.
     /// MissingMemberError
     ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
     ///
     /// Examples
     /// --------
     /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
-    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).louvain(into="louvain", seed=0)
+    /// >>> atlas = atlas.neighbors(n_neighbors=2).louvain(seed=0)
     /// >>> print(str(atlas).splitlines()[0])
     /// LOUVAIN "connectivities" -> "louvain" resolution=1 seed=0
-    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into))]
+    #[pyo3(signature = (*, graph = "connectivities", resolution = None, seed, into = None))]
     fn louvain(
         &self,
         py: Python<'_>,
@@ -969,7 +1025,7 @@ impl Atlas {
             '_,
             PyAny,
         >,
-        into: &str,
+        into: Option<&str>,
     ) -> PyResult<Self> {
         self.cluster(py, ClusterMethod::Louvain, graph, resolution, seed, into)
     }
@@ -982,8 +1038,8 @@ impl Atlas {
     /// ----------
     /// graph : str, default="connectivities"
     ///     The cell graph laid out, such as the connectivities ``neighbors`` declares.
-    /// into : str
-    ///     The cell embedding written.
+    /// into : str or None, default=None
+    ///     The cell embedding written; ``None`` for ``"X_umap"``.
     /// n_components : int, default=2
     ///     Dimensions of the layout (1 to 100).
     /// min_dist : float, default=0.5
@@ -1014,19 +1070,21 @@ impl Atlas {
     ///     ``KY-E215``: an argument out of range (``n_components`` from 1 to 100,
     ///     positive ``spread`` and ``alpha``, ``min_dist`` from 0 to ``spread``), an
     ///     unknown ``init``, or an ``into`` that is not a valid embedding name.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the embedding
+    ///     ``"X_umap"``; pass ``into=`` to name the output.
     /// MissingMemberError
     ///     ``KY-E109``: ``graph`` is not a cell graph of the plan.
     ///
     /// Examples
     /// --------
     /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
-    /// >>> atlas = atlas.neighbors("pca", n_neighbors=2).umap(into="X_umap", seed=0)
+    /// >>> atlas = atlas.neighbors(n_neighbors=2).umap(seed=0)
     /// >>> print(str(atlas).splitlines()[0])
     /// UMAP "connectivities" -> "X_umap" n_components=2 min_dist=0.5 spread=1 n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0
     #[pyo3(signature = (
         *,
         graph = "connectivities",
-        into,
+        into = None,
         n_components = None,
         min_dist = None,
         spread = None,
@@ -1042,7 +1100,7 @@ impl Atlas {
         &self,
         py: Python<'_>,
         graph: &str,
-        into: &str,
+        into: Option<&str>,
         #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
         n_components: Option<&Bound<'_, PyAny>>,
         #[gen_stub(override_type(type_repr = "builtins.float | None", imports = ()))]
@@ -1090,7 +1148,8 @@ impl Atlas {
             .unwrap_or(defaults.negative_sample_rate),
             init: chain::umap_init(init).map_err(|error| to_py_err(py, &error))?,
             seed: chain::integer(py, "umap", "seed", seed, 0)?,
-            into: into.to_owned(),
+            into: (self.plan.into_or_default(ChainStep::Umap, into))
+                .map_err(|error| to_py_err(py, &error))?,
         };
         self.derive(py, self.plan.umap(parameters))
     }
@@ -1112,7 +1171,8 @@ impl Atlas {
     /// Parameters
     /// ----------
     /// layer : str or None, default=None
-    ///     The layer scored (raw counts); ``None`` for the plan's default layer.
+    ///     The layer scored (raw counts); ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
     /// batch_key : str or None, default=None
     ///     A cell column: each of its values is scored on its own.
     /// sim_doublet_ratio : float, default=2.0
@@ -1246,8 +1306,8 @@ impl Atlas {
     /// method : {"t-test", "wilcoxon"}, default="t-test"
     ///     Welch's t-test, or Wilcoxon's rank-sum test (normal approximation).
     /// layer : str or None, default=None
-    ///     The layer tested (log data, as scanpy expects); ``None`` for the default
-    ///     layer.
+    ///     The layer tested (log data, as scanpy expects); ``None`` for the layer the latest ``normalize_total``,
+    ///     ``log1p`` or ``scale`` of the plan wrote, else the default layer.
     /// groups : list of str or None, default=None
     ///     The groups tested, in this order; ``None`` tests every group. The rest is
     ///     still every other cell.
@@ -1281,7 +1341,8 @@ impl Atlas {
     ///     ``threads`` below 1; when collected, an empty or repeated ``groups``, no
     ///     labelled cell, or a tested group of one cell.
     /// ResolutionError
-    ///     ``KY-E211``: ``layer`` is ``None`` and the plan has no default layer.
+    ///     ``KY-E211``: ``layer`` is ``None``, no step wrote a layer and the plan
+    ///     has no default layer.
     /// MissingMemberError
     ///     ``KY-E109``: the layer or ``groupby`` is not in the plan.
     /// ResolutionError
@@ -1420,7 +1481,11 @@ impl Atlas {
     /// The plan's output (its layers, and its cell and gene tables with the computed
     /// columns) is written to a temporary kyto store in the system's temporary
     /// directory, and the returned ``Atlas`` scans that store (with this plan's default
-    /// layer, if the output has it). The store is deleted when the last ``Atlas`` built
+    /// layer, if the output has it). The returned plan starts a new chain: a step
+    /// given no ``layer=`` reads that default layer, not the layer this plan wrote
+    /// last, and ``neighbors`` given no embedding searches ``X_pca``, not the latest
+    /// ``pca``'s output (task 7.10); name them, or call ``with_default_layer`` before
+    /// ``collect``. The store is deleted when the last ``Atlas`` built
     /// on it is garbage-collected, so ``to_json()`` of such a plan names a store that
     /// lives only as long as the plan. To keep the result, use ``sink_zarr``. The GIL is
     /// released while the plan computes; Ctrl-C cancels the run cleanly.

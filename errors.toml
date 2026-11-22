@@ -695,6 +695,20 @@ fields = [
 ]
 
 [[errors]]
+code = "KY-E220"
+variant = "DefaultNameTaken"
+class = "PlanError"
+summary = "A step called without into= would write its default name, which the plan already has."
+message = "{method}() without into= writes the {kind} '{name}', but the plan already has a {kind} '{existing}'"
+hint = "pass into= with a new name (such as into='{name}_2'), or into='{existing}' to replace it"
+fields = [
+    { name = "method", type = "str", doc = "The plan method called without into=.", example = "log1p" },
+    { name = "kind", type = "str", doc = "What the step writes: layer, embedding or cell column.", example = "layer" },
+    { name = "name", type = "str", doc = "The default name the step would write.", example = "log1p" },
+    { name = "existing", type = "str", doc = "The plan's member of that name (compared ignoring case).", example = "log1p" },
+]
+
+[[errors]]
 code = "KY-E301"
 variant = "StaleColumn"
 class = "StaleColumnError"

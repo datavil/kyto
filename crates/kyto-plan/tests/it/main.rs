@@ -9,6 +9,7 @@ mod property_cases;
 mod support;
 
 mod build_validation;
+mod chain_defaults;
 mod column_dtype_polars;
 mod devices;
 mod estimate;
