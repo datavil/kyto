@@ -1,5 +1,6 @@
 """Tasks 9.1 and 9.2: ``on(device=...)``, the device of every step in ``explain()``,
-and ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in ``explain()``).
+and ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in ``explain()``);
+9.9: ``provenance.json`` records the request, the devices found and each step's device.
 
 The devices found depend on the machine and on the build (the default wheel has no GPU
 feature, so it finds only the CPU); the tests read them from ``explain(format="json")``
@@ -140,3 +141,49 @@ def test_provenance_records_the_device_the_run_used(
     assert {"method": "on", "device": device} in steps
     rebuilt = kyto.scan(target).provenance()
     assert rebuilt.explain(format="json")["optimized"]["device"]["requested"] == device
+
+
+def _files(store: Path) -> dict[str, bytes]:
+    """Every file of ``store`` by relative path, ``provenance.json`` without ``run``."""
+    files: dict[str, bytes] = {}
+    for path in sorted(store.rglob("*")):
+        if path.is_file():
+            data = path.read_bytes()
+            if path.name == "provenance.json":
+                provenance = json.loads(data)
+                del provenance["run"]
+                data = json.dumps(provenance).encode()
+            files[str(path.relative_to(store))] = data
+    return files
+
+
+def test_provenance_records_each_steps_device(store: Path, tmp_path: Path) -> None:
+    plan = _plan(store, "auto")
+    written: list[Path] = []
+    for threads in (1, 4):
+        target = tmp_path / f"auto-{threads}.kyto"
+        plan.sink_zarr(target, threads=threads)
+        written.append(target)
+    provenance = json.loads((written[0] / "provenance.json").read_text())
+    devices = provenance["devices"]
+    explained = plan.explain(format="json")["optimized"]
+    # The request and the devices found, as explain() gives them.
+    assert list(devices) == ["requested", "found", "nodes"]
+    assert devices["requested"] == "auto"
+    assert devices["found"] == explained["device"]["found"]
+    # Each plan node that runs: the device and note of the optimized node it ran in.
+    # Nodes 0 (scan), 1 (log1p) and 3 (the sink); the `on` step (2) does no work and
+    # has no optimized node, so neither explain() nor provenance places it.
+    assert list(devices["nodes"]) == ["n0", "n1", "n3"]
+    for node in explained["nodes"]:
+        for origin in node["origin"]:
+            assert devices["nodes"][f"n{origin}"] == {
+                "device": node["device"],
+                "device_note": node["device_note"],
+            }
+    # The sink writes on the CPU; `device` is the GPU of a step placed on one.
+    assert devices["nodes"]["n3"] == {"device": "cpu", "device_note": None}
+    gpus = {placement["device"] for placement in devices["nodes"].values()} - {"cpu"}
+    assert provenance["device"] == (gpus.pop() if gpus else "cpu")
+    # Byte-identical on any thread count, `run` aside (R11).
+    assert _files(written[0]) == _files(written[1])

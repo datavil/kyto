@@ -2052,8 +2052,10 @@ class Atlas:
 
         Keys: ``kyto_version``, ``dependencies``, ``plan`` (the plan JSON whose output
         the store holds, without its sink, or ``None`` for an import; ``provenance()``
-        rebuilds it), ``source``, ``seeds``, ``device`` and ``run`` (start, end and
-        seconds per step).
+        rebuilds it), ``source``, ``seeds``, ``device``, ``devices`` (the device asked
+        for, the devices found and each step's device, as ``explain(format="json")``
+        gives them, or ``None`` for an import) and ``run`` (start, end and seconds per
+        step).
         It describes the store this plan scans, not the plan's own steps
         (``to_json()``). kyto stores no free-form metadata such as anndata's ``uns``.
 

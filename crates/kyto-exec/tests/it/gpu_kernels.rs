@@ -13,7 +13,10 @@
 //! the same bits on a second run (no atomics, a fixed order per thread); a dispatch past
 //! 65535 workgroups; and the pipeline: `normalize_total` + `log1p` placed on the GPU
 //! (`on(device=...)`) against the CPU run on pbmc3k, both target sums, with one timing
-//! of each for the record (not a benchmark: M6).
+//! of each for the record (not a benchmark: M6). Task 9.9: a store sunk with
+//! `on(device="auto")` records the request, the devices found and each step's device
+//! (the GPU's for `normalize_total` + `log1p`) in `provenance.json`, the same bytes at
+//! 1 and 4 threads, `run` aside.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -23,7 +26,7 @@ use std::time::Instant;
 use kyto_exec::{ExecuteOptions, Kernels, Pipeline};
 use kyto_gpu::{Backend, Cuda, Device, DeviceKernels, RowValues, Wgpu, probe};
 use kyto_plan::{
-    DeviceRequest, Devices, Member, OptimizeOptions, Output, PhysicalOptions, physical_plan,
+    DeviceRequest, Devices, Member, OptimizeOptions, Output, PhysicalOptions, Sink, physical_plan,
 };
 use kyto_store::{CellValues, ConvertOptions};
 
@@ -446,4 +449,78 @@ fn normalize_and_log1p_on_the_gpu_match_the_cpu_on_pbmc3k() {
             );
         }
     }
+}
+
+/// `provenance.json` of `store` without `run`, as a JSON value.
+fn provenance_without_run(store: &std::path::Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(store.join("provenance.json")).unwrap();
+    let mut provenance: serde_json::Value = serde_json::from_str(&text).unwrap();
+    provenance.as_object_mut().unwrap().remove("run");
+    provenance
+}
+
+#[test]
+fn provenance_records_the_gpu_steps_of_an_auto_sink() {
+    let found = probe();
+    let gpus = gpus();
+    if gpus.is_empty() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let h5ad = work.path().join("synthetic.h5ad");
+    let reference = work.path().join("reference");
+    std::fs::create_dir(&reference).unwrap();
+    if !write_fixture("synthetic", &h5ad, &reference) {
+        eprintln!("SKIPPED synthetic: anndata is not installed on this platform");
+        return;
+    }
+    let store = work.path().join("synthetic.kyto");
+    kyto_store::convert(&h5ad, &store, &ConvertOptions::default()).unwrap();
+    // Nodes: scan 0, normalize_total 1, log1p 2, on 3, sink 4.
+    let plan = scan(&store)
+        .normalize_total(Some(1e4), Some("counts"), "normalized")
+        .unwrap()
+        .log1p(Some("normalized"), "log1p")
+        .unwrap()
+        .on_device(DeviceRequest::Auto)
+        .unwrap();
+    let mut written = Vec::new();
+    for threads in [1, 4] {
+        let target = work.path().join(format!("auto-{threads}.kyto"));
+        let sunk = plan
+            .sink(Sink::Zarr {
+                path: target.display().to_string(),
+            })
+            .unwrap();
+        let options = PhysicalOptions {
+            devices: found,
+            ..PhysicalOptions::default()
+        };
+        let physical = physical_plan(&[Output::all(&sunk)], OptimizeOptions::ALL, options);
+        Pipeline::new(&physical, 0)
+            .unwrap()
+            .sink(
+                ExecuteOptions::new(NonZeroUsize::new(threads).unwrap()),
+                false,
+            )
+            .unwrap();
+        written.push(provenance_without_run(&target));
+    }
+    // The same bytes on any thread count (R11); the files are checked in sink_threads.
+    assert_eq!(written[0], written[1]);
+    // auto takes the first GPU found with a kernel: CUDA before wgpu.
+    let gpu = gpus[0].device().name();
+    let provenance = &written[0];
+    assert_eq!(provenance["device"], gpu);
+    let cpu = serde_json::json!({"device": "cpu", "device_note": null});
+    let on_gpu = serde_json::json!({"device": gpu, "device_note": "within 1e-6 of cpu"});
+    assert_eq!(
+        provenance["devices"],
+        serde_json::json!({
+            "requested": "auto",
+            "found": found.to_string(),
+            "nodes": {"n0": cpu, "n1": on_gpu, "n2": on_gpu, "n4": cpu},
+        })
+    );
+    eprintln!("{gpu}: provenance devices {}", provenance["devices"]);
 }

@@ -131,7 +131,7 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Im
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-Done (9.1, 9.2): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+Done (9.1, 9.2, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
 
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
@@ -153,9 +153,6 @@ Done (9.1, 9.2): see [Implementation Plan - Done.md](Implementation%20Plan%20-%2
 - [ ] **9.8 Portable matrix kernels (Metal).** PCA's products (sparse × dense SpMM and dense GEMM) and 9.4's tiled distances plus top-k written in CubeCL, so PCA and neighbours run through wgpu on Metal (and ROCm) as well as CUDA. 9.3's cuSPARSE/cuBLAS stays the CUDA path; `device="auto"` picks it on NVIDIA and these kernels elsewhere, by the 9.1 rules shown in `explain()`. (added Nov 14, 2026, at the user's request: Apple GPUs otherwise run only the 9.2 kernels)
   - Depends: 9.2, 9.3, 9.4
   - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
-- [ ] **9.9 Provenance records each step's device.** Since 9.1, `provenance.json` holds the device asked for (the plan's `on` step) and `device`, the device the run computed on (a GPU if any step was placed on one, else `cpu`), but not which steps ran where or which devices were found. Record the devices found and each node's placement (as `explain(format="json")` gives them), so a store says which steps ran on a GPU once some do (9.2). (added Nov 21, 2026, by 9.1)
-  - Depends: 8.5, 9.1
-  - Done when: a store written with `on(device="auto")` holds the request, the devices found and each step's device in `provenance.json`; stores stay byte-identical across thread counts (except `run`).
 - [ ] **9.10 QC metrics on the GPU.** 9.2's `row_sums` and `row_nnz` CubeCL kernels (`kyto_gpu::DeviceKernels`) are tested against the CPU but no plan step dispatches to them: the QC metrics (`total_counts`, `genes_detected`, `percent_counts_in`) are leaves of cell expressions inside `with_cells` and `filter_cells`, which mix metadata and matrix work in one node. Decide how such a node is placed (the whole node, or only its matrix leaves), register the method in `CUDA_KERNELS`/`WGPU_KERNELS`, and dispatch in `qc.rs`. (added Nov 22, 2026, by 9.2)
   - Depends: 9.2
   - Done when: `with_cells(total_counts=...)` on a GPU equals the CPU column (counts: the same bits; `float32` layers: 1e-6 relative), and `explain()` shows the step's device.

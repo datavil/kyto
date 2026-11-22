@@ -456,10 +456,13 @@ fn schema_and_provenance_follow_the_spec() {
             "source",
             "seeds",
             "device",
+            "devices",
             "run"
         ]
     );
     assert_eq!(provenance["plan"], Value::Null);
+    // An import has no plan, so no placements (task 9.9).
+    assert_eq!(provenance["devices"], Value::Null);
     assert_eq!(provenance["source"]["kind"], "h5ad");
     assert_eq!(provenance["device"], "cpu");
     assert_eq!(provenance["dependencies"]["zarrs"], "0.22.10");

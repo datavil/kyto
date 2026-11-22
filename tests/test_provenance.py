@@ -93,11 +93,21 @@ def test_provenance_records_seeds_device_and_timings(tmp_path: Path) -> None:
         "source",
         "seeds",
         "device",
+        "devices",
         "run",
     ]
     # Node IDs from the scan (0): pca 6, neighbors 7, umap 8, leiden 9; the sink is 10.
     assert provenance["seeds"] == {"n6": 3, "n7": 5, "n8": 7, "n9": 11}
     assert provenance["device"] == "cpu"
+    # No `on` step: asked for the CPU, and every plan node ran there (task 9.9).
+    devices = provenance["devices"]
+    assert devices["requested"] == "cpu"
+    assert devices["found"].split(", ")[0] == "cpu"
+    assert set(devices["nodes"]) == {f"n{node}" for node in range(11)}
+    assert all(
+        placement == {"device": "cpu", "device_note": None}
+        for placement in devices["nodes"].values()
+    )
     assert provenance["source"] is None
     assert [node["step"]["method"] for node in provenance["plan"]["nodes"]][
         -1

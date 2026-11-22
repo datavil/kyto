@@ -285,6 +285,7 @@ impl Pipeline {
                 Operation::Node(logical) if matches!(**logical, Plan::Sink(_)) => {
                     let mut spec = SinkSpec::new(logical, output_entry.reads())?;
                     spec.device = run_device(nodes, executions, output_entry.node());
+                    spec.devices = Some(run_devices(plan, output_entry.node()));
                     sink = Some(spec);
                 }
                 Operation::Node(logical) => {
@@ -815,6 +816,43 @@ fn run_device(
         next = nodes[index].input();
     }
     device.name()
+}
+
+/// Where the chain below optimized node `top` of `plan` runs, for `provenance.json`'s
+/// `devices` (task 9.9): the device asked for and the devices found, as
+/// `explain(format="json")`'s `optimized.device` gives them, and each plan node's
+/// device and note, as its optimized node's entry gives them, keyed `n<ID>` in ID
+/// order (every logical node a fused pass came from gets the pass's placement).
+/// Nothing in it depends on the thread count.
+fn run_devices(plan: &PhysicalPlan, top: usize) -> serde_json::Value {
+    let nodes = plan.optimized().nodes();
+    let executions = plan.executions();
+    let mut placed = BTreeMap::new();
+    let mut next = Some(top);
+    while let Some(index) = next {
+        let placement = executions[index].placement();
+        for id in nodes[index].origin() {
+            placed.insert(id.0, placement);
+        }
+        next = nodes[index].input();
+    }
+    let steps: serde_json::Map<String, serde_json::Value> = placed
+        .into_iter()
+        .map(|(id, placement)| {
+            (
+                format!("n{id}"),
+                serde_json::json!({
+                    "device": placement.name(),
+                    "device_note": placement.note(),
+                }),
+            )
+        })
+        .collect();
+    serde_json::json!({
+        "requested": plan.device_request().name(),
+        "found": plan.options().devices.to_string(),
+        "nodes": steps,
+    })
 }
 
 /// The GPU kernels of a pipeline's nodes (task 9.2), one client per device, opened

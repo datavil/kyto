@@ -78,6 +78,7 @@ pub(crate) fn provenance_json(
     seeds: &BTreeMap<u64, u64>,
     timings: &BTreeMap<u64, f64>,
     device: &str,
+    devices: Option<Value>,
     (started_at, finished_at): (SystemTime, SystemTime),
 ) -> Value {
     let seeds: Map<String, Value> = seeds
@@ -103,6 +104,7 @@ pub(crate) fn provenance_json(
         })),
         "seeds": seeds,
         "device": device,
+        "devices": devices,
         "run": {
             "started_at": rfc3339_utc(started_at),
             "finished_at": rfc3339_utc(finished_at),

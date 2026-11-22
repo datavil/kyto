@@ -467,7 +467,8 @@ How the store was made (task 8.5; 4.3 defines the plan JSON). v0 keys:
   "plan": null,
   "source": {"kind": "h5ad", "path": "pbmc3k.h5ad", "sha256": "..."},
   "seeds": {"n7": 0},
-  "device": "cpu",
+  "device": "metal",
+  "devices": {"requested": "auto", "found": "cpu, metal", "nodes": {"n0": {"device": "cpu", "device_note": null}, "n1": {"device": "metal", "device_note": "within 1e-6 of cpu"}, "n3": {"device": "cpu", "device_note": null}}},
   "run": {"started_at": "2026-11-07T10:00:00Z", "finished_at": "2026-11-07T10:00:05Z", "timings": {"n7": 1.25}}
 }
 ```
@@ -480,6 +481,7 @@ How the store was made (task 8.5; 4.3 defines the plan JSON). v0 keys:
 | `source` | yes | for an import: input kind, path as given, and the SHA-256 of the input file (computed while streaming it); otherwise `null` |
 | `seeds` | yes | plan node ID to seed, for every seeded node of `plan` (a step with an integer `seed` argument), keyed `n<ID>` in ID order (`{}` if none). The seeds are also in `plan`; this is the summary |
 | `device` | yes | the device the run computed on, as `explain()` names it: `"cpu"`, or the GPU (`"cuda"`, `"metal"`, `"vulkan"`, `"dx12"`) a step was placed on (9.1); the device asked for is the plan's `on` step |
+| `devices` | yes | where the plan ran (9.9), as `explain(format="json")` gives it: `requested` (the device asked for with `on`, `"cpu"` without one) and `found` (the devices found, `"cpu, metal"`), as its `optimized.device`, and `nodes`: plan node ID (keyed `n<ID>`, in ID order) to `{"device", "device_note"}`, as the optimized node it ran in gives them (every node a fused pass came from gets the pass's), for each node of the run, the sink included; a node with no work at run time (an `on` step) has no optimized node and is not listed. `found` depends on the machine and the build, not on the thread count. `null` when `plan` is (an import, a `concat`) |
 | `run` | yes | `started_at` and `finished_at` (RFC 3339, UTC, whole seconds) and `timings`: plan node ID (keyed `n<ID>`, in ID order) to seconds, for each node that runs its own passes or in-memory step (a cross-cell node such as a median `normalize_total`, `highly_variable_genes`, `scale`, `pca` or `scrublet`; a gene step; `neighbors`, `leiden`/`louvain`, `umap`) and for the sink node, whose time is the output's stream with the per-cell steps fused into it and the writes. `{}` for an import |
 
 `run` and `source.path` are the only parts that vary between identical runs; 8.7
