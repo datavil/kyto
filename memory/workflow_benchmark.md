@@ -16,6 +16,12 @@
   threadpoolctl and `sc.settings.n_jobs`. pynndescent and `pp.pca` barely scale with threads
   anyway.
 
+- (10.3) Warm scanpy up on the **whole dataset**. At 10k cells a 6,000-cell warm-up still
+  left part of pynndescent uncompiled: the timed neighbours took 46.8 s (warm-up 6,000)
+  against 0.28 s (warm-up 10,000), 4 threads, same process setup. The suite
+  (`benchmarks/suite`) warms up on every cell. 10.8's 50k scanpy neighbours (9.8 s, warm-up
+  6,000) may include compilation too: re-measure it in 12.1 before quoting its ratio.
+
 **Broke:**
 - `measure.py` divided `ru_maxrss` by 1024 on macOS, where it is bytes, not kilobytes.
   Fixed in 10.8.

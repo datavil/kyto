@@ -1,0 +1,60 @@
+# Benchmark suite (task 10.3): kyto against scanpy per step, time and peak RSS, plus the
+# criterion kernel benches. On demand only, like CI (decided by the user, Nov 7, 2026):
+# `gh workflow run benchmarks.yml -f sizes=pbmc3k,10k`. The table goes to the run's
+# summary and `results.json` is uploaded; the run fails when kyto regressed against
+# this runner's baseline (benchmarks/suite/baseline-<platform>.json). No runner has a
+# baseline yet: commit an uploaded results.json under that name to start comparing.
+# rapids-singlecell needs CUDA, which hosted runners lack: its column is skipped with a
+# notice in the table.
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      sizes:
+        description: "Comma list of sizes: pbmc3k, 10k, 50k, 100k"
+        default: "pbmc3k,10k"
+      threads:
+        description: "Comma list of thread counts"
+        default: "1,4"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  UV_LOCKED: "1"
+
+jobs:
+  suite:
+    name: benchmark suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
+        with:
+          enable-cache: true
+      - uses: actions/cache@v6
+        with:
+          path: .cache/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/pbmc.py') }}
+      - run: uv sync
+      - name: put libpython on the loader path
+        run: echo "LD_LIBRARY_PATH=$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')" >> "$GITHUB_ENV"
+      - name: run the suite
+        env:
+          SIZES: ${{ inputs.sizes }}
+          THREADS: ${{ inputs.threads }}
+        run: uv run python benchmarks/suite/suite.py --sizes "$SIZES" --threads "$THREADS" --output bench-out
+      - name: table to the run summary
+        if: always()
+        run: cat bench-out/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-results
+          path: bench-out/
+          if-no-files-found: ignore

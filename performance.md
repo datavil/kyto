@@ -1,5 +1,65 @@
 # Performance
 
+## Benchmark suite baseline (task 10.3, provisional)
+
+Taken Nov 22, 2026 at `45d878d` with `uv run python benchmarks/suite/suite.py
+--update-baseline` (pbmc3k and 10k, 1 and 4 threads, median of 3; method and thresholds
+in [benchmarks/suite/README.md](benchmarks/suite/README.md)); stored as
+`benchmarks/suite/baseline-darwin-arm64.json`, which the suite's regression check reads.
+
+- **Provisional, noisy:** Apple M4 (10 cores, 16 GB) with two other agents' builds running:
+  1-minute load average 23.3 at the start, 16 to 27 during the run.
+  Several kyto step differences came out negative (marked `(noise)`); the regression check
+  compares times through each step, which stay positive. Re-take on a quiet machine at the
+  start of task 12.1.
+- **scanpy warm-up:** scanpy warms up on the whole dataset. With 10.8's 6,000-cell warm-up,
+  scanpy's timed neighbours at 10k took 46.8 s against 0.28 s (it was still compiling
+  pynndescent). scanpy at 10k was re-measured with the full warm-up after the run. **The
+  10.8 table below used the 6,000-cell warm-up at 50k: its scanpy neighbours (9.8 s) may
+  include compilation, so kyto's neighbours ratios there may be too favourable to kyto.**
+  Re-measure in 12.1.
+- kyto loses at pbmc3k on every step but UMAP at 4 threads (per-process start-up and plan
+  costs dominate a 2,700-cell run), and at 10k on neighbours (exact search: 0.94 s against
+  scanpy's 0.41 s at 1 thread). kyto's peak RSS is below scanpy's everywhere.
+- rapids-singlecell: skipped (no CUDA on this Mac).
+- Ratio = kyto / scanpy warm. scanpy's peak RSS is from its cold run; both include the
+  interpreter and imports. kyto's total is the full plan run by `sink_zarr` (convert not
+  included); scanpy's is read through write.
+
+#### pbmc3k (2,700 cells x 32,738 genes)
+
+| Step | 1 thread: scanpy s | kyto s | ratio | scanpy MB | kyto MB | 4 threads: scanpy s | kyto s | ratio | scanpy MB | kyto MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| read (scanpy) | 0.03 |  |  | 348 |  | 0.03 |  |  | 347 |  |
+| QC + filters | 0.03 | 0.47 | 18.84 | 405 | 181 | 0.03 | 0.31 | 11.14 | 404 | 165 |
+| normalize + log1p | 0.01 | -0.12 | (noise) | 481 | 193 | 0.01 | 0.06 | 9.14 | 479 | 187 |
+| HVG + keep HVGs | 0.03 | 0.06 | 1.78 | 522 | 199 | 0.03 | 0.09 | 2.69 | 523 | 204 |
+| PCA | 0.09 | 0.69 | 7.48 | 537 | 223 | 0.09 | 0.42 | 4.50 | 538 | 243 |
+| neighbours (kyto exact) | 0.02 | 0.54 | 22.38 | 703 | 222 | 0.02 | -0.08 | (noise) | 709 | 232 |
+| Leiden | 0.03 | 0.11 | 4.07 | 711 | 233 | 0.03 | 0.20 | 6.90 | 717 | 230 |
+| UMAP | 1.92 | 5.92 | 3.09 | 713 | 226 | 2.07 | 1.92 | 0.92 | 720 | 242 |
+| write | 0.02 | -0.77 | (noise) | 716 | 238 | 0.06 | 0.21 | 3.22 | 722 | 258 |
+| **total** | 2.17 | 6.90 | 3.17 | 716 | 238 | 2.42 | 3.12 | 1.29 | 722 | 258 |
+
+#### 10k synthetic (10,000 cells x 20,000 genes)
+
+| Step | 1 thread: scanpy s | kyto s | ratio | scanpy MB | kyto MB | 4 threads: scanpy s | kyto s | ratio | scanpy MB | kyto MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| read (scanpy) | 0.22 |  |  | 442 |  | 0.07 |  |  | 442 |  |
+| QC + filters | 0.14 | 0.22 | 1.53 | 799 | 326 | 0.10 | 0.10 | 0.94 | 799 | 551 |
+| normalize + log1p | 0.10 | 0.05 | 0.50 | 873 | 371 | 0.04 | 0.02 | 0.52 | 873 | 602 |
+| HVG + keep HVGs | 0.26 | 0.36 | 1.38 | 1,038 | 398 | 0.12 | 0.15 | 1.29 | 1,038 | 625 |
+| PCA | 0.85 | 1.26 | 1.48 | 1,056 | 492 | 0.43 | 0.33 | 0.77 | 1,056 | 624 |
+| neighbours (kyto exact) | 0.41 | 0.94 | 2.31 | 1,335 | 475 | 0.20 | 0.36 | 1.80 | 1,370 | 627 |
+| Leiden | 0.18 | -0.24 | (noise) | 1,353 | 475 | 0.13 | 0.02 | 0.18 | 1,390 | 654 |
+| UMAP | 13.35 | 10.90 | 0.82 | 1,356 | 490 | 8.47 | 10.54 | 1.24 | 1,394 | 643 |
+| write | 0.09 | -0.71 | (noise) | 1,357 | 575 | 0.08 | -0.87 | (noise) | 1,396 | 692 |
+| **total** | 15.84 | 12.79 | 0.81 | 1,357 | 575 | 9.58 | 10.67 | 1.11 | 1,396 | 692 |
+
+Rust kernels (criterion, median per call, 4,096-row block, same noisy machine): dispatched
+NEON `log1p` 11.0 ms, `row_sums_f32` 0.44 ms, `row_nnz_f32` 0.64 ms, `scale_rows_u32`
+1.01 ms; every bench in the baseline file.
+
 ## The full workflow against scanpy (task 10.8)
 
 Measured Nov 20, 2026, at `808989f` (after tasks 5.12 to 5.20; release extension built

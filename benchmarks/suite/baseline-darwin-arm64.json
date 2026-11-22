@@ -1,0 +1,338 @@
+{
+ "created": "20261122-001110",
+ "machine": {
+  "platform": "darwin-arm64",
+  "cpu": "Apple M4",
+  "cpu_count": 10,
+  "commit": "45d878d",
+  "load_average": [
+   23.3,
+   11.9,
+   7.4
+  ],
+  "python": "3.13.1"
+ },
+ "settings": {
+  "sizes": [
+   "pbmc3k",
+   "10k"
+  ],
+  "threads": [
+   1,
+   4
+  ],
+  "repeats": 3,
+  "tools": [
+   "kyto",
+   "scanpy",
+   "rapids"
+  ]
+ },
+ "workflow": {
+  "pbmc3k": {
+   "shape": {
+    "n_cells": 2700,
+    "n_genes": 32738,
+    "nnz": 2286884
+   },
+   "convert_seconds": 0.686,
+   "threads": {
+    "1": {
+     "kyto": {
+      "seconds": {
+       "qc_filter": 0.471,
+       "normalize_log1p": -0.115,
+       "hvg": 0.057,
+       "pca": 0.688,
+       "neighbors": 0.537,
+       "leiden": 0.11,
+       "umap": 5.922,
+       "write": -0.772,
+       "total": 6.899
+      },
+      "peak_mb": {
+       "qc_filter": 181,
+       "normalize_log1p": 193,
+       "hvg": 199,
+       "pca": 223,
+       "neighbors": 222,
+       "leiden": 233,
+       "umap": 226,
+       "write": 238,
+       "total": 238
+      }
+     },
+     "scanpy": {
+      "seconds": {
+       "read": 0.026,
+       "qc_filter": 0.025,
+       "normalize_log1p": 0.007,
+       "hvg": 0.032,
+       "pca": 0.092,
+       "neighbors": 0.024,
+       "leiden": 0.027,
+       "umap": 1.917,
+       "write": 0.017,
+       "total": 2.175
+      },
+      "peak_mb": {
+       "read": 348,
+       "qc_filter": 405,
+       "normalize_log1p": 481,
+       "hvg": 522,
+       "pca": 537,
+       "neighbors": 703,
+       "leiden": 711,
+       "umap": 713,
+       "write": 716,
+       "total": 716
+      },
+      "cold_seconds": {
+       "read": 0.032,
+       "qc_filter": 0.026,
+       "normalize_log1p": 1.177,
+       "hvg": 0.634,
+       "pca": 0.307,
+       "neighbors": 6.309,
+       "leiden": 0.085,
+       "umap": 2.161,
+       "write": 0.017,
+       "total": 10.748
+      },
+      "n_cells_kept": 2638,
+      "n_clusters": 9
+     }
+    },
+    "4": {
+     "kyto": {
+      "seconds": {
+       "qc_filter": 0.312,
+       "normalize_log1p": 0.064,
+       "hvg": 0.086,
+       "pca": 0.423,
+       "neighbors": -0.084,
+       "leiden": 0.2,
+       "umap": 1.918,
+       "write": 0.206,
+       "total": 3.125
+      },
+      "peak_mb": {
+       "qc_filter": 165,
+       "normalize_log1p": 187,
+       "hvg": 204,
+       "pca": 243,
+       "neighbors": 232,
+       "leiden": 230,
+       "umap": 242,
+       "write": 258,
+       "total": 258
+      }
+     },
+     "scanpy": {
+      "seconds": {
+       "read": 0.029,
+       "qc_filter": 0.028,
+       "normalize_log1p": 0.007,
+       "hvg": 0.032,
+       "pca": 0.094,
+       "neighbors": 0.018,
+       "leiden": 0.029,
+       "umap": 2.074,
+       "write": 0.064,
+       "total": 2.416
+      },
+      "peak_mb": {
+       "read": 347,
+       "qc_filter": 404,
+       "normalize_log1p": 479,
+       "hvg": 523,
+       "pca": 538,
+       "neighbors": 709,
+       "leiden": 717,
+       "umap": 720,
+       "write": 722,
+       "total": 722
+      },
+      "cold_seconds": {
+       "read": 0.06,
+       "qc_filter": 0.044,
+       "normalize_log1p": 1.738,
+       "hvg": 0.787,
+       "pca": 0.354,
+       "neighbors": 9.531,
+       "leiden": 0.142,
+       "umap": 3.194,
+       "write": 0.062,
+       "total": 15.912
+      },
+      "n_cells_kept": 2638,
+      "n_clusters": 9
+     }
+    }
+   }
+  },
+  "10k": {
+   "shape": {
+    "n_cells": 10000,
+    "n_genes": 20000,
+    "nnz": 14263691
+   },
+   "convert_seconds": 0.329,
+   "threads": {
+    "1": {
+     "kyto": {
+      "seconds": {
+       "qc_filter": 0.221,
+       "normalize_log1p": 0.051,
+       "hvg": 0.36,
+       "pca": 1.26,
+       "neighbors": 0.944,
+       "leiden": -0.239,
+       "umap": 10.905,
+       "write": -0.71,
+       "total": 12.792
+      },
+      "peak_mb": {
+       "qc_filter": 326,
+       "normalize_log1p": 371,
+       "hvg": 398,
+       "pca": 492,
+       "neighbors": 475,
+       "leiden": 475,
+       "umap": 490,
+       "write": 575,
+       "total": 575
+      }
+     },
+     "scanpy": {
+      "seconds": {
+       "read": 0.223,
+       "qc_filter": 0.144,
+       "normalize_log1p": 0.101,
+       "hvg": 0.261,
+       "pca": 0.85,
+       "neighbors": 0.409,
+       "leiden": 0.178,
+       "umap": 13.348,
+       "write": 0.087,
+       "total": 15.837
+      },
+      "peak_mb": {
+       "read": 442,
+       "qc_filter": 799,
+       "normalize_log1p": 873,
+       "hvg": 1038,
+       "pca": 1056,
+       "neighbors": 1335,
+       "leiden": 1353,
+       "umap": 1356,
+       "write": 1357,
+       "total": 1357
+      },
+      "cold_seconds": {
+       "read": 0.042,
+       "qc_filter": 0.22,
+       "normalize_log1p": 3.274,
+       "hvg": 2.091,
+       "pca": 1.735,
+       "neighbors": 75.325,
+       "leiden": 0.302,
+       "umap": 10.169,
+       "write": 0.09,
+       "total": 93.248
+      },
+      "n_cells_kept": 9977,
+      "n_clusters": 8
+     }
+    },
+    "4": {
+     "kyto": {
+      "seconds": {
+       "qc_filter": 0.098,
+       "normalize_log1p": 0.023,
+       "hvg": 0.155,
+       "pca": 0.334,
+       "neighbors": 0.361,
+       "leiden": 0.023,
+       "umap": 10.545,
+       "write": -0.874,
+       "total": 10.666
+      },
+      "peak_mb": {
+       "qc_filter": 551,
+       "normalize_log1p": 602,
+       "hvg": 625,
+       "pca": 624,
+       "neighbors": 627,
+       "leiden": 654,
+       "umap": 643,
+       "write": 692,
+       "total": 692
+      }
+     },
+     "scanpy": {
+      "seconds": {
+       "read": 0.075,
+       "qc_filter": 0.104,
+       "normalize_log1p": 0.044,
+       "hvg": 0.12,
+       "pca": 0.433,
+       "neighbors": 0.2,
+       "leiden": 0.127,
+       "umap": 8.47,
+       "write": 0.079,
+       "total": 9.577
+      },
+      "peak_mb": {
+       "read": 442,
+       "qc_filter": 799,
+       "normalize_log1p": 873,
+       "hvg": 1038,
+       "pca": 1056,
+       "neighbors": 1370,
+       "leiden": 1390,
+       "umap": 1394,
+       "write": 1396,
+       "total": 1396
+      },
+      "cold_seconds": {
+       "read": 0.045,
+       "qc_filter": 0.105,
+       "normalize_log1p": 1.336,
+       "hvg": 0.808,
+       "pca": 0.61,
+       "neighbors": 45.121,
+       "leiden": 0.173,
+       "umap": 8.914,
+       "write": 0.089,
+       "total": 57.201
+      },
+      "n_cells_kept": 9977,
+      "n_clusters": 8
+     }
+    }
+   }
+  }
+ },
+ "kernels": {
+  "log1p_f32/neon": 10997012.5,
+  "log1p_f32/pulp_scalar": 12424637.5,
+  "log1p_f32/stand_in_5_2": 8203537.5,
+  "row_nnz_f32/neon": 643881.0,
+  "row_nnz_f32/pulp_scalar": 1361635.3,
+  "row_sums_f32/neon": 441402.2,
+  "row_sums_f32/pulp_scalar": 423274.5,
+  "row_sums_f32/stand_in_5_2": 2144477.5,
+  "row_sums_of_squares_f32/neon": 614943.3,
+  "row_sums_of_squares_f32/pulp_scalar": 600383.0,
+  "row_sums_u32/neon": 638156.8,
+  "row_sums_u32/pulp_scalar": 480237.6,
+  "scale_rows_u32/neon": 1005740.0,
+  "scale_rows_u32/pulp_scalar": 755720.7
+ },
+ "notices": [
+  "rapids-singlecell: skipped, needs rapids-singlecell with CUDA (ModuleNotFoundError: No module named 'rapids_singlecell').",
+  "scanpy at 10k re-measured after the run with the warm-up on every cell (task 10.3 finding); pbmc3k's warm-up already covered every cell."
+ ],
+ "provisional": "taken Nov 22, 2026 while other builds ran on this machine (load average above); re-take it on a quiet machine at the start of task 12.1."
+}

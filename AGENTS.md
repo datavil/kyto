@@ -203,7 +203,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `crates/kyto-py` | PyO3 bindings only. Thin: convert, call core, return. |
 | `python/kyto` | Python package and `.pyi` stubs |
 | `tests/` | pytest (API, parity, property tests) and fixtures |
-| `benchmarks/` | criterion and pytest-benchmark, vs scanpy and rapids-singlecell (not yet: task 10.3) |
+| `benchmarks/` | `suite/` (10.3): the benchmark suite vs scanpy and rapids-singlecell, per step, time and peak RSS, with a baseline regression check; `scanpy_workflow/` (10.8): the per-step scripts it runs |
 | `docs/` | docs site sources (10.5, `mkdocs.yml`): `format.md` store format spec (2.1), migration pages, guides; `errors.md` generated from `errors.toml`; index, design rules and API reference generated at build time by `scripts/docs_hooks.py` |
 | `errors.toml` | the error registry (codes, classes, templates, hints, docs links) |
 | `llms.txt`, `llms-full.txt` | the public API for agents: signatures, summaries, examples (generated from the stubs, 8.6) |
@@ -311,6 +311,7 @@ uv run python scripts/llms_txt.py --check  # llms.txt and llms-full.txt are what
 NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict   # 10.5: the docs site builds with zero warnings (into target/site, nothing deployed)
 uv run pytest                             # Python tests (API, parity, hypothesis properties with a fixed seed)
 uv run pytest tests/fixtures              # build fixtures (pbmc3k downloads once to .cache/), check digests
+uv run python benchmarks/suite/suite.py --smoke   # 10.3: the benchmark harness runs end to end (500 cells, kyto only, ~15 s)
 uv run pre-commit install                 # run the hooks on every git commit (once)
 uv run pre-commit run --all-files         # fmt, clippy, ruff, pyright, before every commit
 ```
@@ -331,6 +332,7 @@ uv run --no-project python scripts/agents_commands.py
 uv run --directory tests python -m fixtures.make_reference   # regenerate scanpy references
 uv run cargo test --release -p kyto-exec --test it -- thread_scaling:: --ignored --nocapture   # 5.2 thread scaling on pbmc3k (timings)
 uv run cargo bench -p kyto-exec --bench kernels   # 5.3 SIMD kernel benches (criterion, timings)
+uv run python benchmarks/suite/suite.py   # 10.3 benchmark suite vs scanpy (pbmc3k, 10k; --sizes 50k,100k opt-in): table + baseline check, exit 1 on a regression
 uv run cargo test --release -p kyto-exec --test it -- kernels:: --ignored --nocapture   # 5.3 log1p over every f32 (~2.5 min)
 uv run cargo test -p kyto-gpu --features wgpu -- --ignored   # 9.1: the probe finds Metal (on an Apple GPU; CI's macOS runners have none)
 KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run cargo test --workspace   # 10.1 long proptest run: 20x the cases, other seed
@@ -343,9 +345,12 @@ KYTO_PROPERTY_SCALE=20 KYTO_PROPERTY_SEED=7 uv run pytest tests/test_properties.
   `KYTO_PROPERTY_SCALE` (multiplies the cases) and `KYTO_PROPERTY_SEED` (draws other
   cases). A new proptest uses `config`, never `ProptestConfig` directly.
 
-- **Bench:** only 5.3's kernel bench above (criterion, in `crates/kyto-exec/benches`). The
-  suites against scanpy (`criterion`, `pytest-benchmark`) arrive with task 10.3, which adds
-  them to `Run by CI` (or here, if too slow for every task).
+- **Bench:** the suite (10.3, `benchmarks/suite/README.md`) runs 10.8's per-step scripts
+  against scanpy (and rapids-singlecell where CUDA exists) plus 5.3's criterion kernel
+  bench, writes a Markdown table and compares kyto's numbers with
+  `benchmarks/suite/baseline-<platform>.json` (exit 1 past the thresholds stated there).
+  The gate runs only its `--smoke` mode; the full suite runs by hand or with
+  `gh workflow run benchmarks.yml`. The darwin-arm64 baseline is provisional until 12.1.
 - **Linux:** the Rust test binary links libpython, so `cargo test` needs it on the
   loader path once per shell:
   `export LD_LIBRARY_PATH="$(uv run python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"`.
