@@ -18,13 +18,17 @@
 //! steps), in text and JSON; `cuda` refuses the same chain with `KY-E501` naming the
 //! first step without a kernel. The runs of such chains are in kyto-exec's
 //! `pipeline.rs` (`a_chain_alternating_devices_...`) and `tests/test_devices.py`.
+//!
+//! Task 9.10: a `with_cells` or cell filter is placed whole by its leaves (rule 6): one
+//! reading only QC metrics and table columns runs on a GPU, one that also reads a gene's
+//! values falls back to the CPU under `auto` and is refused (`KY-E501`) by a named GPU.
 #![allow(clippy::unwrap_used)]
 
 use crate::support;
 
 use std::sync::Arc;
 
-use kyto_core::{BinaryOp, CellExpr, Expr, Literal, QcMetric};
+use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, Literal, QcMetric, StrFunction};
 use kyto_plan::{
     Device, DeviceRequest, Devices, Explain, PhysicalOptions, PhysicalPlan, Plan, WgpuBackend,
 };
@@ -327,11 +331,12 @@ fn an_on_between_maps_does_not_stop_their_fusion() {
 }
 
 /// A chain alternating devices under `auto` on a GPU: the fused `normalize_total` +
-/// `log1p` pass (GPU kernels), a cell filter on the data (no GPU kernel: the CPU), a
+/// `log1p` pass (GPU kernels), a cell filter on a gene's values (no GPU kernel: the
+/// CPU; a filter on QC metrics alone has one since 9.10), a
 /// second `normalize_total` (GPU) reading the filter's output, then `pca` (CPU).
 fn alternating(request: DeviceRequest) -> Arc<Plan> {
-    let total = CellExpr::qc(Some("logn".to_owned()), QcMetric::TotalCounts).unwrap();
-    let expressed = Expr::binary(total, BinaryOp::Gt, Literal::Float(0.0)).unwrap();
+    let value = CellExpr::expression(Some("logn".to_owned()), "G0");
+    let expressed = Expr::binary(value, BinaryOp::GtEq, Literal::Float(0.0)).unwrap();
     scan()
         .normalize_total(Some(1e4), Some("counts"), "norm")
         .unwrap()
@@ -442,5 +447,101 @@ fn a_named_gpu_refuses_a_chain_with_a_step_it_has_no_kernel_for() {
         assert!(message.contains("'filter_cells'"), "{message}");
         assert!(message.contains(gpu), "{message}");
         assert!(!message.contains("'pca'"), "{message}");
+    }
+}
+
+/// QC columns (each metric), a filter on a QC metric and a column, then a column mixing
+/// a QC metric with a gene's values, then `on(device=request)`.
+fn qc_steps(request: DeviceRequest) -> Arc<Plan> {
+    let qc = |metric| CellExpr::qc(Some("counts".to_owned()), metric).unwrap();
+    let in_set = || GeneExpr::column("symbol").str(StrFunction::StartsWith("S1".to_owned()));
+    let kept = Expr::binary(
+        Expr::binary(qc(QcMetric::GenesDetected), BinaryOp::Gt, Literal::Int(0)).unwrap(),
+        BinaryOp::And,
+        Expr::binary(
+            CellExpr::column("score"),
+            BinaryOp::Gt,
+            Literal::Float(-2.0),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let mixed = Expr::binary(
+        qc(QcMetric::TotalCounts),
+        BinaryOp::Add,
+        CellExpr::expression(Some("counts".to_owned()), "G0"),
+    )
+    .unwrap();
+    scan()
+        .with_cells([
+            ("total".to_owned(), qc(QcMetric::TotalCounts)),
+            ("detected".to_owned(), qc(QcMetric::GenesDetected)),
+            (
+                "in_set".to_owned(),
+                qc(QcMetric::TotalCountsIn {
+                    genes: in_set().unwrap(),
+                }),
+            ),
+            (
+                "percent".to_owned(),
+                qc(QcMetric::PercentCountsIn {
+                    genes: in_set().unwrap(),
+                }),
+            ),
+        ])
+        .unwrap()
+        .filter_cells(&kept)
+        .unwrap()
+        .with_cells([("mixed".to_owned(), mixed)])
+        .unwrap()
+        .on_device(request)
+        .unwrap()
+}
+
+#[test]
+fn qc_steps_are_placed_by_their_leaves() {
+    let gpu = |name: &str| format!("{name} (within 1e-6 of cpu) moves=cpu->{name}->cpu");
+    for (devices, on_gpu) in [
+        (MAC, gpu("metal")),
+        (CUDA, gpu("cuda")),
+        (BOTH, gpu("cuda")),
+    ] {
+        let nodes = devices_per_node(&qc_steps(DeviceRequest::Auto), devices);
+        let shown: Vec<(&str, &str)> = nodes
+            .iter()
+            .map(|(name, device)| (name.as_str(), device.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("WITH_CELLS", "cpu (auto: no gpu kernel)"),
+                // Predicate pushdown runs the filter first.
+                ("WITH_CELLS", on_gpu.as_str()),
+                ("FILTER_CELLS", on_gpu.as_str()),
+                ("SCAN", "cpu"),
+            ],
+            "{devices}"
+        );
+    }
+    // A named GPU refuses the mixed column, naming its step.
+    for (request, devices, gpu) in [
+        (DeviceRequest::Metal, MAC, "metal"),
+        (DeviceRequest::Cuda, CUDA, "cuda"),
+    ] {
+        let plan = qc_steps(request);
+        let nodes = devices_per_node(&plan, devices);
+        assert_eq!(nodes[0].1, format!("{gpu} (no kernel: KY-E501 when run)"));
+        let error = physical(&plan, devices).device_error().unwrap();
+        assert_eq!(error.code(), "KY-E501");
+        assert!(error.to_string().contains("'with_cells'"), "{error}");
+    }
+    // The CPU and no GPU: as before 9.10.
+    for (name, device) in devices_per_node(&qc_steps(DeviceRequest::Auto), NO_GPU) {
+        let expected = if name == "SCAN" {
+            "cpu"
+        } else {
+            "cpu (auto: no gpu found)"
+        };
+        assert_eq!(device, expected, "{name}");
     }
 }

@@ -1,11 +1,12 @@
-"""Tasks 9.1, 9.2, 9.6 and 9.9: ``on(device=...)``, the device of every step in
+"""Tasks 9.1, 9.2, 9.6, 9.9 and 9.10: ``on(device=...)``, the device of every step in
 ``explain()``, ``log1p`` on a GPU (9.2: within 1e-6 relative of the CPU, noted in
 ``explain()``), the fallback rules once some steps have GPU kernels (9.6): ``auto``
 puts a chain's steps on a GPU or the CPU one by one, says why at each CPU step and
 names each GPU step's block moves (``cpu->metal->cpu``: blocks live on the host
 between steps); a named GPU without a kernel for one step refuses the whole run with
 ``KY-E501``, never the CPU; and 9.9: ``provenance.json`` records the request, the
-devices found and each step's device.
+devices found and each step's device; 9.10: a ``with_cells`` or ``filter`` on QC
+metrics runs on a GPU (counts: the CPU's bits).
 
 The devices found depend on the machine and on the build (the default wheel has no GPU
 feature, so it finds only the CPU); the tests read them from ``explain(format="json")``
@@ -22,6 +23,7 @@ import kyto.qc
 import numpy as np
 import pytest
 from kyto import _kyto
+from polars.testing import assert_frame_equal
 
 
 @pytest.fixture
@@ -196,12 +198,12 @@ def test_provenance_records_each_steps_device(store: Path, tmp_path: Path) -> No
 
 
 def _alternating(store: Path, device: str) -> _kyto.Atlas:
-    """GPU maps, a cell filter on their output (no GPU kernel), a GPU map on its output."""
+    """GPU maps, a filter on a gene's values (no GPU kernel), a GPU map on its output."""
     return (
         kyto.scan(store)
         .normalize_total(1e4, layer="counts", into="norm")
         .log1p(layer="norm", into="logn")
-        .filter(kyto.qc.total_counts(layer="logn") > 0)
+        .filter(kyto.gene_expression("ENSG01", layer="logn") >= 0)
         .normalize_total(1e4, layer="logn", into="renorm")
         .on(device=device)  # pyright: ignore[reportArgumentType]
     )
@@ -272,3 +274,35 @@ def test_a_named_gpu_without_a_kernel_for_a_step_raises_e501(
     else:
         assert note == "not found: KY-E504 when run"
         assert raised.value.code == "KY-E504"
+
+
+def _qc(store: Path, device: str) -> _kyto.Atlas:
+    """QC columns and a filter on a QC metric: GPU kernels since 9.10."""
+    return (
+        kyto.scan(store)
+        .with_cells(
+            total=kyto.qc.total_counts(layer="counts"),
+            detected=kyto.qc.genes_detected(layer="counts"),
+            percent=kyto.qc.percent_counts_in(
+                kyto.gene_column("symbol") == "CD4", layer="counts"
+            ),
+        )
+        .filter(kyto.qc.total_counts(layer="counts") > 0)
+        .on(device=device)  # pyright: ignore[reportArgumentType]
+    )
+
+
+def test_qc_steps_run_on_a_gpu_with_the_cpus_bits(store: Path) -> None:
+    explained = _qc(store, "auto").explain(format="json")
+    found = explained["optimized"]["device"]["found"]
+    gpu = found.split(", ")[1] if found != "cpu" else None
+    expected = (
+        ("cpu", "auto: no gpu found") if gpu is None else (gpu, "within 1e-6 of cpu")
+    )
+    nodes = {node["name"]: node for node in explained["optimized"]["nodes"]}
+    for name in ("WITH_CELLS", "FILTER_CELLS"):
+        assert (nodes[name]["device"], nodes[name]["device_note"]) == expected, name
+    # On a counts layer a GPU gives the CPU's bits (integer sums).
+    cpu, auto = (_qc(store, device).cells.to_polars() for device in ("cpu", "auto"))
+    assert_frame_equal(auto, cpu, check_exact=True)
+    assert cpu["total"].to_list() == [6.0, 7.0]

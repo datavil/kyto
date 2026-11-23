@@ -17,18 +17,33 @@
 //! `on(device="auto")` records the request, the devices found and each step's device
 //! (the GPU's for `normalize_total` + `log1p`) in `provenance.json`, the same bytes at
 //! 1 and 4 threads, `run` aside.
+//!
+//! Task 9.10 Done when: `with_cells(total_counts=...)` on a GPU equals the CPU column
+//! (counts: the same bits; `float32` layers: 1e-6 relative), and `explain()` shows the
+//! step's device. Checked per GPU: each QC metric (`total_counts`, `genes_detected`,
+//! `total_counts_in`, `percent_counts_in`) of [`CellQc`] on random blocks, counts with
+//! the CPU's bits, `float32` within 1e-6 (rows whose `float32` sum overflows, NaN,
+//! infinities and subnormals with the CPU's values); and on pbmc3k, a `with_cells` of every metric and
+//! a `filter_cells` on one placed on the GPU (`explain` names it) against the CPU run:
+//! the same cells and the same bits on the counts, 1e-6 relative on a `float32` layer
+//! (`log1p`, written by a CPU run first), the same bits run to run.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::num::NonZeroUsize;
 use std::time::Instant;
 
-use kyto_exec::{ExecuteOptions, Kernels, Pipeline};
+use std::sync::Arc;
+
+use kyto_core::{BinaryOp, CellExpr, Expr, GeneExpr, Literal, QcMetric, StrFunction};
+use kyto_exec::{CellQc, ExecuteOptions, GeneSet, Kernels, Pipeline, QcValues};
 use kyto_gpu::{Backend, Cuda, Device, DeviceKernels, RowValues, Wgpu, probe};
 use kyto_plan::{
-    DeviceRequest, Devices, Member, OptimizeOptions, Output, PhysicalOptions, Sink, physical_plan,
+    DeviceRequest, Devices, Explain, Member, OptimizeOptions, Output, PhysicalOptions, Plan, Sink,
+    physical_plan,
 };
-use kyto_store::{CellValues, ConvertOptions};
+use kyto_store::{CellBlock, CellBlockParts, CellData, CellValues, ConvertOptions};
+use polars::prelude::DataType;
 
 use crate::normalize_log1p_parity::{Csr, scan, write_fixture};
 
@@ -523,4 +538,302 @@ fn provenance_records_the_gpu_steps_of_an_auto_sink() {
         })
     );
     eprintln!("{gpu}: provenance devices {}", provenance["devices"]);
+}
+
+/// The four QC metrics (the gene-set ones over any gene set: [`CellQc::new`] takes it).
+fn qc_metrics() -> [QcMetric; 4] {
+    let genes = || GeneExpr::column("mt");
+    [
+        QcMetric::TotalCounts,
+        QcMetric::GenesDetected,
+        QcMetric::TotalCountsIn { genes: genes() },
+        QcMetric::PercentCountsIn { genes: genes() },
+    ]
+}
+
+/// A block of the rows `indptr` cuts from `data`, each row's genes `0, 1, ...`.
+fn block(indptr: &[u64], data: CellData, n_genes: u64) -> CellBlock {
+    let indices: Vec<u32> = indptr
+        .windows(2)
+        .flat_map(|row| 0..(row[1] - row[0]) as u32)
+        .collect();
+    let parts = CellBlockParts {
+        indptr: indptr.into(),
+        indices: indices.as_slice().into(),
+        data,
+    };
+    CellBlock::from_parts(parts, n_genes).unwrap()
+}
+
+#[test]
+fn qc_metrics_on_the_gpu_match_the_cpu() {
+    let n_genes = 5000_u64;
+    let set = GeneSet::from_mask((0..n_genes).map(|gene| gene % 3 == 0).collect());
+    for gpu in gpus() {
+        let device = gpu.device();
+        let (mut indptr, mut values, counts) = rows(11, 2000);
+        let counts = block(&indptr, CellData::U32(counts.as_slice().into()), n_genes);
+        // Rows whose float32 sum overflows, or holding NaN or infinities: summed again
+        // on the CPU.
+        for row in [
+            [f32::MAX, f32::MAX, 1.0],
+            [f32::NAN, 1.0, 2.0],
+            [f32::INFINITY, f32::NEG_INFINITY, 0.0],
+            [f32::INFINITY, 3.0, f32::MAX],
+            // Subnormals, which a GPU may flush to zero.
+            [1e-40, 1e-40, 1e-40],
+        ] {
+            values.extend(row);
+            indptr.push(values.len() as u64);
+        }
+        let floats = block(&indptr, CellData::F32(values.as_slice().into()), n_genes);
+        for metric in qc_metrics() {
+            let cpu = CellQc::new(&metric, Some(set.clone()));
+            let on_gpu = cpu.clone().on_gpu(Some(gpu.clone()));
+            let what = format!("{device} {}", metric.function());
+            // Counts: the CPU's bits.
+            let (expected, got) = (
+                cpu.evaluate(&counts).unwrap(),
+                on_gpu.evaluate(&counts).unwrap(),
+            );
+            match (&expected, &got) {
+                (QcValues::Float64(expected), QcValues::Float64(got)) => {
+                    let bits =
+                        |values: &[f64]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(bits(got), bits(expected), "{what} counts");
+                }
+                _ => assert_eq!(got, expected, "{what} counts"),
+            }
+            // float32: within 1e-6 relative, non-finite rows as the CPU.
+            let (expected, got) = (
+                cpu.evaluate(&floats).unwrap(),
+                on_gpu.evaluate(&floats).unwrap(),
+            );
+            let worst = match (&expected, &got) {
+                (QcValues::Float64(expected), QcValues::Float64(got)) => {
+                    let tail = expected.len() - 5;
+                    for (index, (got, expected)) in
+                        got[tail..].iter().zip(&expected[tail..]).enumerate()
+                    {
+                        assert!(
+                            got.to_bits() == expected.to_bits()
+                                || (got.is_nan() && expected.is_nan()),
+                            "{what} overflow row {index}: gpu {got} vs cpu {expected}"
+                        );
+                    }
+                    assert_close(&format!("{what} float32"), got, expected)
+                }
+                _ => {
+                    assert_eq!(got, expected, "{what} float32");
+                    0.0
+                }
+            };
+            let again = on_gpu.evaluate(&floats).unwrap();
+            match (&again, &got) {
+                (QcValues::Float64(again), QcValues::Float64(got)) => assert!(
+                    again
+                        .iter()
+                        .zip(got)
+                        .all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "{what}: the same bits run to run"
+                ),
+                _ => assert_eq!(again, got),
+            }
+            eprintln!("{what}: float32 worst relative error {worst:e}");
+        }
+    }
+}
+
+/// The kept cells (store positions) and each QC column, as `f64`.
+type QcColumns = (Vec<u64>, Vec<Vec<f64>>);
+
+/// The QC columns of [`qc_plan`].
+const QC_COLUMNS: [&str; 4] = [
+    "total_counts",
+    "n_genes_by_counts",
+    "total_counts_mt",
+    "pct_counts_mt",
+];
+
+/// `with_cells` of every QC metric of `layer` (the gene set: symbols starting `MT-`),
+/// and a `filter_cells` on one, on `request`.
+fn qc_plan(store: &std::path::Path, layer: &str, request: DeviceRequest) -> Arc<Plan> {
+    let qc = |metric| CellExpr::qc(Some(layer.to_owned()), metric).unwrap();
+    let mitochondrial = || {
+        GeneExpr::column("symbol")
+            .str(StrFunction::StartsWith("MT-".to_owned()))
+            .unwrap()
+    };
+    let detected = Expr::binary(
+        qc(QcMetric::GenesDetected),
+        BinaryOp::GtEq,
+        Literal::Int(1000),
+    )
+    .unwrap();
+    scan(store)
+        .with_cells([
+            ("total_counts".to_owned(), qc(QcMetric::TotalCounts)),
+            ("n_genes_by_counts".to_owned(), qc(QcMetric::GenesDetected)),
+            (
+                "total_counts_mt".to_owned(),
+                qc(QcMetric::TotalCountsIn {
+                    genes: mitochondrial(),
+                }),
+            ),
+            (
+                "pct_counts_mt".to_owned(),
+                qc(QcMetric::PercentCountsIn {
+                    genes: mitochondrial(),
+                }),
+            ),
+        ])
+        .unwrap()
+        .filter_cells(&detected)
+        .unwrap()
+        .on_device(request)
+        .unwrap()
+}
+
+/// The kept cells and each QC column (as `f64`) of [`qc_plan`] on `request`, the
+/// optimized plan's explain text, and the seconds the run took.
+fn run_qc(
+    store: &std::path::Path,
+    layer: &str,
+    request: DeviceRequest,
+    devices: Devices,
+) -> (QcColumns, String, f64) {
+    let plan = qc_plan(store, layer, request);
+    let output = Output::members(
+        &plan,
+        QC_COLUMNS.map(|name| Member::CellColumn(name.to_owned())),
+    )
+    .unwrap();
+    let options = PhysicalOptions {
+        devices,
+        ..PhysicalOptions::default()
+    };
+    let physical = physical_plan(std::slice::from_ref(&output), OptimizeOptions::ALL, options);
+    let explained = Explain::new(&plan, &physical).to_string();
+    let started = Instant::now();
+    let threads = std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+    let stream = Pipeline::new(&physical, 0)
+        .unwrap()
+        .run(ExecuteOptions::new(threads))
+        .unwrap();
+    let mut cells = Vec::new();
+    let mut columns = vec![Vec::new(); QC_COLUMNS.len()];
+    for block in stream {
+        let block = block.unwrap();
+        cells.extend_from_slice(&block.cells);
+        for (values, name) in columns.iter_mut().zip(QC_COLUMNS) {
+            let column = block
+                .columns
+                .column(name)
+                .unwrap()
+                .cast(&DataType::Float64)
+                .unwrap();
+            values.extend(column.f64().unwrap().iter().map(Option::unwrap));
+        }
+    }
+    ((cells, columns), explained, started.elapsed().as_secs_f64())
+}
+
+#[test]
+fn qc_steps_on_the_gpu_match_the_cpu_on_pbmc3k() {
+    let gpus = gpus();
+    if gpus.is_empty() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let h5ad = work.path().join("pbmc3k.h5ad");
+    let reference = work.path().join("reference");
+    std::fs::create_dir(&reference).unwrap();
+    if !write_fixture("pbmc3k", &h5ad, &reference) {
+        eprintln!("SKIPPED pbmc3k: anndata is not installed on this platform");
+        return;
+    }
+    let store = work.path().join("pbmc3k.kyto");
+    kyto_store::convert(&h5ad, &store, &ConvertOptions::default()).unwrap();
+    // A float32 layer, written by a CPU run.
+    let floats = work.path().join("log1p.kyto");
+    let sunk = scan(&store)
+        .normalize_total(Some(1e4), Some("counts"), "normalized")
+        .unwrap()
+        .log1p(Some("normalized"), "log1p")
+        .unwrap()
+        .sink(Sink::Zarr {
+            path: floats.display().to_string(),
+        })
+        .unwrap();
+    let physical = physical_plan(
+        &[Output::all(&sunk)],
+        OptimizeOptions::ALL,
+        PhysicalOptions::default(),
+    );
+    Pipeline::new(&physical, 0)
+        .unwrap()
+        .sink(ExecuteOptions::new(NonZeroUsize::new(4).unwrap()), false)
+        .unwrap();
+    for gpu in gpus {
+        let device = gpu.device();
+        let (request, devices) = match device {
+            Device::Cuda => (DeviceRequest::Cuda, Devices::new(true, None)),
+            Device::Wgpu(backend) => (DeviceRequest::Wgpu, Devices::new(false, Some(backend))),
+            Device::Cpu => unreachable!("gpus() holds GPUs"),
+        };
+        for (store, layer) in [(&store, "counts"), (&floats, "log1p")] {
+            let what = format!("{device} pbmc3k {layer}");
+            let (cpu, _, cpu_seconds) = run_qc(store, layer, DeviceRequest::Cpu, devices);
+            let (on_gpu, explained, gpu_seconds) = run_qc(store, layer, request, devices);
+            let (again, _, _) = run_qc(store, layer, request, devices);
+            // explain() names the GPU on both QC steps.
+            for step in ["WITH_CELLS", "FILTER_CELLS"] {
+                let line = explained
+                    .lines()
+                    .find(|line| line.contains(step) && line.contains("[device="))
+                    .unwrap_or_else(|| panic!("{what}: no {step} in {explained}"));
+                assert!(
+                    line.contains(&format!("[device={} (within 1e-6 of cpu)", device.name())),
+                    "{what}: {line}"
+                );
+            }
+            assert!(
+                cpu.0.len() > 100 && cpu.0.len() < 2700,
+                "{what}: {} cells",
+                cpu.0.len()
+            );
+            assert_eq!(on_gpu.0, cpu.0, "{what}: the same cells");
+            let bits = |columns: &[Vec<f64>]| -> Vec<Vec<u64>> {
+                columns
+                    .iter()
+                    .map(|values| values.iter().map(|v| v.to_bits()).collect())
+                    .collect()
+            };
+            assert_eq!(
+                bits(&again.1),
+                bits(&on_gpu.1),
+                "{what}: the same bits run to run"
+            );
+            for ((name, gpu_values), cpu_values) in QC_COLUMNS.iter().zip(&on_gpu.1).zip(&cpu.1) {
+                if layer == "counts" {
+                    assert_eq!(
+                        bits(std::slice::from_ref(gpu_values)),
+                        bits(std::slice::from_ref(cpu_values)),
+                        "{what} {name}: the CPU's bits"
+                    );
+                    eprintln!(
+                        "{what} {name}: the CPU's bits for all {} cells",
+                        cpu_values.len()
+                    );
+                } else {
+                    let worst = assert_close(&format!("{what} {name}"), gpu_values, cpu_values);
+                    eprintln!("{what} {name}: worst relative error {worst:e}");
+                }
+            }
+            eprintln!(
+                "{what} QC (with_cells + filter_cells, all threads, one run): cpu \
+                 {cpu_seconds:.3} s, {device} {gpu_seconds:.3} s"
+            );
+        }
+    }
 }

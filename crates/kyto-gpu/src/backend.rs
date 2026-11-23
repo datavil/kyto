@@ -75,13 +75,30 @@ pub trait Backend: Sync {
     fn has_kernel(&self, operation: &str) -> bool;
 }
 
-/// The operations with a CUDA kernel: the per-cell maps of 9.2 (CubeCL, `kernels.rs`);
-/// 9.3 adds `pca` through cuSPARSE and cuBLAS.
-pub const CUDA_KERNELS: &[&str] = &["normalize_total", "log1p"];
+/// The operations with a CUDA kernel: the per-cell maps of 9.2 (CubeCL, `kernels.rs`)
+/// and the per-cell QC metrics of 9.10 (9.2's row sums and nnz; named by the
+/// expression leaf, as a `with_cells` or `filter_cells` step reads them, see
+/// kyto-plan's `device_placement.rs`); 9.3 adds `pca` through cuSPARSE and cuBLAS.
+pub const CUDA_KERNELS: &[&str] = &[
+    "normalize_total",
+    "log1p",
+    "total_counts",
+    "genes_detected",
+    "total_counts_in",
+    "percent_counts_in",
+];
 
 /// The operations with a wgpu kernel: the per-cell maps of 9.2 (CubeCL, the same
-/// kernels as CUDA's); 9.8 adds `pca` and `neighbors`.
-pub const WGPU_KERNELS: &[&str] = &["normalize_total", "log1p"];
+/// kernels as CUDA's) and the per-cell QC metrics of 9.10; 9.8 adds `pca` and
+/// `neighbors`.
+pub const WGPU_KERNELS: &[&str] = &[
+    "normalize_total",
+    "log1p",
+    "total_counts",
+    "genes_detected",
+    "total_counts_in",
+    "percent_counts_in",
+];
 
 /// Every backend, in the order `device="auto"` prefers their GPUs after the CPU's
 /// place: CPU, CUDA, wgpu.
@@ -241,11 +258,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cpu_has_every_kernel_and_gpus_the_9_2_maps() {
+    fn cpu_has_every_kernel_and_gpus_the_9_2_maps_and_9_10_qc() {
         assert!(Device::Cpu.has_kernel("pca"));
         for gpu in [Device::Cuda, Device::Wgpu(WgpuBackend::Metal)] {
             assert!(gpu.has_kernel("log1p") && gpu.has_kernel("normalize_total"));
+            for metric in [
+                "total_counts",
+                "genes_detected",
+                "total_counts_in",
+                "percent_counts_in",
+            ] {
+                assert!(gpu.has_kernel(metric), "{metric}");
+            }
             assert!(!gpu.has_kernel("pca") && !gpu.has_kernel("scale"));
+            assert!(!gpu.has_kernel("with_cells") && !gpu.has_kernel("filter_cells"));
         }
         for backend in BACKENDS {
             assert_eq!(backend.runtime().backend().runtime(), backend.runtime());

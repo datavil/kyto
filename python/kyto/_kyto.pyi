@@ -1140,10 +1140,15 @@ class Atlas:
 
         GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature. Today
         ``normalize_total`` and ``log1p`` have GPU kernels (task 9.2; PCA and neighbours
-        arrive with 9.3 to 9.8). A GPU computes them in ``float32`` (Metal has no
-        ``float64``), so its values are within 1e-6 relative of the CPU's, not the same
-        bits, and ``explain()`` notes it on each such step (``within 1e-6 of cpu``); a
-        GPU gives the same bits run to run. The data size plays no part in the rules,
+        arrive with 9.3 to 9.8), and so do the QC metrics ``qc.total_counts``,
+        ``qc.genes_detected``, ``qc.total_counts_in`` and ``qc.percent_counts_in``
+        (task 9.10): a ``with_cells`` or ``filter`` step whose expressions read only
+        these and metadata columns runs on the GPU (its metrics there, the rest of the
+        step on the host); one that also reads a gene's values has no GPU kernel. A GPU
+        computes in ``float32`` (Metal has no ``float64``), so its values are within 1e-6
+        relative of the CPU's, not always the same bits (QC metrics of a ``uint32``
+        counts layer are), and ``explain()`` notes it on each such step (``within 1e-6
+        of cpu``); a GPU gives the same bits run to run. The data size plays no part in the rules,
         and steps on the CPU give the same bits whatever device was asked for (R11).
 
         Parameters

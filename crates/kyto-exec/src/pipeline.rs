@@ -44,7 +44,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use kyto_core::{AtlasSchema, Axis, ColumnDtype, Source};
+use kyto_core::{AtlasSchema, Axis, ColumnDtype, ExprNode, Source};
 use kyto_error::KytoError;
 use kyto_gpu::DeviceKernels;
 use kyto_plan::{
@@ -114,7 +114,8 @@ pub(crate) enum Stage {
     /// A cross-cell node: statistics passes first.
     CrossCell(CrossCellStage),
     /// A cell filter, `take_cells` or `with_cells`, run on every block (task 5.8).
-    Cells(CellStage),
+    /// A cell step, with the GPU its QC leaves run on (task 9.10), `None` for the CPU.
+    Cells(CellStage, Option<DeviceKernels>),
     /// A gene filter, `select_genes` or `with_genes`, run once with the statistics
     /// passes the physical plan gives it (task 5.8).
     Genes { kind: GeneStepKind, passes: u32 },
@@ -441,7 +442,7 @@ impl Pipeline {
             // One pass to find the cells reaching it (task 5.11).
             _ if stage.collects_cells() => passes.saturating_add(1),
             Stage::Maps(_)
-            | Stage::Cells(_)
+            | Stage::Cells(..)
             | Stage::Neighbors(_)
             | Stage::Cluster(_)
             | Stage::Umap(_)
@@ -517,7 +518,7 @@ impl Pipeline {
         let mut timings = BTreeMap::new();
         for (position, stage) in self.stages.iter().enumerate() {
             // Maps and cell steps run in later streams; the rest compute here.
-            let timed = !matches!(stage, Stage::Maps(_) | Stage::Cells(_));
+            let timed = !matches!(stage, Stage::Maps(_) | Stage::Cells(..));
             let _timer = StageTimer {
                 node: self.stage_nodes.get(position).copied().filter(|_| timed),
                 timings: &mut timings,
@@ -528,9 +529,13 @@ impl Pipeline {
                     operators.push(Operator::Maps(maps.clone()));
                     continue;
                 }
-                Stage::Cells(cell_stage) => {
+                Stage::Cells(cell_stage, gpu) => {
                     let embeddings = self.embedding_rows(position, &mut members, &statistics)?;
-                    operators.push(Operator::Cells(tables.cell_step(cell_stage, &embeddings)?));
+                    operators.push(Operator::Cells(tables.cell_step(
+                        cell_stage,
+                        &embeddings,
+                        gpu.as_ref(),
+                    )?));
                     continue;
                 }
                 Stage::Genes { kind, passes } => {
@@ -912,7 +917,8 @@ impl GpuKernels {
     ///
     /// # Errors
     /// - `KY-E501` if `node` is placed on a GPU but is not a step this executor runs
-    ///   there (only the per-cell maps, `normalize_total` and `log1p`, have GPU
+    ///   there (only the per-cell maps, `normalize_total` and `log1p`, and the cell
+    ///   steps whose leaves are QC metrics and table columns, task 9.10, have GPU
     ///   kernels; the kernel table and this check move together).
     /// - `KY-E505` if the device's runtime does not start.
     fn for_node(
@@ -925,7 +931,21 @@ impl GpuKernels {
         };
         let runs_on_gpu = match node.operation() {
             Operation::Fused { .. } => true,
-            Operation::Node(plan) => matches!(**plan, Plan::MapElementwise(_)),
+            Operation::Node(plan) => match &**plan {
+                Plan::MapElementwise(_) => true,
+                // Task 9.10: a cell step whose leaves are QC metrics and table columns.
+                Plan::Filter(filter) => match filter.params().predicate() {
+                    Predicate::Cells(predicate) => qc_leaves_only(predicate.node()),
+                    Predicate::Genes(_) => false,
+                },
+                Plan::WithColumns(with_columns) => match with_columns.params().columns() {
+                    Columns::Cells(columns) => {
+                        columns.iter().all(|(_, expr)| qc_leaves_only(expr.node()))
+                    }
+                    Columns::Genes(_) => false,
+                },
+                _ => false,
+            },
             Operation::Scan { .. } => false,
         };
         let operation = node_operation(node);
@@ -946,6 +966,16 @@ impl GpuKernels {
         self.opened.push(kernels.clone());
         Ok(Some(kernels))
     }
+}
+
+/// Whether every leaf of the tree under `root` other than a table column is a QC metric
+/// (task 9.10: a cell step the GPU runs, its QC leaves through the row-sum and nnz
+/// kernels).
+fn qc_leaves_only(root: &Arc<ExprNode>) -> bool {
+    Prepared::new(root)
+        .leaves
+        .iter()
+        .all(|leaf| matches!(leaf, Source::Qc { .. }))
 }
 
 /// The plan method of an optimized node, as `KY-E501` names it: its logical node's, a
@@ -1077,7 +1107,7 @@ fn lower_node(
         }))),
         Plan::Filter(node) => Ok(Some(match node.params().predicate() {
             Predicate::Cells(predicate) => {
-                Stage::Cells(CellStage::Filter(Prepared::new(predicate.node())))
+                Stage::Cells(CellStage::Filter(Prepared::new(predicate.node())), gpu)
             }
             Predicate::Genes(predicate) => Stage::Genes {
                 kind: GeneStepKind::Filter(Prepared::new(predicate.node())),
@@ -1088,9 +1118,10 @@ fn lower_node(
             kind: GeneStepKind::Select(node.params().gene_ids().to_vec()),
             passes,
         })),
-        Plan::TakeCells(node) => Ok(Some(Stage::Cells(CellStage::Take(
-            node.params().cell_ids().to_vec(),
-        )))),
+        Plan::TakeCells(node) => Ok(Some(Stage::Cells(
+            CellStage::Take(node.params().cell_ids().to_vec()),
+            None,
+        ))),
         Plan::WithColumns(node) => {
             let schema = plan.output_schema();
             let dtype = |axis: Axis, name: &str| {
@@ -1106,18 +1137,21 @@ fn lower_node(
                     })
             };
             Ok(Some(match node.params().columns() {
-                Columns::Cells(columns) => Stage::Cells(CellStage::Columns(
-                    columns
-                        .iter()
-                        .map(|(name, expr)| {
-                            Ok((
-                                name.clone(),
-                                Prepared::new(expr.node()),
-                                dtype(Axis::Cells, name)?,
-                            ))
-                        })
-                        .collect::<Result<_, KytoError>>()?,
-                )),
+                Columns::Cells(columns) => Stage::Cells(
+                    CellStage::Columns(
+                        columns
+                            .iter()
+                            .map(|(name, expr)| {
+                                Ok((
+                                    name.clone(),
+                                    Prepared::new(expr.node()),
+                                    dtype(Axis::Cells, name)?,
+                                ))
+                            })
+                            .collect::<Result<_, KytoError>>()?,
+                    ),
+                    gpu,
+                ),
                 Columns::Genes(columns) => Stage::Genes {
                     kind: GeneStepKind::Columns(
                         columns
@@ -1150,8 +1184,8 @@ fn lower_node(
 fn check_leaves(stages: &[Stage]) -> Result<(), KytoError> {
     for stage in stages {
         let (prepared, cells, method): (Vec<&Prepared>, bool, &str) = match stage {
-            Stage::Cells(CellStage::Filter(prepared)) => (vec![prepared], true, "filter_cells"),
-            Stage::Cells(CellStage::Columns(columns)) => (
+            Stage::Cells(CellStage::Filter(prepared), _) => (vec![prepared], true, "filter_cells"),
+            Stage::Cells(CellStage::Columns(columns), _) => (
                 columns.iter().map(|(_, prepared, _)| prepared).collect(),
                 true,
                 "with_cells",
@@ -1199,8 +1233,8 @@ fn substitute_recipes(stages: &mut [Stage], recipes: &mut Recipes<'_>) -> Result
     };
     for stage in stages {
         match stage {
-            Stage::Cells(CellStage::Filter(prepared)) => substitute(prepared, Axis::Cells)?,
-            Stage::Cells(CellStage::Columns(columns)) => {
+            Stage::Cells(CellStage::Filter(prepared), _) => substitute(prepared, Axis::Cells)?,
+            Stage::Cells(CellStage::Columns(columns), _) => {
                 for (_, prepared, _) in columns {
                     substitute(prepared, Axis::Cells)?;
                 }
@@ -1315,17 +1349,21 @@ impl RunTables {
     }
 
     /// `stage` with its leaves resolved against the genes present, its embedding
-    /// leaves reading `embeddings` (by name).
+    /// leaves reading `embeddings` (by name), its QC leaves computed on `gpu` (`None`:
+    /// the CPU).
     fn cell_step(
         &mut self,
         stage: &CellStage,
         embeddings: &[(String, Arc<Rows>)],
+        gpu: Option<&DeviceKernels>,
     ) -> Result<CellStep, KytoError> {
         let table = self.cells()?;
         Ok(match stage {
-            CellStage::Filter(predicate) => {
-                CellStep::filter(self.evaluation(predicate, embeddings)?, table, &self.store)
-            }
+            CellStage::Filter(predicate) => CellStep::filter(
+                self.evaluation(predicate, embeddings, gpu)?,
+                table,
+                &self.store,
+            ),
             CellStage::Take(ids) => {
                 let expression = format!("take_cells([{} IDs])", ids.len());
                 let positions = self.cell_positions(ids, &expression)?;
@@ -1335,7 +1373,11 @@ impl RunTables {
                 let columns = columns
                     .iter()
                     .map(|(name, prepared, dtype)| {
-                        Ok((name.clone(), self.evaluation(prepared, embeddings)?, *dtype))
+                        Ok((
+                            name.clone(),
+                            self.evaluation(prepared, embeddings, gpu)?,
+                            *dtype,
+                        ))
                     })
                     .collect::<Result<_, KytoError>>()?;
                 CellStep::columns(columns, table, &self.store)
@@ -1343,11 +1385,13 @@ impl RunTables {
         })
     }
 
-    /// How a block computes each leaf of `prepared`.
+    /// How a block computes each leaf of `prepared` (its QC leaves on `gpu`, `None`:
+    /// the CPU).
     fn evaluation(
         &mut self,
         prepared: &Prepared,
         embeddings: &[(String, Arc<Rows>)],
+        gpu: Option<&DeviceKernels>,
     ) -> Result<Evaluation, KytoError> {
         let store = self.store.clone();
         let leaves = prepared
@@ -1389,7 +1433,7 @@ impl RunTables {
                     };
                     Ok(CellLeaf::Qc {
                         layer: layer.clone(),
-                        qc: Box::new(CellQc::new(metric, gene_set)),
+                        qc: Box::new(CellQc::new(metric, gene_set).on_gpu(gpu.cloned())),
                     })
                 }
                 Source::Embedding { name, component } => {
@@ -1505,7 +1549,7 @@ fn resolve_members(
                     embeddings.insert(loadings_name(into), (loadings, false));
                 }
             }
-            Stage::Cells(CellStage::Filter(_) | CellStage::Take(_)) => {
+            Stage::Cells(CellStage::Filter(_) | CellStage::Take(_), _) => {
                 cells_removed = true;
                 for entry in embeddings.values_mut() {
                     entry.1 = true;
@@ -1563,7 +1607,7 @@ fn resolve_members(
                 let given = EmbeddingSource::Given { node: stage.node };
                 embeddings.insert(stage.params.name().to_owned(), (given, false));
             }
-            Stage::Maps(_) | Stage::Cells(_) | Stage::Genes { .. } => {}
+            Stage::Maps(_) | Stage::Cells(..) | Stage::Genes { .. } => {}
         }
     }
     Ok(ResolvedMembers {
@@ -1589,8 +1633,8 @@ impl Pipeline {
         statistics: &Statistics,
     ) -> Result<Vec<(String, Arc<Rows>)>, KytoError> {
         let prepared: Vec<&Prepared> = match &self.stages[position] {
-            Stage::Cells(CellStage::Filter(prepared)) => vec![prepared],
-            Stage::Cells(CellStage::Columns(columns)) => {
+            Stage::Cells(CellStage::Filter(prepared), _) => vec![prepared],
+            Stage::Cells(CellStage::Columns(columns), _) => {
                 columns.iter().map(|(_, prepared, _)| prepared).collect()
             }
             Stage::Genes { kind, .. } => kind.prepared(),

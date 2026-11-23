@@ -279,11 +279,16 @@ fn devices_auto_runs_the_same_bits_and_named_gpus_are_refused_first() {
     }
 }
 
-/// `preprocess`, then a cell filter on the `log1p` layer's totals (no GPU kernel) and a
-/// second `normalize_total` of `log1p` into `renorm`, reading the filter's output.
+/// `preprocess`, then a cell filter on the `log1p` layer's totals and a gene's values
+/// (no GPU kernel for the gene's values, task 9.10, so the whole filter stays on the
+/// CPU) and a second `normalize_total` of `log1p` into `renorm`, reading the filter's
+/// output.
 fn alternating(store: &Path, request: DeviceRequest, devices: Devices) -> PhysicalPlan {
     let total = CellExpr::qc(Some("log1p".to_owned()), QcMetric::TotalCounts).unwrap();
     let expressed = Expr::binary(total, BinaryOp::Gt, Literal::Float(0.0)).unwrap();
+    let value = CellExpr::expression(Some("log1p".to_owned()), "G0");
+    let any_value = Expr::binary(value, BinaryOp::GtEq, Literal::Float(0.0)).unwrap();
+    let expressed = Expr::binary(expressed, BinaryOp::And, any_value).unwrap();
     let plan = preprocess(store)
         .filter_cells(&expressed)
         .unwrap()

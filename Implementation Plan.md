@@ -127,7 +127,7 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Im
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-Done (9.1, 9.2, 9.5, 9.6, 9.9): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+Done (9.1, 9.2, 9.5, 9.6, 9.9, 9.10): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
 
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
@@ -141,12 +141,9 @@ Done (9.1, 9.2, 9.5, 9.6, 9.9): see [Implementation Plan - Done.md](Implementati
 - [ ] **9.8 Portable matrix kernels (Metal).** PCA's products (sparse × dense SpMM and dense GEMM) and 9.4's tiled distances plus top-k written in CubeCL, so PCA and neighbours run through wgpu on Metal (and ROCm) as well as CUDA. 9.3's cuSPARSE/cuBLAS stays the CUDA path; `device="auto"` picks it on NVIDIA and these kernels elsewhere, by the 9.1 rules shown in `explain()`. (added Nov 14, 2026, at the user's request: Apple GPUs otherwise run only the 9.2 kernels)
   - Depends: 9.2, 9.3, 9.4
   - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
-- [ ] **9.10 QC metrics on the GPU.** 9.2's `row_sums` and `row_nnz` CubeCL kernels (`kyto_gpu::DeviceKernels`) are tested against the CPU but no plan step dispatches to them: the QC metrics (`total_counts`, `genes_detected`, `percent_counts_in`) are leaves of cell expressions inside `with_cells` and `filter_cells`, which mix metadata and matrix work in one node. Decide how such a node is placed (the whole node, or only its matrix leaves), register the method in `CUDA_KERNELS`/`WGPU_KERNELS`, and dispatch in `qc.rs`. (added Nov 22, 2026, by 9.2)
-  - Depends: 9.2
 - [ ] **9.11 DLPack from device memory.** Since 9.5, `to_torch` and `__dlpack__` hand over host memory (`kDLCPU`): kyto's results are read back to the host, so `to_torch(device="cuda")` copies once, through PyTorch. Once a step keeps its output on the GPU (9.3, 12.2), export it as a `kDLCUDA` (or ROCm) DLPack tensor from `kyto-gpu`'s buffer, honouring the consumer's `stream`, so a CUDA tensor shares kyto's device pointer. Also decide whether `torch` joins the dev dependencies (today the torch tests of `tests/test_dlpack.py` skip without it; 9.5 ran them with `uv run --with torch`). (added Nov 22, 2026, by 9.5)
   - Depends: 9.3, 9.5
   - Done when: on a CUDA machine, a tensor from `to_torch(device="cuda")` of a GPU-computed embedding has the `data_ptr()` of kyto's device buffer (test, skipped visibly elsewhere).
-  - Done when: `with_cells(total_counts=...)` on a GPU equals the CPU column (counts: the same bits; `float32` layers: 1e-6 relative), and `explain()` shows the step's device.
 
 ## 10. Testing, benchmarks, docs, release
 

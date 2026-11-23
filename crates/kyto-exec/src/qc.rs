@@ -8,6 +8,13 @@
 //! defines them per cell. Sums are `f64` through the 5.3 row-sum kernel (same bits on
 //! every ISA, R11); a gene-set sum is the same kernel over the row with the other genes'
 //! values set to zero, so a gene set of every gene gives the total's exact bits.
+//! On a GPU (task 9.10, [`CellQc::on_gpu`]) the row sums and nnz run through 9.2's
+//! kernels ([`DeviceKernels`]): counts give the CPU's bits (integer sums), `float32`
+//! sums are within about 1e-11 relative (a compensated `float32` pair); a row whose
+//! GPU sum is not finite (NaN, an infinity, or a pair that overflows `float32`), or is
+//! 0 while the row holds a nonzero value (subnormals a GPU flushed to zero, bug-hunter
+//! 9.10), is summed again on the CPU, so such rows keep the CPU's value. The gene-set mask, the
+//! percentage and everything after stay on the host.
 //! Lives in kyto-exec since task 5.8, which computes the metric inside the stream
 //! (`with_cells`, `filter_cells`) with the gene set taken over the genes present at that
 //! step; kyto-algo re-exports it.
@@ -19,6 +26,7 @@ use std::path::Path;
 
 use kyto_core::{GeneExpr, QcMetric};
 use kyto_error::KytoError;
+use kyto_gpu::{DeviceKernels, RowValues};
 use kyto_store::{CellBlock, CellValues, TableAxis, read_table};
 use polars::prelude::{ChunkExpandAtIndex, DataFrame, IntoLazy};
 
@@ -134,6 +142,10 @@ enum Computation {
 pub struct CellQc {
     computation: Computation,
     kernels: Kernels,
+    /// The GPU its row sums and nnz run on (task 9.10), `None` for the CPU.
+    gpu: Option<DeviceKernels>,
+    /// The metric's name (`total_counts`, ...), as GPU errors name the step.
+    operation: &'static str,
 }
 
 impl CellQc {
@@ -167,7 +179,16 @@ impl CellQc {
         Self {
             computation,
             kernels: Kernels::detected(),
+            gpu: None,
+            operation: metric.function(),
         }
+    }
+
+    /// The same metric with its row sums and nnz on the GPU of `gpu` (`None`: the
+    /// CPU), as the plan placed its step (task 9.10).
+    #[must_use]
+    pub fn on_gpu(self, gpu: Option<DeviceKernels>) -> Self {
+        Self { gpu, ..self }
     }
 
     /// The same metric computed with `kernels` (for checking that every ISA gives the
@@ -181,17 +202,28 @@ impl CellQc {
     /// index the gene set.
     ///
     /// # Errors
-    /// `KY-E117` if a gene-set metric's set does not have one flag per gene of the
-    /// block.
+    /// - `KY-E117` if a gene-set metric's set does not have one flag per gene of the
+    ///   block.
+    /// - `KY-E505` if a GPU kernel or copy fails (on a GPU).
     pub fn evaluate(&self, block: &CellBlock) -> Result<QcValues, KytoError> {
         let indptr = block.indptr();
         match &self.computation {
             Computation::TotalCounts => Ok(QcValues::Float64(self.sums(block, None)?)),
             Computation::GenesDetected => {
                 let mut counts = Vec::new();
-                match block.data() {
-                    CellValues::F32(values) => self.kernels.row_nnz(indptr, values, &mut counts),
-                    CellValues::U32(values) => self.kernels.row_nnz(indptr, values, &mut counts),
+                match (block.data(), &self.gpu) {
+                    (CellValues::F32(values), None) => {
+                        self.kernels.row_nnz(indptr, values, &mut counts);
+                    }
+                    (CellValues::U32(values), None) => {
+                        self.kernels.row_nnz(indptr, values, &mut counts);
+                    }
+                    (CellValues::F32(values), Some(gpu)) => {
+                        counts = gpu.row_nnz(indptr, RowValues::F32(values), self.operation)?;
+                    }
+                    (CellValues::U32(values), Some(gpu)) => {
+                        counts = gpu.row_nnz(indptr, RowValues::U32(values), self.operation)?;
+                    }
                 }
                 // A row has at most n_genes values, and n_genes fits u32 (format.md §4.3).
                 Ok(QcValues::UInt32(
@@ -221,18 +253,51 @@ impl CellQc {
 
     /// Each row's sum over every gene, or over the genes of `gene_set`.
     fn sums(&self, block: &CellBlock, gene_set: Option<&GeneSet>) -> Result<Vec<f64>, KytoError> {
-        let mut sums = Vec::new();
         let indptr = block.indptr();
         match (block.data(), gene_set) {
-            (CellValues::F32(values), None) => self.kernels.row_sums(indptr, values, &mut sums),
-            (CellValues::U32(values), None) => self.kernels.row_sums(indptr, values, &mut sums),
+            (CellValues::F32(values), None) => {
+                self.row_sums(indptr, values, RowValues::F32(values))
+            }
+            (CellValues::U32(values), None) => {
+                self.row_sums(indptr, values, RowValues::U32(values))
+            }
             (CellValues::F32(values), Some(set)) => {
                 let masked = masked(block, values, set, 0.0)?;
-                self.kernels.row_sums(indptr, &masked, &mut sums);
+                self.row_sums(indptr, &masked, RowValues::F32(&masked))
             }
             (CellValues::U32(values), Some(set)) => {
                 let masked = masked(block, values, set, 0)?;
-                self.kernels.row_sums(indptr, &masked, &mut sums);
+                self.row_sums(indptr, &masked, RowValues::U32(&masked))
+            }
+        }
+    }
+
+    /// Each row's sum of `values` (the same values as `on_device`), on the GPU when the
+    /// metric has one, else with the CPU kernel. A row whose GPU sum is not finite is
+    /// summed again on the CPU (module docs).
+    fn row_sums<T: KernelValue>(
+        &self,
+        indptr: &[u64],
+        values: &[T],
+        on_device: RowValues<'_>,
+    ) -> Result<Vec<f64>, KytoError> {
+        let Some(gpu) = &self.gpu else {
+            let mut sums = Vec::new();
+            self.kernels.row_sums(indptr, values, &mut sums);
+            return Ok(sums);
+        };
+        let mut sums = gpu.row_sums(indptr, on_device, self.operation)?;
+        let mut row_sum = Vec::new();
+        for (sum, range) in sums.iter_mut().zip(indptr.windows(2)) {
+            // A checked CellBlock's row pointer starts at 0, ascends and ends at its nnz.
+            let row = &values[range[0] as usize..range[1] as usize];
+            // Not finite, or 0 from nonzero values (a GPU flushes subnormals to zero):
+            // the CPU's sum.
+            let flushed = *sum == 0.0 && row.iter().any(|value| value.to_f64() != 0.0);
+            if !sum.is_finite() || flushed {
+                self.kernels
+                    .row_sums(&[0, row.len() as u64], row, &mut row_sum);
+                *sum = row_sum[0];
             }
         }
         Ok(sums)

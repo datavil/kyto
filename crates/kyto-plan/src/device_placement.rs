@@ -31,6 +31,15 @@
 //!    step (`moves=cpu->metal->cpu`). For a median `normalize_total` placed on a GPU,
 //!    the moves are those of its apply pass: its statistics pass (the cells' totals)
 //!    runs on the CPU (9.2).
+//! 6. **A cell filter or `with_cells` step is placed whole by its leaves** (task 9.10).
+//!    Its operations are the QC metrics its expressions read (`total_counts`,
+//!    `genes_detected`, `total_counts_in`, `percent_counts_in`), each a kernel of its own,
+//!    plus the step's method (`with_cells`, `filter_cells`; no GPU kernel) when another
+//!    leaf reads the matrix or an embedding (a gene's values). So a step on a GPU
+//!    computes its QC leaves there (9.2's row sums and nnz); the rest of the step (table
+//!    columns, the arithmetic joining the leaves, the filter itself) is host work on
+//!    the values copied back, as for any step. A step reading only table columns is a
+//!    host step (rule 1).
 //!
 //! The data size plays no part, so the same plan, request and devices always give the
 //! same placement.
@@ -43,7 +52,10 @@ use kyto_error::KytoError;
 use kyto_gpu::{Device, Devices, WgpuBackend};
 use serde::{Deserialize, Serialize};
 
+use kyto_core::{ExprNode, Source};
+
 use crate::filter::Predicate;
+use crate::members::for_each_leaf;
 use crate::node::LogicalNode;
 use crate::optimized_plan::{Operation, OptimizedNode};
 use crate::plan::Plan;
@@ -300,6 +312,9 @@ pub(crate) fn operations(node: &OptimizedNode) -> Vec<&'static str> {
         Operation::Scan { .. } => Vec::new(),
         Operation::Fused { maps, .. } => maps.iter().map(LogicalNode::method).collect(),
         Operation::Node(plan) => {
+            if let Some(operations) = cell_step_operations(plan) {
+                return operations;
+            }
             let host = match plan.as_ref() {
                 Plan::Scan(_)
                 | Plan::WithDefaultLayer(_)
@@ -330,6 +345,41 @@ pub(crate) fn operations(node: &OptimizedNode) -> Vec<&'static str> {
             }
         }
     }
+}
+
+/// The operations of a cell filter or `with_cells` step (task 9.10): the metric of each
+/// QC leaf (`total_counts`, `genes_detected`, `total_counts_in`, `percent_counts_in`),
+/// then the step's own method (`filter_cells`, `with_cells`, which no GPU has a kernel
+/// for) if any other leaf reads more than the cell table (a gene's values, an embedding,
+/// a `.recompute()`), in first-read order without repeats. Empty when every leaf is a
+/// table column (a host step, rule 1). `None` for any other node.
+fn cell_step_operations(plan: &Plan) -> Option<Vec<&'static str>> {
+    let roots: Vec<&ExprNode> = match plan {
+        Plan::Filter(filter) => match filter.params().predicate() {
+            Predicate::Cells(predicate) => vec![predicate.node()],
+            Predicate::Genes(_) => return None,
+        },
+        Plan::WithColumns(with_columns) => match with_columns.params().columns() {
+            Columns::Cells(columns) => columns.iter().map(|(_, expr)| &**expr.node()).collect(),
+            Columns::Genes(_) => return None,
+        },
+        _ => return None,
+    };
+    let method = plan.node().method();
+    let mut operations = Vec::new();
+    for root in roots {
+        for_each_leaf(root, &mut |leaf| {
+            let operation = match leaf {
+                Source::Qc { metric, .. } => metric.function(),
+                leaf if leaf.is_metadata() => return,
+                _ => method,
+            };
+            if !operations.contains(&operation) {
+                operations.push(operation);
+            }
+        });
+    }
+    Some(operations)
 }
 
 #[cfg(test)]

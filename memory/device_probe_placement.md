@@ -17,6 +17,13 @@
   them in `Pipeline::new` (`GpuKernels::for_node`; any other GPU node is still `KY-E501`):
   a new kernel needs both the name and the dispatch (memory `gpu_kernels_cubecl.md`).
 - A step placed on a GPU shows `(within 1e-6 of cpu)` in `explain()` (`GPU_NOTE`).
+- Rule 6 (task 9.10): a `with_cells` or cell filter is placed **whole**, by its leaves:
+  its operations are each QC leaf's metric name (`total_counts`, ...; in the kernel
+  tables like any method) plus the step's own method (no kernel) when another leaf reads
+  the matrix (a gene's values) or an embedding. On a GPU only the QC row sums and nnz
+  run there (`CellQc::on_gpu`, `Stage::Cells(stage, gpu)`); Polars, the mask and the
+  filter stay on the host. A test that needs "a cell step without a GPU kernel" must
+  read a gene's values, not a QC metric (the 9.6 alternating chains were changed so).
 - Rule 5 (task 9.6): blocks live on the host between steps; a GPU step copies each
   block in and back (`Placement::moves`, `BlockMoves`, shown as `moves=cpu->metal->cpu`
   and the explain JSON key `moves`). `moves` is the route, not the count: each map of

@@ -4,7 +4,8 @@
 //! ([`probe`], [`Devices`]) and say which operations each one has a kernel for
 //! ([`Device::has_kernel`]), through one [`Backend`] interface with a CPU, a CUDA and a
 //! wgpu (Metal, Vulkan, DX12) implementation (task 9.1); and run the per-cell map kernels
-//! of `normalize_total` and `log1p` on a GPU ([`DeviceKernels`], CubeCL, task 9.2).
+//! of `normalize_total` and `log1p` and the row sums and nnz of the per-cell QC metrics
+//! on a GPU ([`DeviceKernels`], CubeCL, tasks 9.2 and 9.10).
 //! cuSPARSE / cuBLAS through cudarc (9.3) arrive later.
 //! Does not: choose devices for plans (the `device="auto"` rules live in kyto-plan's
 //! `device_placement.rs`), decide which steps run where, or run CPU code.
