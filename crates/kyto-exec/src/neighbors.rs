@@ -16,6 +16,10 @@
 //! zero (scikit-learn's `cosine_distances`). Both are rounded once to `float32`.
 //! The result is a CSR graph ([`NeighborGraph`]) with column indices increasing within
 //! each row (format.md §7).
+//! On a GPU (task 9.8), exact search takes each row's candidates from kyto-gpu's tiled
+//! distances and top-k and ranks them here with the same exact distances, searching a
+//! row again on the CPU when the candidates cannot be shown to hold its neighbours
+//! (`neighbors_gpu.rs`): the same graph as on the CPU.
 //! Does not: weight the graph (`connectivities.rs`, 6.7), read embeddings from the store
 //! (5.11), or adjust `n_neighbors` to small data as scanpy does (`KY-E215` instead).
 
@@ -23,11 +27,13 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use kyto_error::KytoError;
+use kyto_gpu::DeviceKernels;
 use kyto_plan::{Metric, NeighborSearch, Neighbors};
 use rayon::prelude::*;
 
 use crate::connectivities::ConnectivityGraph;
 use crate::kernels::Kernels;
+use crate::neighbors_gpu;
 use crate::neighbors_hnsw;
 use crate::run_control::RunControl;
 
@@ -206,14 +212,19 @@ pub fn nearest_neighbors(
     width: usize,
     params: &Neighbors,
 ) -> Result<NeighborGraph, KytoError> {
-    search(embedding, width, params, &RunControl::new())
+    search(embedding, width, params, None, &RunControl::new())
 }
 
-/// [`nearest_neighbors`], cancelled through `control` (`KY-E503`).
+/// [`nearest_neighbors`], cancelled through `control` (`KY-E503`); exact search takes
+/// its candidates from `gpu` when given (task 9.8, `neighbors_gpu.rs`: the same graph).
+///
+/// # Errors
+/// As [`nearest_neighbors`]; `KY-E505` if the GPU fails.
 pub(crate) fn search(
     embedding: &[f32],
     width: usize,
     params: &Neighbors,
+    gpu: Option<&DeviceKernels>,
     control: &RunControl,
 ) -> Result<NeighborGraph, KytoError> {
     if width == 0 || !embedding.len().is_multiple_of(width) {
@@ -286,7 +297,10 @@ pub(crate) fn search(
     let space = Space::new(points, used, params.metric);
     let k = n_neighbors - 1;
     let nearest = match params.search {
-        NeighborSearch::Exact => exact(&space, k, control)?,
+        NeighborSearch::Exact => match gpu {
+            Some(gpu) => neighbors_gpu::exact(&space, k, gpu, control)?,
+            None => exact(&space, k, control)?,
+        },
         NeighborSearch::Approximate => {
             neighbors_hnsw::approximate(&space, k, params.seed, control)?
         }

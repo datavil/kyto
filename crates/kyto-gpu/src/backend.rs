@@ -75,10 +75,13 @@ pub trait Backend: Sync {
     fn has_kernel(&self, operation: &str) -> bool;
 }
 
-/// The operations with a CUDA kernel: the per-cell maps of 9.2 (CubeCL, `kernels.rs`)
-/// and the per-cell QC metrics of 9.10 (9.2's row sums and nnz; named by the
-/// expression leaf, as a `with_cells` or `filter_cells` step reads them, see
-/// kyto-plan's `device_placement.rs`); 9.3 adds `pca` through cuSPARSE and cuBLAS.
+/// The operations with a CUDA kernel: the per-cell maps of 9.2 (CubeCL, `kernels.rs`),
+/// the per-cell QC metrics of 9.10 (9.2's row sums and nnz; named by the expression
+/// leaf, as a `with_cells` or `filter_cells` step reads them, see kyto-plan's
+/// `device_placement.rs`), and `pca` and exact `neighbors` through 9.8's CubeCL matrix
+/// kernels (`kernels_matrix.rs`) until 9.3 makes cuSPARSE and cuBLAS CUDA's path for
+/// `pca` (the same entry points, `launch_matrix.rs`). Approximate neighbours
+/// ([`APPROXIMATE_NEIGHBORS`]) have no GPU kernel.
 pub const CUDA_KERNELS: &[&str] = &[
     "normalize_total",
     "log1p",
@@ -86,11 +89,12 @@ pub const CUDA_KERNELS: &[&str] = &[
     "genes_detected",
     "total_counts_in",
     "percent_counts_in",
+    "pca",
+    "neighbors",
 ];
 
-/// The operations with a wgpu kernel: the per-cell maps of 9.2 (CubeCL, the same
-/// kernels as CUDA's) and the per-cell QC metrics of 9.10; 9.8 adds `pca` and
-/// `neighbors`.
+/// The operations with a wgpu kernel (Metal, Vulkan, DX12): the same CubeCL kernels as
+/// CUDA's, 9.2's maps, 9.10's QC metrics and 9.8's `pca` and exact `neighbors`.
 pub const WGPU_KERNELS: &[&str] = &[
     "normalize_total",
     "log1p",
@@ -98,7 +102,53 @@ pub const WGPU_KERNELS: &[&str] = &[
     "genes_detected",
     "total_counts_in",
     "percent_counts_in",
+    "pca",
+    "neighbors",
 ];
+
+/// The operation of a `neighbors` step with `search="approximate"` (the HNSW index,
+/// 6.17): no GPU has a kernel for it, so `auto` keeps it on the CPU and a named GPU
+/// refuses it (`KY-E501`). Exact search is `neighbors`.
+pub const APPROXIMATE_NEIGHBORS: &str = "neighbors(search=approximate)";
+
+/// How the result of an operation on a GPU compares with the CPU's: the note `explain`
+/// shows on a GPU step (kyto-plan's `Placement::note`). Ordered from the closest: a step
+/// of several operations shows its loosest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Agreement {
+    /// The CPU's result exactly: exact `neighbors` (9.8: the GPU proposes candidates,
+    /// the host ranks them with the CPU's distances and searches a row again when the
+    /// candidates cannot be shown to hold its neighbours).
+    Equal,
+    /// Within 1e-6 relative of the CPU (`f32` arithmetic): 9.2's maps and 9.10's QC
+    /// metrics.
+    Close,
+    /// Within the PCA parity tolerances of the CPU (`tests/parity/tolerances.toml`,
+    /// `pca.*`: 1e-3 relative on variances, loadings and embedding): 9.8's `pca`, whose
+    /// products are `f32` (compensated sums) where the CPU's are `f64`.
+    PcaTolerance,
+}
+
+impl Agreement {
+    /// The agreement of `operation` on a GPU.
+    pub fn of(operation: &str) -> Self {
+        match operation {
+            "neighbors" => Self::Equal,
+            "pca" => Self::PcaTolerance,
+            _ => Self::Close,
+        }
+    }
+
+    /// The note `explain` shows: `equal to cpu`, `within 1e-6 of cpu`, `within 1e-3 of
+    /// cpu`.
+    pub fn note(self) -> &'static str {
+        match self {
+            Self::Equal => "equal to cpu",
+            Self::Close => "within 1e-6 of cpu",
+            Self::PcaTolerance => "within 1e-3 of cpu",
+        }
+    }
+}
 
 /// Every backend, in the order `device="auto"` prefers their GPUs after the CPU's
 /// place: CPU, CUDA, wgpu.
@@ -258,7 +308,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cpu_has_every_kernel_and_gpus_the_9_2_maps_and_9_10_qc() {
+    fn cpu_has_every_kernel_and_gpus_the_9_2_maps_9_10_qc_and_9_8_matrix_steps() {
         assert!(Device::Cpu.has_kernel("pca"));
         for gpu in [Device::Cuda, Device::Wgpu(WgpuBackend::Metal)] {
             assert!(gpu.has_kernel("log1p") && gpu.has_kernel("normalize_total"));
@@ -270,7 +320,8 @@ mod tests {
             ] {
                 assert!(gpu.has_kernel(metric), "{metric}");
             }
-            assert!(!gpu.has_kernel("pca") && !gpu.has_kernel("scale"));
+            assert!(gpu.has_kernel("pca") && gpu.has_kernel("neighbors"));
+            assert!(!gpu.has_kernel(APPROXIMATE_NEIGHBORS) && !gpu.has_kernel("scale"));
             assert!(!gpu.has_kernel("with_cells") && !gpu.has_kernel("filter_cells"));
         }
         for backend in BACKENDS {
@@ -285,6 +336,17 @@ mod tests {
             (Wgpu.built(), Wgpu.feature()),
             (cfg!(feature = "wgpu"), Some("wgpu"))
         );
+    }
+
+    #[test]
+    fn agreements_order_from_equal_to_the_pca_tolerance() {
+        assert_eq!(Agreement::of("neighbors"), Agreement::Equal);
+        assert_eq!(Agreement::of("log1p").note(), "within 1e-6 of cpu");
+        let loosest = ["neighbors", "log1p", "pca"]
+            .map(Agreement::of)
+            .into_iter()
+            .max();
+        assert_eq!(loosest, Some(Agreement::PcaTolerance));
     }
 
     #[test]

@@ -49,7 +49,7 @@ use crate::normalize_log1p_parity::{Csr, scan, write_fixture};
 
 /// The GPUs to check: each built-in runtime's device, if found. Prints why one is
 /// skipped.
-fn gpus() -> Vec<DeviceKernels> {
+pub(crate) fn gpus() -> Vec<DeviceKernels> {
     let found = probe();
     let mut gpus = Vec::new();
     for (backend, device) in [

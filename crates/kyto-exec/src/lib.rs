@@ -58,6 +58,7 @@ mod leiden;
 mod loess;
 mod memory_limit;
 mod neighbors;
+mod neighbors_gpu;
 mod neighbors_hnsw;
 mod operator;
 mod pca;

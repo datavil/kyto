@@ -1469,8 +1469,8 @@ impl Atlas {
     ///    ``explain()`` names these copies on each GPU step (``moves=cpu->metal->cpu``).
     ///
     /// GPUs are found only by a kyto built with the ``cuda`` or ``wgpu`` feature. Today
-    /// ``normalize_total`` and ``log1p`` have GPU kernels (task 9.2; PCA and neighbours
-    /// arrive with 9.3 to 9.8), and so do the QC metrics ``qc.total_counts``,
+    /// ``normalize_total`` and ``log1p`` have GPU kernels (task 9.2), and so do the QC
+    /// metrics ``qc.total_counts``,
     /// ``qc.genes_detected``, ``qc.total_counts_in`` and ``qc.percent_counts_in``
     /// (task 9.10): a ``with_cells`` or ``filter`` step whose expressions read only
     /// these and metadata columns runs on the GPU (its metrics there, the rest of the
@@ -1478,7 +1478,13 @@ impl Atlas {
     /// computes in ``float32`` (Metal has no ``float64``), so its values are within 1e-6
     /// relative of the CPU's, not always the same bits (QC metrics of a ``uint32``
     /// counts layer are), and ``explain()`` notes it on each such step (``within 1e-6
-    /// of cpu``); a GPU gives the same bits run to run. The data size plays no part in the rules,
+    /// of cpu``); a GPU gives the same bits run to run. ``pca`` and ``neighbors`` with
+    /// ``search="exact"`` run on any GPU too (task 9.8): ``pca``'s products are
+    /// ``float32`` where the CPU's are ``float64``, so its result is within the PCA
+    /// parity tolerances of the CPU's (``within 1e-3 of cpu``); exact neighbours take
+    /// their candidates from the GPU and are ranked on the host with the CPU's
+    /// distances, so the graph equals the CPU's (``equal to cpu``). Approximate
+    /// neighbours have no GPU kernel. The data size plays no part in the rules,
     /// and steps on the CPU give the same bits whatever device was asked for (R11).
     ///
     /// Parameters

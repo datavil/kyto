@@ -6,7 +6,7 @@
 //! (CUDA), and both kinds. Each optimized node's line names its device; host steps stay
 //! on the CPU; `auto` puts the fused `normalize_total` + `log1p` pass on the GPU (its 9.2
 //! kernels, noted as not bit-identical to the CPU) and falls back to the CPU out loud for
-//! `pca` (no GPU kernel before 9.3/9.8); an explicit GPU is refused before the run with
+//! `scale` (no GPU kernel; `pca` has one since 9.8); an explicit GPU is refused before the run with
 //! `KY-E504` (not found) or `KY-E501` (no kernel). The `on` step round-trips through the
 //! plan JSON.
 //!
@@ -40,7 +40,7 @@ const MAC: Devices = Devices::new(false, Some(WgpuBackend::Metal));
 const CUDA: Devices = Devices::new(true, None);
 const BOTH: Devices = Devices::new(true, Some(WgpuBackend::Vulkan));
 
-/// A metadata filter (a host step), a fused `normalize_total` + `log1p` pass and `pca`
+/// A metadata filter (a host step), a fused `normalize_total` + `log1p` pass and `scale`
 /// (compute steps), then `on(device=request)`.
 fn pipeline(request: DeviceRequest) -> Arc<Plan> {
     let score = Expr::binary(
@@ -55,7 +55,7 @@ fn pipeline(request: DeviceRequest) -> Arc<Plan> {
         .unwrap()
         .log1p(Some("norm"), "logn")
         .unwrap()
-        .pca(Some("logn"), "X_new", 2, 0, None)
+        .scale(Some("logn"), "scaled", true, Some(10.0))
         .unwrap()
         .on_device(request)
         .unwrap()
@@ -122,9 +122,9 @@ fn every_node_names_its_device_with_and_without_a_gpu() {
         for host in ["FILTER_CELLS", "SCAN"] {
             assert_eq!(device_of(&nodes, host), "cpu", "{devices}: {host}");
         }
-        // Compute steps: the maps on the first GPU (CUDA first), PCA on the CPU out loud.
+        // Compute steps: the maps on the first GPU (CUDA first), scale on the CPU out loud.
         assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), maps, "{devices}");
-        assert_eq!(device_of(&nodes, "PCA"), auto, "{devices}");
+        assert_eq!(device_of(&nodes, "SCALE"), auto, "{devices}");
         // The header names the request and the devices found.
         let text = Explain::new(
             &pipeline(DeviceRequest::Auto),
@@ -187,7 +187,7 @@ fn explicit_gpus_are_marked_and_refused_before_the_run() {
     for (request, devices, shown, code) in cases {
         let plan = pipeline(request);
         let nodes = devices_per_node(&plan, devices);
-        assert_eq!(device_of(&nodes, "PCA"), shown, "{request} on {devices}");
+        assert_eq!(device_of(&nodes, "SCALE"), shown, "{request} on {devices}");
         if code == "KY-E501" {
             // The maps have their 9.2 kernels: on the GPU asked for.
             let gpu = shown.split(' ').next().unwrap();
@@ -201,8 +201,8 @@ fn explicit_gpus_are_marked_and_refused_before_the_run() {
         assert_eq!(error.code(), code, "{request} on {devices}");
         let message = error.to_string();
         if code == "KY-E501" {
-            // The first step (from the scan up) without a kernel: PCA.
-            assert!(message.contains("'pca'"), "{message}");
+            // The first step (from the scan up) without a kernel: scale.
+            assert!(message.contains("'scale'"), "{message}");
         } else {
             assert!(
                 message.contains(&format!("(found: {devices})")),
@@ -333,7 +333,7 @@ fn an_on_between_maps_does_not_stop_their_fusion() {
 /// A chain alternating devices under `auto` on a GPU: the fused `normalize_total` +
 /// `log1p` pass (GPU kernels), a cell filter on a gene's values (no GPU kernel: the
 /// CPU; a filter on QC metrics alone has one since 9.10), a
-/// second `normalize_total` (GPU) reading the filter's output, then `pca` (CPU).
+/// second `normalize_total` (GPU) reading the filter's output, then `scale` (CPU).
 fn alternating(request: DeviceRequest) -> Arc<Plan> {
     let value = CellExpr::expression(Some("logn".to_owned()), "G0");
     let expressed = Expr::binary(value, BinaryOp::GtEq, Literal::Float(0.0)).unwrap();
@@ -346,7 +346,7 @@ fn alternating(request: DeviceRequest) -> Arc<Plan> {
         .unwrap()
         .normalize_total(Some(1e4), Some("logn"), "renorm")
         .unwrap()
-        .pca(Some("renorm"), "X_new", 2, 0, None)
+        .scale(Some("renorm"), "scaled", true, Some(10.0))
         .unwrap()
         .on_device(request)
         .unwrap()
@@ -363,7 +363,7 @@ fn auto_moves_blocks_between_devices_and_says_so_at_each_step() {
         let plan = alternating(DeviceRequest::Auto);
         let nodes = devices_per_node(&plan, devices);
         let expected = [
-            ("PCA", on_cpu),
+            ("SCALE", on_cpu),
             ("NORMALIZE_TOTAL", on_gpu.as_str()),
             ("FILTER_CELLS", on_cpu),
             ("FUSED_ELEMENTWISE", on_gpu.as_str()),
@@ -386,7 +386,7 @@ fn auto_moves_blocks_between_devices_and_says_so_at_each_step() {
                 crossings += 1;
             }
         }
-        // scan -> gpu maps -> cpu filter -> gpu normalize -> cpu pca.
+        // scan -> gpu maps -> cpu filter -> gpu normalize -> cpu scale.
         assert_eq!(crossings, 4, "{devices}");
         // The JSON says the same: moves on the GPU steps, `null` on the CPU ones.
         let json: serde_json::Value =
@@ -402,7 +402,7 @@ fn auto_moves_blocks_between_devices_and_says_so_at_each_step() {
         assert_eq!(
             moves,
             [
-                ("PCA", None),
+                ("SCALE", None),
                 ("NORMALIZE_TOTAL", Some(moved.as_str())),
                 ("FILTER_CELLS", None),
                 ("FUSED_ELEMENTWISE", Some(moved.as_str())),
@@ -436,7 +436,7 @@ fn a_named_gpu_refuses_a_chain_with_a_step_it_has_no_kernel_for() {
         let refused = format!("{gpu} (no kernel: KY-E501 when run)");
         let runs = format!("{gpu} (within 1e-6 of cpu) moves=cpu->{gpu}->cpu");
         assert_eq!(device_of(&nodes, "FILTER_CELLS"), refused);
-        assert_eq!(device_of(&nodes, "PCA"), refused);
+        assert_eq!(device_of(&nodes, "SCALE"), refused);
         assert_eq!(device_of(&nodes, "FUSED_ELEMENTWISE"), runs);
         assert_eq!(device_of(&nodes, "NORMALIZE_TOTAL"), runs);
         // Never a silent fall back to the CPU: the whole run is refused, naming the
@@ -446,7 +446,7 @@ fn a_named_gpu_refuses_a_chain_with_a_step_it_has_no_kernel_for() {
         let message = error.to_string();
         assert!(message.contains("'filter_cells'"), "{message}");
         assert!(message.contains(gpu), "{message}");
-        assert!(!message.contains("'pca'"), "{message}");
+        assert!(!message.contains("'scale'"), "{message}");
     }
 }
 

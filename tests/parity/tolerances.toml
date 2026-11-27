@@ -87,35 +87,35 @@ reason = "Scaled values against the stored reference; its 1-ulp log1p inputs mov
 value = 1e-3
 kind = "relative"
 task = "6.5"
-tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs", "crates/kyto-exec/tests/it/gpu_matrix.rs"]
 reason = "6.5's Done-when, for variance and variance ratio; scanpy's float32 arpack moves by up to 1e-3 between platforms (measured 1.5e-6)."
 
 [pca.leading_angle]
 value = 1e-3
 kind = "absolute"
 task = "6.5"
-tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs", "crates/kyto-exec/tests/it/gpu_matrix.rs"]
 reason = "Largest principal angle (rad) of the leading components' span; measured 9.6e-6 on pbmc3k, the rest is scanpy's float32 noise."
 
 [pca.all_angle]
 value = 1e-2
 kind = "absolute"
 task = "6.5"
-tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs", "crates/kyto-exec/tests/it/gpu_matrix.rs"]
 reason = "Largest principal angle (rad) over all components; the trailing ones sit on a nearly flat spectrum (measured 1.0e-3 on pbmc3k)."
 
 [pca.loadings]
 value = 1e-3
 kind = "relative"
 task = "6.5"
-tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs", "crates/kyto-exec/tests/it/gpu_matrix.rs"]
 reason = "Each leading component's loadings relative to its largest, signs included (svd_flip on both sides); measured 2.2e-5 on pbmc3k."
 
 [pca.embedding]
 value = 1e-3
 kind = "relative"
 task = "6.5"
-tests = ["crates/kyto-exec/tests/it/pca_parity.rs"]
+tests = ["crates/kyto-exec/tests/it/pca_parity.rs", "crates/kyto-exec/tests/it/gpu_matrix.rs"]
 reason = "Each leading embedding column, relative to its largest value; follows the loadings' error (measured 2.2e-5 on pbmc3k)."
 
 [pca.other_seed]

@@ -86,6 +86,8 @@ pub(crate) enum CrossCellKind {
         seed: u64,
         /// The genes the components are computed over (task 6.14), if not all.
         genes: Option<GeneExpr>,
+        /// The GPU its products run on (task 9.8), `None` on the CPU.
+        gpu: Option<kyto_gpu::DeviceKernels>,
     },
     /// `scrublet` of `layer`.
     Scrublet { layer: String, params: Scrublet },
@@ -166,6 +168,7 @@ impl CrossCellStage {
                 layer,
                 n_components,
                 seed,
+                gpu,
                 ..
             } => Accumulator::Pca(Box::new(PcaAccumulator::new(
                 layer,
@@ -173,6 +176,7 @@ impl CrossCellStage {
                 *seed,
                 n_genes,
                 gene_set,
+                gpu.clone(),
             ))),
             CrossCellKind::HighlyVariableGenes {
                 layer,

@@ -39,9 +39,12 @@
 //! statistics, [`PcaStatistics`]; terminals, 7.3), scanpy's other solvers, or
 //! `zero_center=False`.
 
+mod gpu;
+
 use std::sync::Arc;
 
 use kyto_error::KytoError;
+use kyto_gpu::{DeviceKernels, PairSums};
 use kyto_plan::{PCA_OVERSAMPLES, PCA_POWER_ITERATIONS};
 use kyto_store::{CellBlock, CellValues};
 use rayon::prelude::*;
@@ -201,12 +204,23 @@ pub(crate) enum PcaPartial {
         squares: Vec<f64>,
         stored: Vec<u64>,
     },
+    /// Pass 0 on a GPU (task 9.8, `pca/gpu.rs`): the sketch and the gene sums as
+    /// compensated `f32` pairs a leaf's folds continue (genes x `l + 1`, the sums in
+    /// the last column), with the cells and `Omega`'s column sums.
+    GpuSketch {
+        n_cells: u64,
+        omega_sums: Vec<f64>,
+        sketch: PairSums,
+    },
+    /// Passes `1..=q` on a GPU: `X^T w` as pairs, and the sum of the `w`.
+    GpuProduct { product: PairSums, sums: Vec<f64> },
 }
 
 impl PcaPartial {
-    /// `self` (the cells before) and `right` (the cells after) as one partial.
+    /// `self` (the cells before) and `right` (the cells after) as one partial (a GPU
+    /// leaf as the `f64` leaf it stands for).
     pub(crate) fn combine(self, right: Self) -> Self {
-        match (self, right) {
+        match (gpu::settle(self), gpu::settle(right)) {
             (
                 Self::Sketch {
                     n_cells,
@@ -287,6 +301,8 @@ fn add(left: &mut [f64], right: &[f64]) {
 #[derive(Debug, Clone)]
 pub(crate) struct PcaAccumulator {
     layer: String,
+    /// The GPU the products run on (task 9.8, `pca/gpu.rs`), `None` on the CPU.
+    gpu: Option<DeviceKernels>,
     n_components: usize,
     seed: u64,
     /// The genes the components are computed over (those of the gene set).
@@ -330,6 +346,7 @@ impl PcaAccumulator {
         seed: u64,
         stream_genes: usize,
         gene_set: Option<&[bool]>,
+        gpu: Option<DeviceKernels>,
     ) -> Self {
         let n_components = usize::try_from(n_components).unwrap_or(usize::MAX);
         let subset = gene_set.map(|flags| {
@@ -362,6 +379,7 @@ impl PcaAccumulator {
             .min(n_genes);
         Self {
             layer: layer.to_owned(),
+            gpu,
             n_components,
             seed,
             n_genes,
@@ -386,6 +404,13 @@ impl PcaAccumulator {
 
     /// An empty leaf of pass `pass`.
     pub(crate) fn leaf(&self, pass: u32) -> PcaPartial {
+        if self.gpu.is_some() && pass < PCA_PASSES - 1 {
+            return if pass == 0 {
+                gpu::sketch_leaf(self.n_genes, self.width)
+            } else {
+                gpu::product_leaf(&self.block)
+            };
+        }
         if pass == 0 {
             PcaPartial::Sketch {
                 n_cells: 0,
@@ -438,6 +463,9 @@ impl PcaAccumulator {
                     ),
                 });
             }
+        }
+        if let Some(kernels) = &self.gpu {
+            return gpu::fold(self, kernels, leaf, group);
         }
         let f32_rows: Option<Vec<BlockRows<'_, f32>>> = group
             .iter()
@@ -615,6 +643,9 @@ impl PcaAccumulator {
                         }
                     });
             }
+            PcaPartial::GpuSketch { .. } | PcaPartial::GpuProduct { .. } => {
+                unreachable!("a GPU leaf is folded by pca/gpu.rs")
+            }
             PcaPartial::Rows {
                 cells,
                 rows,
@@ -683,7 +714,7 @@ impl PcaAccumulator {
         pass: u32,
         reduced: Option<PcaPartial>,
     ) -> Result<(), KytoError> {
-        match reduced {
+        match reduced.map(gpu::settle) {
             Some(PcaPartial::Sketch {
                 n_cells,
                 sums,
@@ -741,6 +772,9 @@ impl PcaAccumulator {
                         self.finish_basis()?;
                     }
                 }
+            }
+            Some(PcaPartial::GpuSketch { .. } | PcaPartial::GpuProduct { .. }) => {
+                unreachable!("settled above")
             }
             Some(PcaPartial::Rows {
                 cells,
@@ -1063,6 +1097,9 @@ mod tests {
                     }
                 }
             }
+            PcaPartial::GpuSketch { .. } | PcaPartial::GpuProduct { .. } => {
+                unreachable!("the reference folds CPU leaves")
+            }
         }
     }
 
@@ -1100,7 +1137,7 @@ mod tests {
                     .build()
                     .unwrap();
                 pool.install(|| {
-                    let mut pca = PcaAccumulator::new("x", 5, 3, GENES, gene_set);
+                    let mut pca = PcaAccumulator::new("x", 5, 3, GENES, gene_set, None);
                     for pass in [0, 1, PCA_PASSES - 1] {
                         if pass == PCA_PASSES - 1 {
                             pca.finish_basis().unwrap();

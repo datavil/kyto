@@ -819,6 +819,26 @@ estimate is the same bytes, their measured heap moving by run-to-run noise only)
   and 5.21 on this machine (49.9 to 51.1 MB; above 5.18's 38 MB because of the parallel
   builds' load, base included). The output hash is the same (R11).
 
+## PCA and exact neighbours on Metal (task 9.8)
+
+Not a benchmark (speed work is M6): one run each, recorded so M6 starts from a number.
+Apple M4 (10 cores), Metal through wgpu, release build, all threads, pbmc3k (2,700 cells;
+6.5's steps: `normalize_total` -> `log1p` -> 2,000 HVGs -> `pca(50)`; neighbours `k = 15` on the
+CPU's 50-component embedding), from
+`uv run cargo test --release -p kyto-exec --features wgpu --test it -- gpu_matrix::pca_on --nocapture`.
+
+| step | cpu (s) | metal (s) | result on metal |
+| --- | ---: | ---: | --- |
+| pca (whole plan, input held) | 0.718 | 0.870 | variances 9.2e-9 from the cpu (tolerance 1e-3) |
+| neighbors exact, Euclidean | 0.023 | 0.057 | equal to the cpu |
+| neighbors exact, cosine | 0.017 | 0.049 | equal to the cpu |
+
+kyto loses on both at this size. Each GPU call makes one round trip (9.6's rule 5: blocks
+on the host), PCA's `X^T D` builds a CSC copy of each fold on the host and the kernels are
+one thread per output value without tiling or shared memory; neighbours copy every point
+for each 4,096-query call and re-rank candidates on the host; on heavily tied data (small integers) most rows fail the candidate check and are searched again on the CPU, so the GPU is as slow as the CPU there (bug-hunter, 9,000 cells: 4.4-5.8 s against 4.8-6.2 s). Keeping blocks on the
+device (12.2), cuSPARSE/cuBLAS on CUDA (9.3) and tiled kernels are where M6 would look.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

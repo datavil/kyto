@@ -129,20 +129,19 @@ Done (8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7): see [Implementation Plan - Done.md](Im
 
 Goal: the same plan runs on a GPU by changing `on(device=...)`, with results matching the CPU.
 
-Done (9.1, 9.2, 9.5, 9.6, 9.9, 9.10): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
+Done (9.1, 9.2, 9.5, 9.6, 9.8, 9.9, 9.10): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#9-gpu-backend-kyto-gpu).
 
 - [ ] **9.3 CUDA libraries.** cuSPARSE SpMM and cuBLAS GEMM through `cudarc` for PCA; pinned buffers and double-buffered host-to-device copies so reads overlap compute.
   - Depends: 9.1, 6.5, 5.12
   - Done when: GPU PCA matches CPU PCA within the 6.5 tolerances.
+  - Note (Nov 27, 2026, from 9.8, done first on the maestro's reorder): `pca` already runs on CUDA through 9.8's CubeCL kernels (`kyto-gpu/src/kernels_matrix.rs`; `"pca"` is in `CUDA_KERNELS`), unverified here (no NVIDIA GPU). What is left: cuSPARSE SpMM and cuBLAS GEMM as CUDA's preferred path, by branching on `self.device == Device::Cuda` inside `DeviceKernels::sparse_dense` (`X D`) and `DeviceKernels::sparse_transposed_dense` (`X^T D`, continuing `PairSums`) in `launch_matrix.rs`; same arguments and results, so kyto-exec's `pca/gpu.rs` and the placement are unchanged (keep R11: a fixed reduction order, and a leaf split into parts must give the bits of the whole block, which is why the sums are carried as pairs); the pinned buffers and double-buffered copies; and running `gpu_matrix::` on a CUDA machine.
 - [ ] **9.4 GPU neighbours.** Tiled brute-force distance via GEMM plus top-k selection.
   - Depends: 9.3, 6.6
   - Done when: results equal CPU exact mode.
+  - Note (Nov 27, 2026, from 9.8): exact `neighbors` already runs on any GPU through 9.8's CubeCL tiled distances (squared Euclidean, or cosine from a dense GEMM `A B^T`) and top-k (`DeviceKernels::nearest_keys`), with a host check that makes the graph equal the CPU's exact search (`kyto-exec/src/neighbors_gpu.rs`: candidates re-ranked with the CPU's distances, a row searched again on the CPU when the `f32` keys cannot prove its neighbours). Verified on Metal; unverified on CUDA. What is left: a cuBLAS GEMM for the distances on CUDA (behind `nearest_keys`, same results), and the CUDA run of `gpu_matrix::`.
 - [ ] **9.7 GPU CI.** GPU tests on a self-hosted runner; skipped with a visible notice elsewhere.
   - Depends: 1.4, 9.2
   - Done when: the GPU job runs on every PR that touches `kyto-gpu` or `kyto-exec`.
-- [ ] **9.8 Portable matrix kernels (Metal).** PCA's products (sparse × dense SpMM and dense GEMM) and 9.4's tiled distances plus top-k written in CubeCL, so PCA and neighbours run through wgpu on Metal (and ROCm) as well as CUDA. 9.3's cuSPARSE/cuBLAS stays the CUDA path; `device="auto"` picks it on NVIDIA and these kernels elsewhere, by the 9.1 rules shown in `explain()`. (added Nov 14, 2026, at the user's request: Apple GPUs otherwise run only the 9.2 kernels)
-  - Depends: 9.2, 9.3, 9.4
-  - Done when: on a Metal device, PCA matches CPU PCA within the 6.5 tolerances and neighbours equal CPU exact mode.
 - [ ] **9.11 DLPack from device memory.** Since 9.5, `to_torch` and `__dlpack__` hand over host memory (`kDLCPU`): kyto's results are read back to the host, so `to_torch(device="cuda")` copies once, through PyTorch. Once a step keeps its output on the GPU (9.3, 12.2), export it as a `kDLCUDA` (or ROCm) DLPack tensor from `kyto-gpu`'s buffer, honouring the consumer's `stream`, so a CUDA tensor shares kyto's device pointer. Also decide whether `torch` joins the dev dependencies (today the torch tests of `tests/test_dlpack.py` skip without it; 9.5 ran them with `uv run --with torch`). (added Nov 22, 2026, by 9.5)
   - Depends: 9.3, 9.5
   - Done when: on a CUDA machine, a tensor from `to_torch(device="cuda")` of a GPU-computed embedding has the `data_ptr()` of kyto's device buffer (test, skipped visibly elsewhere).

@@ -45,7 +45,13 @@ impl Lcg {
 
 /// `n_cells x n_genes` dense values of rank `rank` plus `noise`, negative values set to 0
 /// (sparse, as log data): scores times loadings with decaying scales.
-fn data(n_cells: usize, n_genes: usize, rank: usize, noise: f64, seed: u64) -> Vec<Vec<f32>> {
+pub(crate) fn data(
+    n_cells: usize,
+    n_genes: usize,
+    rank: usize,
+    noise: f64,
+    seed: u64,
+) -> Vec<Vec<f32>> {
     let mut random = Lcg(seed);
     let scores: Vec<Vec<f64>> = (0..n_cells)
         .map(|_| (0..rank).map(|_| random.next() * 2.0 - 1.0).collect())
@@ -79,7 +85,7 @@ fn data(n_cells: usize, n_genes: usize, rank: usize, noise: f64, seed: u64) -> V
 /// Write `rows` as layer `values` (`float32`, or `uint32` rounded when `counts`) of a
 /// store with cell column `score` = the cell's position and the boolean gene column
 /// `selected` (false for every third gene, null for gene 1).
-fn write_store(target: &Path, rows: &[Vec<f32>], counts: bool) {
+pub(crate) fn write_store(target: &Path, rows: &[Vec<f32>], counts: bool) {
     let n_genes = rows[0].len();
     let gene_ids: Vec<String> = (0..n_genes).map(|gene| format!("G{gene}")).collect();
     let cell_ids: Vec<String> = (0..rows.len()).map(|cell| format!("c{cell}")).collect();

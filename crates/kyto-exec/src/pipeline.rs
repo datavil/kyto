@@ -48,8 +48,8 @@ use kyto_core::{AtlasSchema, Axis, ColumnDtype, ExprNode, Source};
 use kyto_error::KytoError;
 use kyto_gpu::DeviceKernels;
 use kyto_plan::{
-    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, Neighbors, Operation,
-    PhysicalPlan, Plan, Predicate, Umap, WithEmbedding, loadings_name,
+    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, NeighborSearch, Neighbors,
+    Operation, PhysicalPlan, Plan, Predicate, Umap, WithEmbedding, loadings_name,
 };
 use kyto_store::{FloatValues, LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -177,6 +177,8 @@ pub(crate) struct NeighborStage {
     /// Whether a cell filter or `take_cells` lies between the embedding and the node:
     /// only the rows of the cells reaching it are searched (task 5.11).
     filtered: bool,
+    /// The GPU exact search proposes candidates on (task 9.8), `None` on the CPU.
+    gpu: Option<DeviceKernels>,
 }
 
 impl Stage {
@@ -607,12 +609,17 @@ impl Pipeline {
                         (Arc::clone(&rows.keys), rows.values.to_f32())
                     };
                     let (graph, weights) = thread_pool.install(|| {
-                        neighbors::search(&values, rows.width, &stage.params, &control).map(
-                            |graph| {
-                                let weights = connectivities::connectivities(&graph);
-                                (graph, weights)
-                            },
+                        neighbors::search(
+                            &values,
+                            rows.width,
+                            &stage.params,
+                            stage.gpu.as_ref(),
+                            &control,
                         )
+                        .map(|graph| {
+                            let weights = connectivities::connectivities(&graph);
+                            (graph, weights)
+                        })
                     })?;
                     searched.insert(
                         stage.node,
@@ -918,8 +925,9 @@ impl GpuKernels {
     /// # Errors
     /// - `KY-E501` if `node` is placed on a GPU but is not a step this executor runs
     ///   there (only the per-cell maps, `normalize_total` and `log1p`, and the cell
-    ///   steps whose leaves are QC metrics and table columns, task 9.10, have GPU
-    ///   kernels; the kernel table and this check move together).
+    ///   steps whose leaves are QC metrics and table columns, task 9.10, `pca` and
+    ///   exact `neighbors`, task 9.8, have GPU kernels; the kernel table and this check
+    ///   move together).
     /// - `KY-E505` if the device's runtime does not start.
     fn for_node(
         &mut self,
@@ -944,6 +952,9 @@ impl GpuKernels {
                     }
                     Columns::Genes(_) => false,
                 },
+                // Task 9.8: `pca`'s products and exact neighbours' candidates.
+                Plan::CrossCell(node) => matches!(node.params().op(), CrossCellOp::Pca { .. }),
+                Plan::Neighbors(node) => node.params().search == NeighborSearch::Exact,
                 _ => false,
             },
             Operation::Scan { .. } => false,
@@ -1062,6 +1073,7 @@ fn lower_node(
                     n_components: *n_components,
                     seed: *seed,
                     genes: genes.clone(),
+                    gpu,
                 };
                 Ok(Some(Stage::CrossCell(CrossCellStage::new(
                     index, passes, kind,
@@ -1083,6 +1095,7 @@ fn lower_node(
             params: node.params().clone(),
             embedding: EmbeddingSource::Pca { node: usize::MAX },
             filtered: false,
+            gpu,
         }))),
         Plan::Cluster(node) => Ok(Some(Stage::Cluster(ClusterStage {
             node: index,

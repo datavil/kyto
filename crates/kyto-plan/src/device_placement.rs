@@ -40,6 +40,12 @@
 //!    columns, the arithmetic joining the leaves, the filter itself) is host work on
 //!    the values copied back, as for any step. A step reading only table columns is a
 //!    host step (rule 1).
+//! 7. **`pca` and exact `neighbors` run on a GPU through 9.8's CubeCL matrix kernels**
+//!    (wgpu and CUDA). Each GPU step's note says how its result compares with the
+//!    CPU's ([`Agreement`]): `within 1e-6 of cpu` for 9.2's maps and 9.10's QC metrics,
+//!    `within 1e-3 of cpu` for `pca` (the parity table's PCA tolerances), `equal to
+//!    cpu` for exact `neighbors`. A `neighbors` step with `search="approximate"` has
+//!    the operation `neighbors(search=approximate)`, which no GPU has a kernel for.
 //!
 //! The data size plays no part, so the same plan, request and devices always give the
 //! same placement.
@@ -49,13 +55,14 @@
 use std::fmt;
 
 use kyto_error::KytoError;
-use kyto_gpu::{Device, Devices, WgpuBackend};
+use kyto_gpu::{APPROXIMATE_NEIGHBORS, Agreement, Device, Devices, WgpuBackend};
 use serde::{Deserialize, Serialize};
 
 use kyto_core::{ExprNode, Source};
 
 use crate::filter::Predicate;
 use crate::members::for_each_leaf;
+use crate::neighbors::NeighborSearch;
 use crate::node::LogicalNode;
 use crate::optimized_plan::{Operation, OptimizedNode};
 use crate::plan::Plan;
@@ -150,15 +157,13 @@ impl fmt::Display for DeviceRequest {
     }
 }
 
-/// The note on a step that runs on a GPU (task 9.2): its kernels compute in `f32`
-/// (Metal has no `f64`), so the result is within 1e-6 relative of the CPU's, not equal.
-pub const GPU_NOTE: &str = "within 1e-6 of cpu";
-
 /// Where one node runs, and why when it is not where it was asked to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
-    /// On this device: asked for, picked by `auto`, or a host step's CPU (rules 1-4).
-    On(Device),
+    /// On this device: asked for, picked by `auto`, or a host step's CPU (rules 1-4),
+    /// with how its result compares with the CPU's (the loosest of its operations';
+    /// [`Agreement::Equal`] on the CPU).
+    On(Device, Agreement),
     /// On the CPU because `auto` found no GPU with a kernel for it (rule 3);
     /// `gpu_found` says whether any GPU was found at all.
     Fallback {
@@ -180,7 +185,7 @@ impl Placement {
     /// The device it runs on, `None` when the run is refused (`KY-E501`, `KY-E504`).
     pub fn device(self) -> Option<Device> {
         match self {
-            Self::On(device) => Some(device),
+            Self::On(device, _) => Some(device),
             Self::Fallback { .. } => Some(Device::Cpu),
             Self::NoKernel { .. } | Self::NotFound(_) => None,
         }
@@ -189,7 +194,7 @@ impl Placement {
     /// The device name `explain` shows: where it runs, or the device asked for.
     pub fn name(self) -> &'static str {
         match self {
-            Self::On(device) | Self::NoKernel { device, .. } => device.name(),
+            Self::On(device, _) | Self::NoKernel { device, .. } => device.name(),
             Self::Fallback { .. } => Device::Cpu.name(),
             Self::NotFound(request) => request.name(),
         }
@@ -200,8 +205,8 @@ impl Placement {
     /// the same run to run). `None` on the CPU as asked.
     pub fn note(self) -> Option<&'static str> {
         match self {
-            Self::On(device) if device.is_gpu() => Some(GPU_NOTE),
-            Self::On(_) => None,
+            Self::On(device, agreement) if device.is_gpu() => Some(agreement.note()),
+            Self::On(..) => None,
             Self::Fallback { gpu_found: false } => Some("auto: no gpu found"),
             Self::Fallback { gpu_found: true } => Some("auto: no gpu kernel"),
             Self::NoKernel { .. } => Some("no kernel: KY-E501 when run"),
@@ -214,15 +219,17 @@ impl Placement {
     /// `KY-E504`).
     pub fn moves(self) -> Option<BlockMoves> {
         match self {
-            Self::On(device) if device.is_gpu() => Some(BlockMoves { device }),
-            Self::On(_) | Self::Fallback { .. } | Self::NoKernel { .. } | Self::NotFound(_) => None,
+            Self::On(device, _) if device.is_gpu() => Some(BlockMoves { device }),
+            Self::On(..) | Self::Fallback { .. } | Self::NoKernel { .. } | Self::NotFound(_) => {
+                None
+            }
         }
     }
 
     /// The error a run of this node raises, if it cannot run as asked.
     pub fn error(self, devices: Devices) -> Option<KytoError> {
         match self {
-            Self::On(_) | Self::Fallback { .. } => None,
+            Self::On(..) | Self::Fallback { .. } => None,
             Self::NoKernel { device, operation } => Some(KytoError::MissingKernel {
                 operation: operation.to_owned(),
                 device: device.name().to_owned(),
@@ -279,16 +286,25 @@ pub fn place(
             .iter()
             .all(|&operation| has_kernel(device, operation))
     };
+    let on = |device: Device| {
+        let agreement = operations
+            .iter()
+            .map(|&operation| Agreement::of(operation))
+            .max()
+            .filter(|_| device.is_gpu())
+            .unwrap_or(Agreement::Equal);
+        Placement::On(device, agreement)
+    };
     if operations.is_empty() {
-        return Placement::On(Device::Cpu);
+        return on(Device::Cpu);
     }
     match request {
-        DeviceRequest::Cpu => Placement::On(Device::Cpu),
+        DeviceRequest::Cpu => on(Device::Cpu),
         DeviceRequest::Auto => devices.gpus().find(|&gpu| runs_on(gpu)).map_or(
             Placement::Fallback {
                 gpu_found: devices.gpus().next().is_some(),
             },
-            Placement::On,
+            on,
         ),
         DeviceRequest::Cuda | DeviceRequest::Wgpu | DeviceRequest::Metal => {
             match request.named_gpu(devices) {
@@ -298,7 +314,7 @@ pub fn place(
                     .find(|&&operation| !has_kernel(device, operation))
                 {
                     Some(&operation) => Placement::NoKernel { device, operation },
-                    None => Placement::On(device),
+                    None => on(device),
                 },
             }
         }
@@ -314,6 +330,12 @@ pub(crate) fn operations(node: &OptimizedNode) -> Vec<&'static str> {
         Operation::Node(plan) => {
             if let Some(operations) = cell_step_operations(plan) {
                 return operations;
+            }
+            // Rule 7 (9.8): only exact search has a GPU kernel.
+            if let Plan::Neighbors(neighbors) = plan.as_ref()
+                && neighbors.params().search == NeighborSearch::Approximate
+            {
+                return vec![APPROXIMATE_NEIGHBORS];
             }
             let host = match plan.as_ref() {
                 Plan::Scan(_)
@@ -390,6 +412,7 @@ mod tests {
     const NONE: Devices = Devices::CPU_ONLY;
     const MAC: Devices = Devices::new(false, Some(WgpuBackend::Metal));
     const BOTH: Devices = Devices::new(true, Some(WgpuBackend::Vulkan));
+    const CPU: Placement = Placement::On(Device::Cpu, Agreement::Equal);
 
     /// A stand-in kernel table: CUDA runs `log1p` and `pca`, wgpu only `log1p`.
     fn table(device: Device, operation: &str) -> bool {
@@ -407,10 +430,10 @@ mod tests {
             DeviceRequest::Auto,
             DeviceRequest::Metal,
         ] {
-            assert_eq!(place(request, NONE, &[], table), Placement::On(Device::Cpu));
+            assert_eq!(place(request, NONE, &[], table), CPU);
         }
         let cpu = place(DeviceRequest::Cpu, BOTH, &["log1p"], table);
-        assert_eq!(cpu, Placement::On(Device::Cpu));
+        assert_eq!(cpu, CPU);
         assert_eq!(cpu.to_string(), "cpu");
     }
 
@@ -419,8 +442,14 @@ mod tests {
         let auto = |devices, operations: &[&'static str]| {
             place(DeviceRequest::Auto, devices, operations, table)
         };
-        assert_eq!(auto(BOTH, &["pca"]), Placement::On(Device::Cuda));
-        assert_eq!(auto(MAC, &["log1p"]), Placement::On(METAL));
+        assert_eq!(
+            auto(BOTH, &["pca"]),
+            Placement::On(Device::Cuda, Agreement::PcaTolerance)
+        );
+        assert_eq!(
+            auto(MAC, &["log1p"]),
+            Placement::On(METAL, Agreement::Close)
+        );
         assert_eq!(
             auto(MAC, &["log1p"]).to_string(),
             "metal (within 1e-6 of cpu)"
@@ -435,23 +464,31 @@ mod tests {
             auto(NONE, &["log1p"]).to_string(),
             "cpu (auto: no gpu found)"
         );
-        // The real table (9.2): the per-cell maps run on the GPU, PCA does not yet.
+        // The real table: the per-cell maps (9.2), PCA and exact neighbours (9.8) run on
+        // the GPU, each with its note; approximate neighbours and scale do not.
         let real = |operations: &[&'static str]| {
             place(DeviceRequest::Auto, MAC, operations, Device::has_kernel)
         };
-        assert_eq!(real(&["normalize_total", "log1p"]), Placement::On(METAL));
-        assert_eq!(real(&["pca"]), Placement::Fallback { gpu_found: true });
+        assert_eq!(
+            real(&["normalize_total", "log1p"]),
+            Placement::On(METAL, Agreement::Close)
+        );
+        assert_eq!(real(&["pca"]).to_string(), "metal (within 1e-3 of cpu)");
+        assert_eq!(real(&["neighbors"]).to_string(), "metal (equal to cpu)");
+        for operation in [APPROXIMATE_NEIGHBORS, "scale"] {
+            assert_eq!(real(&[operation]), Placement::Fallback { gpu_found: true });
+        }
     }
 
     #[test]
     fn an_explicit_device_is_used_or_refused() {
         assert_eq!(
             place(DeviceRequest::Cuda, BOTH, &["pca"], table),
-            Placement::On(Device::Cuda)
+            Placement::On(Device::Cuda, Agreement::PcaTolerance)
         );
         assert_eq!(
             place(DeviceRequest::Wgpu, BOTH, &["log1p"], table),
-            Placement::On(Device::Wgpu(WgpuBackend::Vulkan))
+            Placement::On(Device::Wgpu(WgpuBackend::Vulkan), Agreement::Close)
         );
         let missing = place(DeviceRequest::Metal, MAC, &["pca"], table);
         assert_eq!(

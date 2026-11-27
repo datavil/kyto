@@ -22,6 +22,7 @@ mod filter_qc_parity;
 mod filters_columns;
 mod gene_qc_parity;
 mod gpu_kernels;
+mod gpu_matrix;
 mod hvg_parity;
 mod inspection;
 mod kernels;

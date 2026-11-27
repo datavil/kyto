@@ -69,7 +69,7 @@ print(parameters['min_cells_per_gene'], target, parameters['n_comps'])
 
 /// Write fixture `name` to `h5ad` and its reference to `out`; its
 /// `min_cells_per_gene`, `target_sum` and `n_comps`, or `None` without anndata.
-fn write_fixture(name: &str, h5ad: &Path, out: &Path) -> Option<(u64, f64, u64)> {
+pub(crate) fn write_fixture(name: &str, h5ad: &Path, out: &Path) -> Option<(u64, f64, u64)> {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
     let output = Command::new(std::env::var("PYTHON").unwrap_or_else(|_| "python".to_owned()))
         .current_dir(tests)
@@ -94,7 +94,7 @@ fn write_fixture(name: &str, h5ad: &Path, out: &Path) -> Option<(u64, f64, u64)>
     ))
 }
 
-fn read_f64(path: &Path) -> Vec<f64> {
+pub(crate) fn read_f64(path: &Path) -> Vec<f64> {
     std::fs::read(path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
         .as_chunks::<8>()
@@ -104,7 +104,7 @@ fn read_f64(path: &Path) -> Vec<f64> {
         .collect()
 }
 
-fn read_lines(path: &Path) -> Vec<String> {
+pub(crate) fn read_lines(path: &Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap()
         .lines()
@@ -112,7 +112,7 @@ fn read_lines(path: &Path) -> Vec<String> {
         .collect()
 }
 
-fn scan(store: &Path) -> Arc<Plan> {
+pub(crate) fn scan(store: &Path) -> Arc<Plan> {
     let schema = open_atlas_schema(store).unwrap();
     let gene_ids = GeneIds::new(read_ids(store, TableAxis::Genes, schema.n_genes).unwrap());
     Plan::scan(store.display().to_string(), schema, gene_ids)
@@ -158,7 +158,7 @@ fn run_holding(
     (statistics, streamed)
 }
 
-fn relative(kyto: &[f64], scanpy: &[f64]) -> f64 {
+pub(crate) fn relative(kyto: &[f64], scanpy: &[f64]) -> f64 {
     assert_eq!(kyto.len(), scanpy.len());
     kyto.iter()
         .zip(scanpy)
@@ -167,7 +167,7 @@ fn relative(kyto: &[f64], scanpy: &[f64]) -> f64 {
 }
 
 /// Column `column` of a row-major matrix with `width` columns.
-fn column<T: Copy + Into<f64>>(values: &[T], width: usize, column: usize) -> Vec<f64> {
+pub(crate) fn column<T: Copy + Into<f64>>(values: &[T], width: usize, column: usize) -> Vec<f64> {
     values
         .iter()
         .skip(column)
@@ -184,7 +184,7 @@ fn leading(values: &[f64], width: usize, m: usize) -> Mat<f64> {
 }
 
 /// The largest principal angle (radians) between the spans of the first `m` loadings.
-fn largest_angle(kyto: &[f64], scanpy: &[f64], width: usize, m: usize) -> f64 {
+pub(crate) fn largest_angle(kyto: &[f64], scanpy: &[f64], width: usize, m: usize) -> f64 {
     let product = leading(kyto, width, m).transpose() * leading(scanpy, width, m);
     let singular = product.singular_values().unwrap();
     let smallest = singular.iter().copied().fold(f64::INFINITY, f64::min);
@@ -192,7 +192,7 @@ fn largest_angle(kyto: &[f64], scanpy: &[f64], width: usize, m: usize) -> f64 {
 }
 
 /// The largest difference between two columns, relative to the larger of them.
-fn column_difference(kyto: &[f64], scanpy: &[f64]) -> f64 {
+pub(crate) fn column_difference(kyto: &[f64], scanpy: &[f64]) -> f64 {
     let scale = scanpy.iter().map(|value| value.abs()).fold(0.0, f64::max);
     kyto.iter()
         .zip(scanpy)

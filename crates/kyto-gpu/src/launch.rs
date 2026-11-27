@@ -42,12 +42,12 @@ impl RowValues<'_> {
 /// The 9.2 kernels on one GPU. Cheap to clone and shared by the executor's threads.
 #[derive(Clone)]
 pub struct DeviceKernels {
-    device: Device,
+    pub(crate) device: Device,
     #[cfg(any(feature = "wgpu", feature = "cuda"))]
-    client: cubecl::prelude::Client,
+    pub(crate) client: cubecl::prelude::Client,
     /// No value exists in a build without a GPU runtime.
     #[cfg(not(any(feature = "wgpu", feature = "cuda")))]
-    never: std::convert::Infallible,
+    pub(crate) never: std::convert::Infallible,
 }
 
 impl std::fmt::Debug for DeviceKernels {
@@ -60,7 +60,7 @@ impl std::fmt::Debug for DeviceKernels {
 }
 
 /// A failure of `operation` on `device`, as `KY-E505`.
-fn failure(device: Device, operation: &str, problem: impl ToString) -> KytoError {
+pub(crate) fn failure(device: Device, operation: &str, problem: impl ToString) -> KytoError {
     KytoError::DeviceFailure {
         device: device.name().to_owned(),
         operation: operation.to_owned(),
@@ -203,7 +203,7 @@ fn open_client(device: Device, operation: &str) -> Result<cubecl::prelude::Clien
 }
 
 #[cfg(any(feature = "wgpu", feature = "cuda"))]
-mod run {
+pub(crate) mod run {
     //! The launches, only in a build with a GPU runtime.
 
     use cubecl::prelude::*;
@@ -214,14 +214,14 @@ mod run {
     use crate::kernels as cube;
 
     /// Threads per cube (workgroup): 256 runs on every runtime kyto supports.
-    const CUBE_THREADS: u32 = 256;
+    pub(crate) const CUBE_THREADS: u32 = 256;
 
     /// The most cubes along one axis of a dispatch (wgpu's limit, 65535).
     const MAX_CUBES_PER_AXIS: u32 = 65_535;
 
     /// A dispatch of at least `threads` threads: cubes along x, then y when x is full.
     /// `ABSOLUTE_POS` counts across both, and each kernel checks its bound.
-    fn cubes(threads: usize) -> CubeCount {
+    pub(crate) fn cubes(threads: usize) -> CubeCount {
         let cubes = threads.div_ceil(CUBE_THREADS as usize) as u64;
         let x = cubes.clamp(1, u64::from(MAX_CUBES_PER_AXIS));
         let y = cubes.div_ceil(x).max(1);
@@ -230,17 +230,17 @@ mod run {
 
     impl DeviceKernels {
         /// Bytes of `values` on the device.
-        fn upload<T: CubeElement>(&self, values: &[T]) -> Handle {
+        pub(crate) fn upload<T: CubeElement>(&self, values: &[T]) -> Handle {
             self.client.create_from_slice(T::as_bytes(values))
         }
 
         /// An output buffer of `len` values of `T`.
-        fn output<T>(&self, len: usize) -> Handle {
+        pub(crate) fn output<T>(&self, len: usize) -> Handle {
             self.client.empty(len * std::mem::size_of::<T>())
         }
 
         /// The values of `handle` back on the host.
-        fn download<T: CubeElement>(
+        pub(crate) fn download<T: CubeElement>(
             &self,
             handle: Handle,
             operation: &str,
