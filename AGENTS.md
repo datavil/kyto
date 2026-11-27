@@ -75,7 +75,10 @@ decision recorded in the plan.
   after it has fully finished (Done-when check, local gate, bug hunt, commit).
   (Parallel runs allowed by the user, Nov 20, 2026.) Features and correctness come
   first: speed tasks wait for milestone M6 (plan section 12), which starts once M3 to
-  M5 are done (decided by the user, Nov 21, 2026).
+  M5 are done (decided by the user, Nov 21, 2026). The aim is a proof of concept that
+  beats scanpy on an Apple Silicon Mac in time and peak memory, preferably many times
+  over; other platforms are secondary, and their tasks (plan milestone "Later: other
+  platforms") never hold Mac work back (decided by the user, Nov 27, 2026).
 - **Version control.** Each sub-session works in its own git worktree on its own
   branch. When it is done, the maestro checks the result and merges it into `main`
   (rebase onto `main`, fast-forward, `git push origin main`), then removes the worktree

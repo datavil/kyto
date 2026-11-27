@@ -8,6 +8,8 @@ Ticked tasks live in [Implementation Plan - Done.md](Implementation%20Plan%20-%2
 
 kyto is built in 10 workstreams of numbered tasks. An agent takes one unblocked task, finishes it until its **Done when** check passes, then ticks it.
 
+**Aim** (decided by the user, Nov 27, 2026): the first goal is a proof of concept that beats scanpy on an Apple Silicon Mac, in speed and in peak memory, preferably many times over. Other platforms (Linux, Windows, NVIDIA through CUDA, other GPUs through wgpu's Vulkan and DX12) are secondary: they keep building and passing where they are tested, but no Mac task waits for them.
+
 **Task protocol**
 
 - IDs such as `3.4` never change. New tasks take the next free number; dropped tasks stay, struck through.
@@ -172,22 +174,23 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M1 Read and inspect | 2.1–2.6, 3.1–3.9, 4.1–4.7, 5.1–5.2, 7.1, 7.3–7.5, 7.7, 8.2–8.3 |
 | M2 CPU pipeline | 5.3–5.7, 6.1–6.3, 7.2, 7.6, 10.1–10.3 |
 | M3 Full analysis | 2.9, 5.12–5.15, 6.4–6.10, 6.12, 6.16–6.17, 7.8, 8.4–8.7, 10.7 |
-| M4 GPU backend | 9.1–9.9 |
+| M4 GPU backend | 9.1–9.2, 9.5–9.6, 9.8–9.10 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
 | M6 Optimization | 12.1–12.3, and the speed tasks it absorbs: 5.22–5.24, 6.15, 6.18, 10.4 |
+| Later: other platforms | 9.3, 9.4, 9.7, 9.11 (NVIDIA and GPU CI) |
 
-M6 starts only when M3 to M5 are done (decided by the user, Nov 21, 2026: "premature optimization is a curse"). Until then tasks build features and correctness; a task that touches a hot path still records its time and peak memory in `performance.md` (AGENTS.md), but nobody chases speed. Speed tasks found earlier (5.22–5.24, 6.15, 6.18, 10.4) wait for M6 and feed 12.1.
+M6 starts only when M3 to M5 are done (decided by the user, Nov 21, 2026: "premature optimization is a curse"). Since the Mac proof of concept is the aim (Nov 27, 2026), the NVIDIA-only and GPU CI tasks moved to "Later: other platforms" and do not hold M6 back, and neither does 10.6's publish to PyPI, which waits for the user. Until then tasks build features and correctness; a task that touches a hot path still records its time and peak memory in `performance.md` (AGENTS.md), but nobody chases speed. Speed tasks found earlier (5.22–5.24, 6.15, 6.18, 10.4) wait for M6 and feed 12.1.
 
 ## 12. Optimization (`M6`, after the feature milestones)
 
-Goal: every performance-critical step is profiled, benchmarked against scanpy, and made faster by a written, approved strategy, with no loss of accuracy.
+Goal: every performance-critical step is profiled, benchmarked against scanpy, and made faster by a written, approved strategy, with no loss of accuracy. The target machine is an Apple Silicon Mac, and the aim is to beat scanpy there in time and in peak memory, preferably many times over (section 0, Nov 27, 2026); other platforms are measured later.
 
 Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identical output (R11) at every thread count; a change that alters the algorithm (an approximation, a different solver, lower precision) stays inside the 10.2 tolerance table without loosening any entry, keeps the cluster labels (ARI against the unoptimized run reported), and is recorded in `deviations.md`. A speed-up that fails this is not taken.
 
 - [ ] **12.1 Profile and benchmark every performance-critical step.** Steps: convert/read, QC + filters, normalize, log1p, HVG, PCA, neighbours (exact and approximate), Leiden, UMAP, rank_genes_groups, the sinks, and the GPU paths that exist by then. For each: a profile (flamegraph or `samply` on macOS, `perf` on Linux) showing where its time goes, and a benchmark against scanpy (golden rule 8: same data, same work) at 50k and about 1M cells and at 1, 4 and all threads, with time and peak RSS. (added Nov 21, 2026, at the user's request)
-  - Depends: M3, M4, M5 done; 10.3 (the benchmark harness)
+  - Depends: M3, M4, M5 done (10.6's publish excepted); 10.3 (the benchmark harness)
   - Done when: `performance.md` has one dated table of every step (time, peak memory, kyto and scanpy, load average stated), each step's top hotspots named from its profile, and the steps ranked by their share of the workflow's time and by their gap to scanpy.
-- [ ] **12.2 A speed strategy for each step.** From 12.1, write one strategy per step that is slower than scanpy or large in the workflow's time: the cause (from the profile), the options (algorithmic, memory traffic, SIMD, threading, I/O, GPU), the expected gain, the accuracy risk under the rule above, and the order to do them in. Fold the earlier findings (5.22–5.24, 6.15, 6.18, 10.4) into it. (added Nov 21, 2026)
+- [ ] **12.2 A speed strategy for each step.** From 12.1, write one strategy per step that is slower than scanpy or large in the workflow's time: the cause (from the profile), the options (algorithmic, memory traffic, SIMD, threading, I/O, GPU; on Apple Silicon also Accelerate's BLAS and vDSP for the matrix products, the Metal GPU through wgpu (9.2, 9.8, 9.10), and unified memory to skip host copies between devices), the expected gain, the accuracy risk under the rule above, and the order to do them in. Fold the earlier findings (5.22–5.24, 6.15, 6.18, 10.4) into it. (added Nov 21, 2026)
   - Depends: 12.1
   - Done when: the strategies are in `performance.md` and the user has approved them and a stop condition for each (a target time or a time box, AGENTS.md); each approved strategy is a plan task under 12.3 with a measurable Done-when.
 - [ ] **12.3 Implement the approved strategies.** One task per strategy (12.3.1, 12.3.2, ...), each measured before and after on the 12.1 benchmark, run alone on a quiet machine, with the accuracy rule checked. (added Nov 21, 2026)
