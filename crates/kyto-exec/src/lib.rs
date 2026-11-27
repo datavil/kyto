@@ -34,7 +34,9 @@
 //! ([`cluster`] on any [`CellGraph`]) and add their labels as a cell column
 //! ([`ClusterStatistics`]). `umap` (task 6.9) lays out a `neighbors` node's
 //! connectivities ([`UmapStatistics`]; [`umap_layout`] lays out any connectivity
-//! graph).
+//! graph). `metacells` (task 6.16, opt-in) groups an embedding's cells by e-means
+//! into a label column and a centroid embedding ([`MetacellStatistics`]; [`metacells`]
+//! on any rows).
 //! Does not: build or optimize plans, or implement algorithms (see kyto-algo).
 //!
 //! `unsafe` is allowed here, only in kernels, each block with a `// SAFETY:` note.
@@ -57,6 +59,7 @@ mod kernels;
 mod leiden;
 mod loess;
 mod memory_limit;
+mod metacells;
 mod neighbors;
 mod neighbors_gpu;
 mod neighbors_hnsw;
@@ -96,6 +99,7 @@ pub use loess::loess_fitted;
 pub use memory_limit::{
     ALLOCATOR_OVERHEAD_PERCENT, fit_memory_limit, fit_memory_limit_with, process_resident_bytes,
 };
+pub use metacells::{MetacellGrouping, MetacellStatistics, metacells};
 pub use neighbors::{NeighborGraph, NeighborStatistics, nearest_neighbors};
 pub use neighbors_hnsw::{HNSW_EF_CONSTRUCTION, HNSW_EF_SEARCH, HNSW_MAX_CONNECTIONS};
 pub use pca::PcaStatistics;

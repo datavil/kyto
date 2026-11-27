@@ -618,6 +618,22 @@ Lay the cells of a cell graph out in a few dimensions (scanpy's ``umap``).
 UMAP "connectivities" -> "X_umap" n_components=2 min_dist=0.5 spread=1 n_epochs=auto alpha=1 gamma=1 negative_sample_rate=5 init=Spectral seed=0
 ```
 
+### Atlas.metacells
+
+```python
+Atlas.metacells(embedding: str | None = None, /, *, n_metacells: int, n_components: int | None = None, epochs: int | None = None, seed: int, into: str | None = None) -> Atlas
+```
+
+Group the cells into many small groups, metacells, by e-means (opt-in).
+
+```python
+>>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+>>> print(atlas.metacells(n_metacells=1, seed=0))
+METACELLS "pca" -> "metacells", "metacells_centroids" n_metacells=1 epochs=3 seed=0
+PCA "counts" -> "pca" n_components=1 seed=0
+SCAN "..." (2 cells x 3 genes)
+```
+
 ### Atlas.scrublet
 
 ```python

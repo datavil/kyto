@@ -358,7 +358,8 @@ pub(crate) fn operations(node: &OptimizedNode) -> Vec<&'static str> {
                 | Plan::CrossCell(_)
                 | Plan::Neighbors(_)
                 | Plan::Cluster(_)
-                | Plan::Umap(_) => false,
+                | Plan::Umap(_)
+                | Plan::Metacells(_) => false,
             };
             if host {
                 Vec::new()

@@ -41,6 +41,8 @@ pub(crate) enum EmbeddingSource {
     Umap { node: usize },
     /// The values of the `with_embedding` node at this index (task 6.11).
     Given { node: usize },
+    /// The centroids of the `metacells` node at this index (task 6.16).
+    Metacells { node: usize },
 }
 
 impl EmbeddingSource {
@@ -49,7 +51,9 @@ impl EmbeddingSource {
         match self {
             Self::Stored { axis, .. } => *axis,
             Self::Loadings { .. } => Axis::Genes,
-            Self::Pca { .. } | Self::Umap { .. } | Self::Given { .. } => Axis::Cells,
+            Self::Pca { .. } | Self::Umap { .. } | Self::Given { .. } | Self::Metacells { .. } => {
+                Axis::Cells
+            }
         }
     }
 }
@@ -258,6 +262,13 @@ impl StoredMembers {
                 };
                 Rows::new(Arc::clone(&given.cells), given.width, values)
             }
+            (EmbeddingSource::Metacells { .. }, Some(NodeStatistics::Metacells(found))) => {
+                Rows::new(
+                    Arc::clone(&found.cells),
+                    found.grouping.width(),
+                    FloatValues::F32(found.centroid_rows()),
+                )
+            }
             _ => unreachable!("an embedding's producer runs before the steps that read it"),
         };
         Ok(Arc::new(rows))
@@ -299,7 +310,8 @@ fn source_node(source: &EmbeddingSource) -> Option<usize> {
         EmbeddingSource::Pca { node }
         | EmbeddingSource::Loadings { node }
         | EmbeddingSource::Umap { node }
-        | EmbeddingSource::Given { node } => Some(*node),
+        | EmbeddingSource::Given { node }
+        | EmbeddingSource::Metacells { node } => Some(*node),
     }
 }
 

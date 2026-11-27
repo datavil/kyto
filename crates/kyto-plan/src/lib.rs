@@ -9,7 +9,8 @@
 //! [`OnDevice`] (task 9.1),
 //! [`Filter`] (cells or genes), [`SelectGenes`], [`TakeCells`], [`MapElementwise`]
 //! (`normalize_total`, `log1p`), [`CrossCell`] (`scale`, `highly_variable_genes`, `pca`),
-//! [`WithColumns`], [`Neighbors`], [`Cluster`], [`WithEmbedding`] (task 6.11) and [`Sink`]. Each declares the axis it
+//! [`WithColumns`], [`Neighbors`], [`Cluster`], [`WithEmbedding`] (task 6.11), [`Metacells`]
+//! (task 6.16, opt-in) and [`Sink`]. Each declares the axis it
 //! changes and whether it is per-cell or cross-cell ([`LogicalNode`]) and computes its
 //! output [`PlanSchema`] from its input's ([`Transform`]). `Plan::resolve` resolves an
 //! expression's names against the plan (task 3.5, R6). The read-only handles [`Table`],
@@ -46,6 +47,7 @@ mod handles;
 mod map_elementwise;
 mod members;
 mod memory_limit;
+mod metacells;
 mod names;
 mod neighbors;
 mod node;
@@ -89,6 +91,7 @@ pub use kyto_gpu::{Device, Devices, WgpuBackend};
 pub use map_elementwise::{ElementwiseOp, MapElementwise};
 pub use members::{Member, Members, all_members};
 pub use memory_limit::MemoryLimit;
+pub use metacells::{METACELLS_MAX_EPOCHS, Metacells, centroids_name};
 pub use neighbors::{Metric, NeighborSearch, Neighbors};
 pub use node::{CellScope, LogicalNode, Node, NodeId, Transform};
 pub use on_device::OnDevice;

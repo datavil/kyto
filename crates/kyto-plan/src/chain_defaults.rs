@@ -16,6 +16,7 @@ use kyto_core::Axis;
 use kyto_error::KytoError;
 
 use crate::cross_cell::loadings_name;
+use crate::metacells::centroids_name;
 use crate::plan::Plan;
 
 /// A step that writes a member named after itself when called without `into=`.
@@ -35,6 +36,9 @@ pub enum ChainStep {
     Leiden,
     /// `louvain`, into the cell column `louvain`.
     Louvain,
+    /// `metacells` (task 6.16), into the cell column `metacells` (and the cell
+    /// embedding `metacells_centroids`).
+    Metacells,
 }
 
 /// What a [`ChainStep`] writes.
@@ -56,6 +60,7 @@ impl ChainStep {
             Self::Umap => "umap",
             Self::Leiden => "leiden",
             Self::Louvain => "louvain",
+            Self::Metacells => "metacells",
         }
     }
 
@@ -69,6 +74,7 @@ impl ChainStep {
             Self::Umap => "X_umap",
             Self::Leiden => "leiden",
             Self::Louvain => "louvain",
+            Self::Metacells => "metacells",
         }
     }
 
@@ -76,7 +82,7 @@ impl ChainStep {
         match self {
             Self::NormalizeTotal | Self::Log1p | Self::Scale => Written::Layer,
             Self::Pca | Self::Umap => Written::Embedding,
-            Self::Leiden | Self::Louvain => Written::CellColumn,
+            Self::Leiden | Self::Louvain | Self::Metacells => Written::CellColumn,
         }
     }
 }
@@ -117,18 +123,23 @@ impl Plan {
                     .collect(),
             ),
         };
-        let mut names = vec![name.to_owned()];
+        let mut names = vec![(kind, existing, name.to_owned())];
         if step == ChainStep::Pca {
-            names.push(loadings_name(name));
+            let embeddings = names[0].1.clone();
+            names.push((kind, embeddings, loadings_name(name)));
         }
-        for written in &names {
+        if step == ChainStep::Metacells {
+            let embeddings = schema.embeddings.iter().map(|m| m.name.as_str()).collect();
+            names.push(("embedding", embeddings, centroids_name(name)));
+        }
+        for (kind, existing, written) in &names {
             if let Some(other) = existing
                 .iter()
                 .find(|other| other.eq_ignore_ascii_case(written))
             {
                 return Err(KytoError::DefaultNameTaken {
                     method: step.method().to_owned(),
-                    kind: kind.to_owned(),
+                    kind: (*kind).to_owned(),
                     name: written.clone(),
                     existing: (*other).to_owned(),
                 });

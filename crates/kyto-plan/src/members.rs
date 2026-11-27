@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cross_cell::{CrossCellOp, hvg_columns, loadings_name};
 use crate::filter::Predicate;
+use crate::metacells::centroids_name;
 use crate::plan::Plan;
 use crate::plan_schema::PlanSchema;
 use crate::with_columns::Columns;
@@ -197,6 +198,9 @@ pub(crate) fn node_reads(plan: &Plan) -> Members {
             reads.insert(Member::Graph(node.params().graph.clone()));
         }
         Plan::WithEmbedding(_) => {}
+        Plan::Metacells(node) => {
+            reads.insert(Member::Embedding(node.params().embedding.clone()));
+        }
     }
     reads
 }
@@ -266,6 +270,11 @@ pub(crate) fn node_writes(plan: &Plan) -> Members {
         }
         Plan::WithEmbedding(node) => {
             writes.insert(Member::Embedding(node.params().name().to_owned()));
+        }
+        Plan::Metacells(node) => {
+            let into = &node.params().into;
+            writes.insert(Member::CellColumn(into.clone()));
+            writes.insert(Member::Embedding(centroids_name(into)));
         }
     }
     writes

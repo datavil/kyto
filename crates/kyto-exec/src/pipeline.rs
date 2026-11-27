@@ -48,8 +48,9 @@ use kyto_core::{AtlasSchema, Axis, ColumnDtype, ExprNode, Source};
 use kyto_error::KytoError;
 use kyto_gpu::DeviceKernels;
 use kyto_plan::{
-    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metric, NeighborSearch, Neighbors,
-    Operation, PhysicalPlan, Plan, Predicate, Umap, WithEmbedding, loadings_name,
+    Blocks, Cluster, Columns, CrossCellOp, Member, Members, Metacells, Metric, NeighborSearch,
+    Neighbors, Operation, PhysicalPlan, Plan, Predicate, Umap, WithEmbedding, centroids_name,
+    loadings_name,
 };
 use kyto_store::{FloatValues, LayerReader, TableAxis, TileGrid, read_table};
 use polars::prelude::DataFrame;
@@ -68,6 +69,7 @@ use crate::gene_steps::{GeneStepKind, Genes, collect_inputs, pass_layers};
 use crate::held_input::HeldInput;
 use crate::hvg;
 use crate::leiden::{self, ClusterStatistics};
+use crate::metacells::{self, MetacellStatistics};
 use crate::neighbors::{self, NeighborStatistics};
 use crate::operator::{Operator, kept_layers};
 use crate::qc::{CellQc, GeneSet};
@@ -128,6 +130,20 @@ pub(crate) enum Stage {
     Umap(UmapStage),
     /// `with_embedding` (task 6.11): given values, keyed to the cells reaching it.
     Embedding(EmbeddingStage),
+    /// `metacells` (task 6.16), grouped in memory once its embedding is computed.
+    Metacells(MetacellStage),
+}
+
+/// A `metacells` node and where its embedding comes from.
+#[derive(Debug, Clone)]
+pub(crate) struct MetacellStage {
+    /// The node's index in the optimized plan.
+    node: usize,
+    params: Metacells,
+    /// The embedding's source (resolved by `Pipeline::new`).
+    embedding: EmbeddingSource,
+    /// As [`NeighborStage::filtered`].
+    filtered: bool,
 }
 
 /// A `with_embedding` node.
@@ -190,6 +206,7 @@ impl Stage {
             Self::Cluster(stage) => stage.filtered,
             Self::Umap(stage) => stage.filtered,
             Self::Embedding(stage) => stage.filtered,
+            Self::Metacells(stage) => stage.filtered,
             _ => false,
         }
     }
@@ -448,7 +465,8 @@ impl Pipeline {
             | Stage::Neighbors(_)
             | Stage::Cluster(_)
             | Stage::Umap(_)
-            | Stage::Embedding(_) => passes,
+            | Stage::Embedding(_)
+            | Stage::Metacells(_) => passes,
             // A held input (task 5.12) streams once more, to be held.
             Stage::CrossCell(cross_cell) => passes
                 .saturating_add(u64::from(cross_cell.passes))
@@ -722,6 +740,35 @@ impl Pipeline {
                     statistics
                         .nodes
                         .insert(stage.node, NodeStatistics::WithEmbedding(Box::new(found)));
+                    continue;
+                }
+                Stage::Metacells(stage) => {
+                    let rows = members.rows(&stage.embedding, &statistics)?;
+                    let (cells, values) = if stage.filtered {
+                        let kept = cells_pass(&operators)?;
+                        let values = rows.take(&kept, "embedding", &stage.params.embedding)?;
+                        (Arc::new(kept), values)
+                    } else {
+                        (Arc::clone(&rows.keys), rows.values.clone())
+                    };
+                    let values: Vec<f64> = match values {
+                        FloatValues::F32(values) => values.into_iter().map(f64::from).collect(),
+                        FloatValues::F64(values) => values,
+                    };
+                    let grouping = thread_pool.install(|| {
+                        metacells::group(&values, rows.width, &stage.params, &control)
+                    })?;
+                    let n_metacells = u32::try_from(grouping.n_metacells()).unwrap_or(u32::MAX);
+                    operators.push(Operator::Labels(ClusterLabels::new(
+                        &stage.params.into,
+                        &cells,
+                        grouping.labels(),
+                        n_metacells,
+                    )?));
+                    let found = MetacellStatistics { cells, grouping };
+                    statistics
+                        .nodes
+                        .insert(stage.node, NodeStatistics::Metacells(Box::new(found)));
                     continue;
                 }
                 Stage::CrossCell(cross_cell) => cross_cell,
@@ -1111,6 +1158,12 @@ fn lower_node(
             graph: GraphSource::Stored {
                 name: node.params().graph.clone(),
             },
+            filtered: false,
+        }))),
+        Plan::Metacells(node) => Ok(Some(Stage::Metacells(MetacellStage {
+            node: index,
+            params: node.params().clone(),
+            embedding: EmbeddingSource::Pca { node: usize::MAX },
             filtered: false,
         }))),
         Plan::WithEmbedding(node) => Ok(Some(Stage::Embedding(EmbeddingStage {
@@ -1619,6 +1672,16 @@ fn resolve_members(
                 stage.filtered = cells_removed;
                 let given = EmbeddingSource::Given { node: stage.node };
                 embeddings.insert(stage.params.name().to_owned(), (given, false));
+            }
+            Stage::Metacells(stage) => {
+                let name = &stage.params.embedding;
+                let (source, filtered) = embeddings
+                    .get(name)
+                    .ok_or_else(|| missing("embedding", name, "metacells"))?;
+                stage.embedding = source.clone();
+                stage.filtered = *filtered;
+                let centroids = EmbeddingSource::Metacells { node: stage.node };
+                embeddings.insert(centroids_name(&stage.params.into), (centroids, false));
             }
             Stage::Maps(_) | Stage::Cells(..) | Stage::Genes { .. } => {}
         }

@@ -21,8 +21,8 @@ use kyto_algo::RankGenesGroups;
 use kyto_core::{CellExpr, GeneIds};
 use kyto_error::KytoError;
 use kyto_plan::{
-    ChainStep, Cluster, ClusterMethod, DeviceRequest, Explain, Neighbors, PhysicalOptions, Plan,
-    Scrublet, Umap,
+    ChainStep, Cluster, ClusterMethod, DeviceRequest, Explain, Metacells, Neighbors,
+    PhysicalOptions, Plan, Scrublet, Umap,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString, PyTuple};
@@ -1179,6 +1179,116 @@ impl Atlas {
                 .map_err(|error| to_py_err(py, &error))?,
         };
         self.derive(py, self.plan.umap(parameters))
+    }
+
+    /// Group the cells into many small groups, metacells, by e-means (opt-in).
+    ///
+    /// Adds the cell column ``into`` (each cell's metacell, ``"0"`` to
+    /// ``str(n_metacells - 1)``, as cluster labels) and the cell embedding
+    /// ``into + "_centroids"`` (each cell's row is its metacell's centroid, so every
+    /// sink stores it as any embedding). e-means is the mini-batch k-means of Bessa et
+    /// al. (arXiv 2611.09501): ``n_metacells`` random cells start the centroids, each
+    /// epoch visits the cells in a shuffled order in batches, every centroid is a
+    /// running mean updated with a cosine-scheduled step, and nearly empty groups take
+    /// half of a large one. The final centroids are the means of their cells, and each
+    /// cell's metacell is its nearest centroid. Three epochs reach the training error of
+    /// Lloyd's k-means at 25 iterations on pbmc3k and 50,000 cells (n/50 and n/200
+    /// metacells). Only this method adds it: no default or other step does, and
+    /// Leiden and Louvain stay the clustering. The run holds the embedding in memory.
+    ///
+    /// Parameters
+    /// ----------
+    /// embedding : str or None, default=None
+    ///     The cell embedding grouped, such as the ``into`` of ``pca``; ``None`` for the
+    ///     one the latest ``pca`` of the plan wrote, else ``"X_pca"``.
+    /// n_metacells : int
+    ///     The number of metacells, from 1 to the number of cells (n/50 to n/500 is
+    ///     typical).
+    /// n_components : int or None, default=None
+    ///     Use the first this many columns of the embedding; ``None`` uses all.
+    /// epochs : int, default=3
+    ///     Passes over the cells, 1 to 25.
+    /// seed : int
+    ///     Seed of the initial cells, the batch order and the regrouping (R7, R11: the
+    ///     same seed gives the same metacells on any number of threads).
+    /// into : str or None, default=None
+    ///     The cell column written; ``None`` for ``"metacells"``.
+    ///
+    /// Returns
+    /// -------
+    /// Atlas
+    ///     A new plan; this one is unchanged. Nothing is read or copied.
+    ///
+    /// Raises
+    /// ------
+    /// PlanError
+    ///     ``KY-E215``: ``n_metacells`` below 1 or above the cells (when the plan runs if
+    ///     the count is not known before), ``n_components`` out of range, ``epochs``
+    ///     outside 1 to 25, ``seed`` not an int of 0 or more, an ``into`` that is not
+    ///     a valid column name or whose centroid embedding would replace ``embedding``,
+    ///     or no ``embedding`` when no ``pca`` of the plan wrote one and it has no
+    ///     ``"X_pca"``.
+    ///     ``KY-E220``: ``into`` is ``None`` and the plan already has the cell column
+    ///     ``"metacells"`` or the embedding ``"metacells_centroids"``.
+    /// MissingMemberError
+    ///     ``KY-E109``: ``embedding`` is not a cell embedding of the plan.
+    ///
+    /// Examples
+    /// --------
+    /// >>> atlas = scan(store).pca(layer="counts", into="pca", n_components=1, seed=0)
+    /// >>> print(atlas.metacells(n_metacells=1, seed=0))
+    /// METACELLS "pca" -> "metacells", "metacells_centroids" n_metacells=1 epochs=3 seed=0
+    /// PCA "counts" -> "pca" n_components=1 seed=0
+    /// SCAN "..." (2 cells x 3 genes)
+    #[pyo3(signature = (
+        embedding = None,
+        /,
+        *,
+        n_metacells,
+        n_components = None,
+        epochs = None,
+        seed,
+        into = None
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn metacells(
+        &self,
+        py: Python<'_>,
+        embedding: Option<&str>,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] n_metacells: &Bound<
+            '_,
+            PyAny,
+        >,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))]
+        n_components: Option<&Bound<'_, PyAny>>,
+        #[gen_stub(override_type(type_repr = "builtins.int | None", imports = ()))] epochs: Option<
+            &Bound<'_, PyAny>,
+        >,
+        #[gen_stub(override_type(type_repr = "builtins.int", imports = ()))] seed: &Bound<
+            '_,
+            PyAny,
+        >,
+        into: Option<&str>,
+    ) -> PyResult<Self> {
+        const METHOD: &str = "metacells";
+        let n_metacells = chain::integer(py, METHOD, "n_metacells", n_metacells, 0)?;
+        let n_components = chain::optional_integer(py, METHOD, "n_components", n_components, 1)?;
+        let epochs = chain::optional_integer(py, METHOD, "epochs", epochs, 0)?.unwrap_or(3);
+        let seed = chain::integer(py, METHOD, "seed", seed, 0)?;
+        let parameters = (|| {
+            Ok::<_, KytoError>(Metacells {
+                embedding: self.plan.embedding_or_default(METHOD, embedding)?,
+                n_components,
+                n_metacells,
+                epochs,
+                seed,
+                into: self.plan.into_or_default(ChainStep::Metacells, into)?,
+            })
+        })();
+        self.derive(
+            py,
+            parameters.and_then(|parameters| self.plan.metacells(parameters)),
+        )
     }
 
     /// Score every cell as a possible doublet (scanpy's ``pp.scrublet``).

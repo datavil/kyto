@@ -35,6 +35,7 @@ use crate::cluster::Cluster;
 use crate::cross_cell::CrossCell;
 use crate::filter::Filter;
 use crate::map_elementwise::MapElementwise;
+use crate::metacells::Metacells;
 use crate::neighbors::Neighbors;
 use crate::node::{CellScope, Input, LogicalNode, Node, NodeId, NodeState, Transform};
 use crate::on_device::OnDevice;
@@ -80,6 +81,8 @@ pub enum Plan {
     Umap(Node<Umap>),
     /// Add a cell embedding given by value (`with_embedding`, task 6.11).
     WithEmbedding(Node<WithEmbedding>),
+    /// Group cells into metacells by e-means (task 6.16, opt-in).
+    Metacells(Node<Metacells>),
     /// Write the plan (the last node).
     Sink(Node<Sink>),
 }
@@ -120,6 +123,7 @@ impl Plan {
             Self::Cluster(node) => of(node),
             Self::Umap(node) => of(node),
             Self::WithEmbedding(node) => of(node),
+            Self::Metacells(node) => of(node),
             Self::Sink(node) => of(node),
         }
     }
@@ -139,6 +143,7 @@ impl Plan {
             Self::Cluster(node) => &mut node.input,
             Self::Umap(node) => &mut node.input,
             Self::WithEmbedding(node) => &mut node.input,
+            Self::Metacells(node) => &mut node.input,
             Self::Sink(node) => &mut node.input,
         }
     }
@@ -165,6 +170,7 @@ impl Plan {
             (Self::WithEmbedding(left), Self::WithEmbedding(right)) => {
                 left.params() == right.params()
             }
+            (Self::Metacells(left), Self::Metacells(right)) => left.params() == right.params(),
             (Self::Sink(left), Self::Sink(right)) => left.params() == right.params(),
             _ => false,
         }

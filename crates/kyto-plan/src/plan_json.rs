@@ -39,6 +39,7 @@ use crate::cross_cell::{CrossCellOp, HvgFlavor};
 use crate::device_placement::DeviceRequest;
 use crate::filter::Predicate;
 use crate::map_elementwise::ElementwiseOp;
+use crate::metacells::Metacells;
 use crate::neighbors::{Metric, NeighborSearch, Neighbors};
 use crate::node::NodeId;
 use crate::plan::Plan;
@@ -200,6 +201,15 @@ enum Step {
         dtype: FloatDtype,
         width: u64,
         values: Vec<f64>,
+    },
+    /// `metacells` (task 6.16).
+    Metacells {
+        embedding: String,
+        n_components: Option<u64>,
+        n_metacells: u64,
+        epochs: u64,
+        seed: u64,
+        into: String,
     },
     SinkZarr {
         path: String,
@@ -427,6 +437,24 @@ impl Step {
                     values,
                 }
             }
+            Plan::Metacells(node) => {
+                let Metacells {
+                    embedding,
+                    n_components,
+                    n_metacells,
+                    epochs,
+                    seed,
+                    into,
+                } = node.params().clone();
+                Self::Metacells {
+                    embedding,
+                    n_components,
+                    n_metacells,
+                    epochs,
+                    seed,
+                    into,
+                }
+            }
             Plan::Sink(node) => match node.params().clone() {
                 Sink::Zarr { path } => Self::SinkZarr { path },
                 Sink::H5ad { path } => Self::SinkH5ad { path },
@@ -457,6 +485,7 @@ impl Step {
             Self::Louvain { .. } => "louvain",
             Self::Umap { .. } => "umap",
             Self::WithEmbedding { .. } => "with_embedding",
+            Self::Metacells { .. } => "metacells",
             Self::SinkZarr { .. } => "sink_zarr",
             Self::SinkH5ad { .. } => "sink_h5ad",
         }
@@ -636,6 +665,21 @@ impl Step {
                 };
                 input.with_embedding(WithEmbedding::new(name, width, values))
             }
+            Self::Metacells {
+                embedding,
+                n_components,
+                n_metacells,
+                epochs,
+                seed,
+                into,
+            } => input.metacells(Metacells {
+                embedding,
+                n_components,
+                n_metacells,
+                epochs,
+                seed,
+                into,
+            }),
             Self::SinkZarr { path } => input.sink(Sink::Zarr { path }),
             Self::SinkH5ad { path } => input.sink(Sink::H5ad { path }),
         };

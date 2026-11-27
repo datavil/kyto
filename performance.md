@@ -183,6 +183,70 @@ New tasks for the steps over 1.2x (added Nov 20, 2026, from this measurement): 5
 (preprocessing on 1 thread), 5.23 (PCA in the workflow on 1 thread), 5.24 (the write),
 6.17 (approximate search recall), 6.18 (neighbours on 1 thread).
 
+## e-means metacells against Lloyd's k-means (task 6.16)
+
+A feature task (opt-in `metacells`), not a speed task: its times are recorded as AGENTS.md
+asks, nothing was tuned for speed (M6). Data: pbmc3k (2,638 cells after QC) and 10.8's
+50k atlas (`make_data.py 50000`, 49,888 cells after QC), 50 PCA components from kyto's
+`pca`, Apple M4 (4P+6E), Nov 27, 2026, **load average about 9 (other agent sessions)**.
+Training MSE: mean squared distance of a cell to its group's mean. Lloyd: scikit-learn
+`KMeans(init="random", n_init=1, max_iter=25, tol=0, algorithm="lloyd")`, the same k and
+seeds. e-means: kyto's `metacells`, 3 epochs, the paper's batch and step laws (Eq. 6, 7).
+
+### Training MSE against epochs (open point 1), relative to Lloyd at 25 iterations
+
+The NumPy reference (`tests/parity/emeans.py`, `fast=True`), 20 seeds each side; the
+paper's recipe against kyto's (2-cell revival threshold and a final assignment pass,
+deviations.md "Metacells"). Negative: lower error than Lloyd.
+
+| Data | k | Lloyd@25 MSE | Recipe | 1 ep | 2 ep | 3 ep | 4 ep | 5 ep |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| pbmc3k | 13 | 55.509 | paper | +7.57% | +2.93% | +2.17% | +2.37% | +2.02% |
+| pbmc3k | 13 | 55.509 | paper + final assignment | +2.80% | +1.91% | +1.30% | +2.00% | +1.74% |
+| pbmc3k | 13 | 55.509 | paper + 2-cell revival | +5.61% | +0.21% | +0.04% | -0.15% | -0.76% |
+| pbmc3k | 13 | 55.509 | **kyto** | +1.46% | -0.11% | -0.08% | -0.22% | -0.81% |
+| pbmc3k | 52 | 49.254 | paper | +9.22% | +0.82% | -0.28% | -0.48% | -0.68% |
+| pbmc3k | 52 | 49.254 | **kyto** | +1.22% | +0.15% | -0.35% | -0.45% | -0.65% |
+| 50k | 249 | 40.378 | paper | +6.21% | +0.73% | +0.06% | -0.18% | -0.33% |
+| 50k | 249 | 40.378 | **kyto** | +1.44% | +0.34% | -0.08% | -0.22% | -0.38% |
+| 50k | 997 | 36.872 | paper | +11.57% | +0.60% | -0.35% | -0.66% | -0.94% |
+| 50k | 997 | 36.872 | **kyto** | +1.63% | +0.20% | -0.44% | -0.68% | -0.91% |
+
+- **The paper's step and batch laws hold on single-cell PCA.** A grid over batch size (32
+  to 16,384) and first step (0.005 to 1) at 1 to 3 epochs put the best first step at
+  about `0.65 B / sqrt(n k)`, the paper's Eq. 6 (`0.73` at 3 epochs, exponents within
+  0.1); the MSE is flat over a wide band of batch sizes once the step follows them, and
+  the paper's Eq. 7 batches (128 on pbmc3k, 2,048 on 50k) sit in that band. A refit
+  (`B = n/100`, `0.7 B / sqrt(n k)`) did no better, so kyto keeps the paper's constants.
+- **What failed was the revival threshold at k = n/200 on pbmc3k**: the paper revives a
+  group below 10% of the mean count, 20 cells at n/k = 200, so pbmc3k's small real
+  populations (about 14 platelets) were split away again and again. Reviving below the
+  lower of 10% and two cells' worth fixes it and changes nothing where n/k <= 20.
+- **One epoch is not enough** on this data (+1.2% to +1.6% even with the final pass), and
+  two are borderline; three reach Lloyd at 25 iterations in every case.
+- Over 100 seeds (kyto's exact recipe, pbmc3k): k = 13: -1.07% +- 0.29% (s.e.), e-means'
+  spread is smaller (sd 0.85 against 1.36); k = 52: -0.32% +- 0.04%. Ten seeds can rank
+  them either way at k = 13 (seeds 0 to 9: +0.78%), so `tests/test_metacells.py` uses 50.
+
+### kyto's `metacells` on the 50k atlas (`benchmarks/scanpy_workflow/metacells.py`)
+
+The plan's `X_pca` held by `collect`; kyto's seconds are a `pull` of the label column
+(the plan's run: reading the held embedding, e-means, the column); scikit-learn's are
+`fit`. Median over the seeds.
+
+| k | Threads | Seeds | e-means MSE | Lloyd@25 MSE | Relative | kyto (s) | scikit-learn (s) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 997 (n/50) | 10 | 10 | 36.709 | 36.881 | -0.46% | 0.78 | 1.02 |
+| 249 (n/200) | 10 | 10 | 40.343 | 40.386 | -0.11% | 0.28 | 0.35 |
+| 997 (n/50) | 1 | 3 | 36.706 | 36.884 | -0.48% | 3.43 | 3.43 |
+| 249 (n/200) | 1 | 3 | 40.325 | 40.371 | -0.11% | 0.90 | 0.81 |
+
+- Labels and centroids are bit-identical at 1, 4 and 10 threads (both k).
+- About as fast as scikit-learn's Lloyd at 25 iterations, which uses BLAS for its
+  distances; kyto's assignment is a plain `f64` loop per cell (the same bits on any
+  thread count), parallel over the cells of a batch. 3.3 assignment passes against 25.
+  Peak memory not measured (the held `n x d` embedding in `f64` plus `k x d` sums).
+
 ## Approximate neighbours without lost cells (task 6.17)
 
 An accuracy fix, not a speed task (speed waits for M6, task 6.18); its time cost is

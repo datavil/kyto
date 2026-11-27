@@ -42,7 +42,7 @@
           "enum": [
             "with_default_layer", "on", "filter_cells", "filter_genes", "select_genes", "take_cells",
             "normalize_total", "log1p", "scale", "highly_variable_genes", "pca", "with_cells",
-            "with_genes", "neighbors", "leiden", "louvain", "umap", "scrublet", "with_embedding", "sink_zarr", "sink_h5ad"
+            "with_genes", "neighbors", "leiden", "louvain", "umap", "scrublet", "with_embedding", "metacells", "sink_zarr", "sink_h5ad"
           ]
         }}}}}
       ]
@@ -83,6 +83,7 @@
         {"if": {"required": ["method"], "properties": {"method": {"const": "umap"}}}, "then": {"$ref": "#/$defs/umap"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "scrublet"}}}, "then": {"$ref": "#/$defs/scrublet"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "with_embedding"}}}, "then": {"$ref": "#/$defs/with_embedding"}},
+        {"if": {"required": ["method"], "properties": {"method": {"const": "metacells"}}}, "then": {"$ref": "#/$defs/metacells"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_zarr"}}}, "then": {"$ref": "#/$defs/sink"}},
         {"if": {"required": ["method"], "properties": {"method": {"const": "sink_h5ad"}}}, "then": {"$ref": "#/$defs/sink"}}
       ]
@@ -251,6 +252,20 @@
         "dtype": {"enum": ["float32", "float64"]},
         "width": {"$ref": "#/$defs/uint", "description": "Values a row, at least 1 (KY-E215 when read)."},
         "values": {"type": "array", "items": {"type": "number"}, "description": "Row-major, finite; a multiple of width (KY-E215 when read)."}
+      }
+    },
+    "metacells": {
+      "description": "metacells: cells grouped by e-means (task 6.16, opt-in).",
+      "required": ["embedding", "n_metacells", "epochs", "seed", "into"],
+      "additionalProperties": false,
+      "properties": {
+        "method": true,
+        "embedding": {"type": "string"},
+        "n_components": {"$ref": "#/$defs/uint_or_null"},
+        "n_metacells": {"$ref": "#/$defs/uint", "description": "At least 1, at most the cells reaching the node (KY-E215)."},
+        "epochs": {"$ref": "#/$defs/uint", "description": "1 to 25 (KY-E215)."},
+        "seed": {"$ref": "#/$defs/uint"},
+        "into": {"type": "string", "description": "The cell column; the centroids go to the cell embedding <into>_centroids."}
       }
     },
     "scrublet": {

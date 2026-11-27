@@ -530,6 +530,60 @@ fn apply(plan: &Plan, data: &mut Data) -> Result<(), String> {
                 .insert(params.name().to_owned(), (Axis::Cells, rows));
             Ok(())
         }
+        Plan::Metacells(node) => {
+            // A stand-in grouping that depends on every cell present: each cell's rank
+            // by the sum of its used components, cut into `n_metacells` groups; the
+            // centroid rows are the groups' means.
+            let params = node.params();
+            let (_, rows) = data
+                .embeddings
+                .get(&params.embedding)
+                .ok_or_else(|| format!("missing embedding {}", params.embedding))?;
+            let n = rows.len();
+            let k = usize::try_from(params.n_metacells).unwrap();
+            if k == 0 || k > n {
+                return Err(format!("{k} metacells for {n} cells"));
+            }
+            let width = params.n_components.map_or(usize::MAX, |n| n as usize);
+            let sums: Vec<f64> = rows
+                .iter()
+                .map(|row| row.iter().take(width).sum())
+                .collect();
+            let groups: Vec<usize> = (0..n)
+                .map(|cell| {
+                    let rank = (0..n)
+                        .filter(|&other| {
+                            sums[other] < sums[cell] || (sums[other] == sums[cell] && other < cell)
+                        })
+                        .count();
+                    rank * k / n
+                })
+                .collect();
+            let used = rows.first().map_or(0, |row| row.len().min(width));
+            let mut means = vec![vec![0.0; used]; k];
+            let mut counts = vec![0.0; k];
+            for (row, &group) in rows.iter().zip(&groups) {
+                counts[group] += 1.0;
+                for (mean, value) in means[group].iter_mut().zip(row) {
+                    *mean += value;
+                }
+            }
+            for (mean, count) in means.iter_mut().zip(&counts) {
+                for value in mean.iter_mut() {
+                    *value /= count;
+                }
+            }
+            let centroids = groups.iter().map(|&group| means[group].clone()).collect();
+            let labels: Vec<String> = groups.iter().map(ToString::to_string).collect();
+            data.cells
+                .with_column(Column::new(params.into.as_str().into(), labels))
+                .unwrap();
+            data.embeddings.insert(
+                kyto_plan::centroids_name(&params.into),
+                (Axis::Cells, centroids),
+            );
+            Ok(())
+        }
     }
 }
 

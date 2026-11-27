@@ -17,6 +17,7 @@ use std::sync::Arc;
 use kyto_plan::{GivenValues, HvgFlavor};
 
 use crate::leiden::ClusterStatistics;
+use crate::metacells::MetacellStatistics;
 use crate::neighbors::NeighborStatistics;
 use crate::pca::PcaStatistics;
 use crate::scrublet_pass::ScrubletStatistics;
@@ -307,6 +308,9 @@ pub enum NodeStatistics {
     /// `with_embedding`: the given rows, keyed to the cells that reached the node
     /// (task 6.11; no statistics passes, one pass to find the cells after a cell filter).
     WithEmbedding(Box<GivenEmbedding>),
+    /// `metacells`: the e-means grouping of the cells reaching it (task 6.16; no
+    /// statistics passes, it groups the embedding once its producer ran).
+    Metacells(Box<MetacellStatistics>),
 }
 
 /// What a `with_embedding` node holds when the plan runs: its values, row `r` for the

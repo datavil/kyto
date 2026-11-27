@@ -15,6 +15,7 @@ timing scripts, run by hand.
 | `pca_timing.py STORE WORK` | kyto's PCA alone (on the HVG store it writes to `WORK` once) and in the workflow, input held vs streamed, at 1, 4 and 10 threads; checks the embeddings are bit-identical (task 5.12). `--cases stage` times PCA alone with no sink (`_execute`), the stage 5.15 measures |
 | `thread_scaling.py STORE WORK` | Preprocessing (streamed to nowhere), QC through PCA and PCA alone at 1, 4 and 10 threads (`--threads`); speedups and bit checks across thread counts (task 5.13) |
 | `pca_scanpy.py IN.h5ad [--kyto WORK/kyto_pca.npy]` | scanpy's `pp.pca` alone on the same HVG matrix, threads capped by threadpoolctl; compares kyto's embedding |
+| `metacells.py STORE [--seeds 10] [--threads N]` | Task 6.16: kyto's `metacells` (e-means, 3 epochs) against scikit-learn's Lloyd at 25 iterations, k = n/50 and n/200, mean training MSE and median seconds over the seeds; checks the result is bit-identical at 1, 4 and all threads |
 
 scanpy, leidenalg and scikit-learn are in the dev environment (`uv sync`, which also
 builds the release extension), so one environment runs both sides. The full workflow

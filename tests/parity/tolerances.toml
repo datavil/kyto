@@ -351,3 +351,10 @@ kind = "floor"
 task = "6.11"
 tests = ["tests/test_interop.py"]
 reason = "Mean share of each cell's 15 nearest neighbours in the corrected embedding that both sides find (measured 0.991; scanpy against itself with another PCA seed 1.0)."
+
+[metacells.lloyd_mse]
+value = 0.0
+kind = "relative"
+task = "6.16"
+tests = ["tests/test_metacells.py"]
+reason = "One-sided: e-means' mean training MSE over 50 seeds at 3 epochs may not exceed Lloyd's at 25 iterations (scikit-learn, random init, 50 seeds); over 100 seeds on pbmc3k -1.07% +- 0.29% (k=13) and -0.32% +- 0.04% (k=52). The NumPy reference is compared bit for bit."
