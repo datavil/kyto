@@ -1863,6 +1863,16 @@ wheels = [
 [[package]]
 name = "kyto"
 source = { editable = "." }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "polars", version = "2.0.0", source = { registry = "https://pypi.org/simple" }, extra = ["pyarrow"], marker = "python_full_version < '3.11'" },
+    { name = "polars", version = "2.1.0", source = { registry = "https://pypi.org/simple" }, extra = ["pyarrow"], marker = "python_full_version >= '3.11'" },
+    { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
 
 [package.optional-dependencies]
 plot = [
@@ -1914,6 +1924,9 @@ interop = [
 requires-dist = [
     { name = "anndata", marker = "python_full_version >= '3.11' and extra == 'plot'", specifier = ">=0.12.19" },
     { name = "cellestial", marker = "python_full_version >= '3.11' and extra == 'plot'", specifier = ">=0.62.1" },
+    { name = "numpy", specifier = ">=2.2" },
+    { name = "polars", specifier = ">=1.34" },
+    { name = "scipy", specifier = ">=1.15" },
 ]
 provides-extras = ["plot"]
 

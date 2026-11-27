@@ -6,14 +6,38 @@ build-backend = "maturin"
 [project]
 name = "kyto"
 description = "Lazy, streaming single-cell analysis, written in Rust, used from Python."
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT OR Apache-2.0"
+keywords = ["single-cell", "scrna-seq", "bioinformatics", "lazy", "streaming"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
-# The version comes from the workspace Cargo.toml (single source).
+# The version comes from the workspace Cargo.toml (single source, semantic versioning:
+# docs/release.md). One abi3 wheel per platform serves every CPython >= 3.10 (pyo3
+# `abi3-py310` in crates/kyto-py/Cargo.toml).
 dynamic = ["version"]
+# What the extension imports at run time (task 10.6): Polars frames from every table
+# terminal, NumPy arrays from `to_numpy`/`pull`, SciPy matrices from `to_scipy`. The
+# floors are the dev group's, the versions the test suite runs.
+dependencies = [
+    "numpy>=2.2",
+    "polars>=1.34",
+    "scipy>=1.15",
+]
+
+[project.urls]
+Homepage = "https://github.com/datavil/kyto"
+Source = "https://github.com/datavil/kyto"
+Changelog = "https://github.com/datavil/kyto/blob/main/CHANGELOG.md"
+Issues = "https://github.com/datavil/kyto/issues"
 
 [project.optional-dependencies]
 # Plotting (task 7.8): kyto draws no plots; `Atlas.to_anndata` hands results to
@@ -78,6 +102,8 @@ manifest-path = "crates/kyto-py/Cargo.toml"
 python-source = "python"
 module-name = "kyto._kyto"
 features = ["extension-module"]
+# Release wheels ship without debug symbols (task 10.6, .github/workflows/release.yml).
+strip = true
 
 [tool.uv]
 # cellestial 0.62.1 caps polars < 2 and pandas < 3; the dev env runs polars 2 and pandas 3,

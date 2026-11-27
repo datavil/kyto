@@ -212,7 +212,7 @@ leave a backlog: write hints, docstrings and coded errors as you go.
 | `llms.txt`, `llms-full.txt` | the public API for agents: signatures, summaries, examples (generated from the stubs, 8.6) |
 | `scripts/` | repo tooling, such as `agents_commands.py` (runs the Commands below) |
 | `memory/` | lessons learned (indexed) |
-| `.github/workflows/` | CI (`ci.yml`) |
+| `.github/workflows/` | CI (`ci.yml`), benchmarks (`benchmarks.yml`), the release (`release.yml`, 10.6: `docs/release.md` has the checklist) |
 | `.claude/agents/` | sub agent definitions (`bug-hunter`) |
 | `deviations.md` | every deviation from scanpy or anndata |
 

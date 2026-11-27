@@ -591,7 +591,8 @@ thread and at one thread per core, in both sinks (local gate and CI).
 - **While MAJOR is 0, there is no compatibility promise.** A reader accepts exactly the
   `0.x` versions it implements and rejects every other version with a coded storage
   error that names the store's version and the supported ones.
-- **From 1.0 on** (task 10.6 states the release policy): a reader that implements `1.m`
+- **From 1.0 on** (the release policy of task 10.6 is in
+  [release.md](release.md#reading-older-stores)): a reader that implements `1.m`
   reads any `1.x`. For `x > m` it ignores members and JSON keys it does not know. It
   rejects a different major.
 - Readers never modify a store, so reading never upgrades a version.

@@ -1,0 +1,121 @@
+# Release (task 10.6): build the abi3 wheels and the sdist, then publish them with PyPI
+# trusted publishing (OIDC, no API token). The steps a person takes are in
+# docs/release.md (the release checklist).
+#
+# - Pushing a `v*` tag publishes to PyPI. The tag must equal the version in Cargo.toml
+#   and CHANGELOG.md must have a dated section for it (scripts/release_version.py).
+# - Running it by hand (`gh workflow run release.yml`) is the dry run: it builds and
+#   tests everything the same way and publishes to TestPyPI, or nowhere with
+#   `-f repository=none`. A run by hand never publishes to PyPI.
+#
+# Publishing waits for the whole CI workflow (lint with every AGENTS.md command, tests
+# and wheels on six OS and architecture pairs), called here: its wheel artifacts are
+# the ones published.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Where a run by hand publishes: testpypi (the dry run) or none"
+        type: choice
+        options: [testpypi, none]
+        default: testpypi
+
+# No `concurrency` here: the called CI workflow sets its own group, and a caller with
+# the same group would cancel it.
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: version check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the ancestry check below needs main's history
+      - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
+      # A release is a commit on main: a tag pushed from another branch is refused.
+      - name: the commit is on main
+        shell: bash
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - id: check
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          version=$(uv run --no-project --python 3.13 python scripts/release_version.py ${TAG:+--tag "$TAG"})
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: CI
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  sdist:
+    name: sdist
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish (${{ github.event_name == 'push' && 'PyPI' || 'TestPyPI' }})
+    needs: [version, ci, sdist]
+    if: github.repository == 'datavil/kyto' && (github.event_name == 'push' || inputs.repository == 'testpypi')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The trusted publisher on PyPI (and on TestPyPI) names this workflow file and this
+    # environment; protection rules on the environment (required reviewers) apply.
+    environment:
+      name: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+      url: ${{ github.event_name == 'push' && 'https://pypi.org/p/kyto' || 'https://test.pypi.org/p/kyto' }}
+    permissions:
+      id-token: write # the OIDC token trusted publishing exchanges for an upload token
+    steps:
+      # The wheels CI built (and smoke-tested), and the sdist.
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: sdist
+          path: dist
+      - name: list the distributions
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ls -l dist
+          # Six abi3 wheels and one sdist, all of this version.
+          test "$(ls dist/kyto-"$VERSION"-cp310-abi3-*.whl | wc -l)" -eq 6
+          test -f "dist/kyto-$VERSION.tar.gz"
+      - name: publish to PyPI
+        if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # A dry run may be repeated for the same version; TestPyPI keeps the first.
+          skip-existing: true

@@ -3403,7 +3403,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kyto-algo"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kyto-core",
  "kyto-error",
@@ -3418,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "kyto-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "kyto-error",
  "polars",
@@ -3430,14 +3430,14 @@ dependencies = [
 
 [[package]]
 name = "kyto-error"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "kyto-exec"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "faer",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "kyto-gpu"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cubecl",
  "cudarc",
@@ -3472,7 +3472,7 @@ dependencies = [
 
 [[package]]
 name = "kyto-plan"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "jsonschema",
  "kyto-core",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "kyto-py"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "kyto-algo",
@@ -3507,7 +3507,7 @@ dependencies = [
 
 [[package]]
 name = "kyto-store"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "flate2",

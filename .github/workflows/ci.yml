@@ -1,13 +1,13 @@
 # CI (task 1.4): lint once, then tests and wheel builds on every OS and architecture.
 # CI runs only on demand and for releases (decided by the user, Nov 7, 2026): tasks are
 # gated locally by AGENTS.md "Run the whole list". Run it by hand with
-# `gh workflow run ci.yml`; pushing a `v*` tag runs it for a release.
+# `gh workflow run ci.yml`; pushing a `v*` tag runs it for a release, called by
+# release.yml (task 10.6), which publishes the wheels built here once every job passes.
 name: CI
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  workflow_call:
 
 # A newer run on the same ref cancels the one it supersedes.
 concurrency:
@@ -117,14 +117,19 @@ jobs:
           manylinux: ${{ matrix.manylinux || '' }}
           args: --release --locked --out dist
       - uses: astral-sh/setup-uv@v10.3.3 # upstream publishes no floating major tag
-      # Install the built wheel into a clean env (not the source tree) and import it.
+      # Install the built wheel into a clean env (not the source tree), on the oldest
+      # Python the abi3 wheel serves, and run a small pipeline with it (task 10.6). Its
+      # dependencies come from PyPI; kyto itself is the file in dist.
       - name: smoke test the wheel
         shell: bash
+        env:
+          # NumPy and SciPy publish no Windows ARM64 wheels for 3.10: the newest there.
+          SMOKE_PYTHON: ${{ (runner.os == 'Windows' && matrix.target == 'aarch64') && '3.13' || '3.10' }}
         run: |
-          uv venv --python 3.13 "$RUNNER_TEMP/wheel-env"
-          uv pip install --python "$RUNNER_TEMP/wheel-env" --no-index --find-links dist kyto
+          uv venv --python "$SMOKE_PYTHON" "$RUNNER_TEMP/wheel-env"
+          uv pip install --python "$RUNNER_TEMP/wheel-env" dist/*.whl
           cd "$RUNNER_TEMP"
-          uv run --no-project --python "$RUNNER_TEMP/wheel-env" python -c "import kyto, kyto._kyto; print(kyto.__version__)"
+          uv run --no-project --python "$RUNNER_TEMP/wheel-env" python -I "$GITHUB_WORKSPACE/scripts/wheel_smoke.py"
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
