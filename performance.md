@@ -906,10 +906,12 @@ device (12.2), cuSPARSE/cuBLAS on CUDA (9.3) and tiled kernels are where M6 woul
 ## Every step on the Mac, first pass (task 12.1)
 
 Measured Nov 27, 2026, at `374d9ad` (release extension with the Metal kernels, `--features wgpu`),
-by `benchmarks/scanpy_workflow/measure_12_1.sh`. **Partial:** the run was stopped during
-its last job (kyto at 1M cells on Metal), so the tables hold what finished. Still missing,
-and left to task 12.1: scanpy at 1M cells, kyto on Metal at 1M, and the `samply` profiles
-(no hotspots are named yet).
+by `benchmarks/scanpy_workflow/measure_12_1.sh`. The first pass was stopped during its
+last job (kyto at 1M cells on Metal). A second pass on Nov 28, 2026, at `819bfb4` (same
+build flags), added what it left out: scanpy at 1M cells (it does not fit in 16 GB), kyto on
+Metal at 1M, the kNN recall, and one `samply` profile per ranked step with its hotspots
+(sections below the tables). In the 1M columns scanpy's side stays `-`: it never got past
+reading the file.
 
 - **Machine:** Apple M4 Mac, 10 cores (4 performance + 6 efficiency), 16 GB RAM, macOS 27.2.
   **1-minute load average** before each job: 1.7 to 4.4 across the 50k jobs, 2.0 to 2.9
@@ -974,18 +976,75 @@ Peak RSS (MB) of the run through each step, `kyto / scanpy`:
 Each entry is its own optimization task (12.4 to 12.10 in the plan): profile it, propose a
 strategy with a stop condition for the user's approval, then implement and re-measure.
 
-| Rank | Step | kyto / scanpy | Why it ranks here |
-|---|---|---|---|
-| 1 | Neighbours, exact | 4.12 / 0.33 s (12x slower; 27x on one thread) | Almost the whole gap to scanpy; 1,652 s of 2,018 s at 1M |
-| 2 | Neighbours, approximate (HNSW) | 5.29 / 0.33 s (16x slower) | 573 s of 950 s at 1M; slower than exact at 50k |
-| 3 | UMAP | 15.9 / 14.1 s (1.1x slower) | The largest share of the 50k time, about 340 s at 1M |
-| 4 | Metal paths | slower than kyto's CPU on every step but one | Host round trips per block (9.6 rule 5); untiled kernels (9.8) |
-| 5 | `sink_h5ad` | 0.64 / 0.14 s (4.5x slower) | `sink_zarr` is 2x faster than scanpy's write on the same data |
-| 6 | `rank_genes_groups`, t-test | 0.23 / 0.07 s (3.3x slower) | Flat across threads; Wilcoxon is already faster than scanpy |
-| 7 | One-thread preprocessing | QC 2.2x, HVG 3.1x, PCA 1.5x slower | Faster than scanpy from 4 threads up; matters for small machines |
+| Rank | Step | kyto / scanpy | Why it ranks here | Hotspot (profile below) |
+|---|---|---|---|---|
+| 1 | Neighbours, exact | 4.12 / 0.33 s (12x slower; 27x on one thread) | Almost the whole gap to scanpy; 1,652 s of 2,018 s at 1M | The all-pairs distance kernel (`kernels::RowPairs`), 94% of the step: brute force, O(n²) |
+| 2 | Neighbours, approximate (HNSW) | 5.29 / 0.33 s (16x slower) | 573 s of 950 s at 1M; slower than exact at 50k | Distances (`RowPairs`) 41% and `Index::search_layer` 40%, the candidate heaps 14% |
+| 3 | UMAP | 15.9 / 14.1 s (1.1x slower) | The largest share of the 50k time, about 340 s at 1M | `umap::layout` (the SGD) 43% and libm (`pow`) about 20%, on one thread |
+| 4 | Metal paths | slower than kyto's CPU on every step but one | Host round trips per block (9.6 rule 5); untiled kernels (9.8) | Host copies (`memmove`) 33%, CubeCL submits 39%, waits on the GPU 16% |
+| 5 | `sink_h5ad` | 0.64 / 0.14 s (4.5x slower) | `sink_zarr` is 2x faster than scanpy's write on the same data | Little CPU (0.15 s): serial `pwrite` and re-reading the written store |
+| 6 | `rank_genes_groups`, t-test | 0.23 / 0.07 s (3.3x slower) | Flat across threads; Wilcoxon is already faster than scanpy | Reading the layer (`read` 27%); the moments themselves 6% |
+| 7 | One-thread preprocessing | QC 2.2x, HVG 3.1x, PCA 1.5x slower | Faster than scanpy from 4 threads up; matters for small machines | Tile decode (zstd) 21%, PCA's f64 fold 25%, gene selection 7%, log1p 6% |
 
 Already ahead: peak memory (about 1.0 GB against 3.9 GB, 4x smaller), Leiden (4x faster),
 QC, normalize and PCA from 4 threads up, Wilcoxon.
+
+### 1M cells: scanpy and Metal (second pass, Nov 28, 2026)
+
+Each run under `guard.py` (RSS cap 13 GB, a cap on swap growth, 60 minutes), 10 threads.
+The 1M matrix alone is 11.4 GB in memory as scanpy holds it (f32 values, int32 indices).
+1-minute load average before each run: 4.7, 1.9, 2.9 (scanpy) and 3.1 (Metal), with a
+game client idling at about 70% of one core throughout.
+
+| Run | Result | Seconds | Peak RSS (sampled) | Swap growth |
+|---|---|---|---|---|
+| scanpy, try 1 | finished `read_h5ad`, then failed in `calculate_qc_metrics`: `make_data.py --stream` wrote an int64 `indptr` beside int32 indices, which scipy's kernels refuse. `run_scanpy.py` now casts `indptr` to int32 after reading (the dtype scipy picks itself when nnz < 2³¹; about 4 MB) | 106 | 4.6 GB | 0.5 GB |
+| scanpy, try 2 | **killed during `read_h5ad`**, swap cap 2 GB | 66 | 5.1 GB | 2.3 GB |
+| scanpy, try 3 | **killed during `read_h5ad`**, swap cap 4 GB | 114 | 6.8 GB | 4.0 GB |
+| kyto CPU, exact (first pass) | finished | 2,018 | 6.0 GB | - |
+| kyto CPU, approximate (first pass) | finished | 950 | 6.1 GB | - |
+| kyto Metal (`device="auto"`), exact | **killed at the 60-minute limit**, no output: about 5 minutes of CPU work, then about 55 minutes GPU-bound (the process at about 1% CPU) in exact neighbours | 3,600 | 3.7 GB | 0 |
+
+So at 1M cells on this 16 GB Mac, scanpy cannot hold the data (RSS reads low because macOS
+compresses memory before it swaps; each try was stopped while swap was climbing at
+about 2 GB a minute), and kyto finishes in 6 GB. On Metal, the exact search at 1M is at least
+2x slower than on the CPU (more than about 3,300 s against 1,652 s), matching 2.2x at 50k.
+Raw files: `raw/scanpy-1m*.json` and `raw/kyto-1m-metal-guard.json`.
+
+### kNN recall at 50k
+
+`neighbor_recall.py`, per cell, against kyto's exact graph (k = 15):
+
+| Graph | Mean recall | Minimum | Cells below 0.5 | Cells below 0.9 |
+|---|---|---|---|---|
+| scanpy (pynndescent) | 0.889 | 0.286 | 50 | 21,871 |
+| kyto HNSW | 0.9995 | 0.857 | 0 | 6 |
+
+scanpy's graph comes from scanpy's own PCA, so its number also holds PCA differences
+(within 6.5's tolerance); kyto's two graphs share one PCA. So scanpy's 0.33 s search does
+less exact work than either kyto search: kyto's HNSW meets 12.5's recall bar of 0.99, and
+a faster kyto search could trade some of that recall away and still match scanpy's accuracy.
+
+### Hotspots per step (50k, `samply`)
+
+One `samply record` per step at 50k cells, 10 threads (preprocessing: 1 thread), each 4 to 30
+seconds, release build with line tables. `hotspots.py` weighs samples by thread CPU time,
+so seconds are CPU seconds summed over threads. Profiles and `*.hotspots.json`:
+`profiles/` beside `raw/`.
+
+| Step (profile) | CPU s in step | Top self-time functions |
+|---|---|---|
+| Neighbours, exact (`workflow-exact-10`) | 40.0 (about 4 s wall) | `kernels::RowPairs` distance kernel (NEON through pulp) 93.6%; `neighbors::exact` top-k closure 5.9%; `memmove` 0.4% |
+| Neighbours, HNSW (`workflow-approximate-10`) | 11.7 | `kernels::RowPairs` 41.0%; `neighbors_hnsw::Index::search_layer` 39.8%; `BinaryHeap<Candidate>::pop` 6.6% and its `Reverse` twin 4.8%; `into_sorted_vec` 2.9% |
+| UMAP (all three workflow profiles agree) | 16.2 (about 16 s wall, so one thread) | `umap::layout` 43%; libm, unsymbolized (`libsystem_m` +0x51b4, +0x5218, +0x5144, +0x5200; 6.15 found `pow`) about 20% together; `umap_spectral::extend` 3.4% |
+| Metal (`workflow-metal-10`), GPU calls | 8.1 | `memmove` (host copies) 33.1%; CubeCL `ChannelDeviceHandle::submit_inner` 30.5% and `submit_blocking` 8.0%; `semaphore_wait_trap` (waiting on the GPU) 16.2% |
+| Metal, PCA | 2.2 | `submit_inner` 28.9%; `memmove` 23.8%; `semaphore_wait_trap` 16.5%; `pca::gpu::fold` 8.0%; `launch_matrix::sparse_transposed_dense` 6.1%. Neighbours on Metal leave the CPU idle (0.04 CPU s); their GPU time is not in a CPU profile |
+| `sink_h5ad` (`sink-h5ad-10`), export functions | 0.15 of about 0.6 s wall | `pwrite` 21.6%; re-reading the written store (`LayerReader::read_parts_of` 13.0%, zstd 8.9%); `close` 11.9%. The export streams a finished store back through the tile reader and writes it serially, uncompressed, so it waits rather than computes |
+| `rank_genes_groups` t-test (`rank-ttest-10`) | 0.24 | `read` syscalls 26.6%; `GroupMoments::add_cell` 5.5%; the rest is file opens and Python. Reading the layer, single-threaded, not the arithmetic |
+| QC + HVG + PCA, 1 thread (`preprocess-1`) | 5.96 (5.94 s wall) | `ZSTD_decompressSequences` (tile decode) 21.1%; `PcaAccumulator::fold_rows` closures #5 13.4% and #8 11.7% (f64 accumulation); `GeneSelection::apply` 6.8%; `Kernels::log1p` 6.4%; `cell_block::check_parts` 5.6% |
+
+Leiden, for scale: 0.17 to 0.21 CPU s in every workflow profile (`Optimiser::move_nodes` about
+30%).
 
 ## Reproducing
 

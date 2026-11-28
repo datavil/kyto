@@ -194,12 +194,10 @@ M6 starts only when M3 to M5 are done (decided by the user, Nov 21, 2026: "prema
 
 Goal: every performance-critical step is profiled, benchmarked against scanpy, and made faster by a written, approved strategy, with no loss of accuracy. The target machine is an Apple Silicon Mac, and the aim is to beat scanpy there in time and in peak memory, preferably many times over (section 0, Nov 27, 2026); other platforms are measured later.
 
+Done (12.1): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#12-optimization-m6-after-the-feature-milestones).
+
 Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identical output (R11) at every thread count; a change that alters the algorithm (an approximation, a different solver, lower precision) stays inside the 10.2 tolerance table without loosening any entry, keeps the cluster labels (ARI against the unoptimized run reported), and is recorded in `deviations.md`. A speed-up that fails this is not taken.
 
-- [ ] **12.1 Profile and benchmark every performance-critical step.** Steps: convert/read, QC + filters, normalize, log1p, HVG, PCA, neighbours (exact and approximate), Leiden, UMAP, rank_genes_groups, the sinks, and the GPU paths that exist by then. For each: a profile (flamegraph or `samply` on macOS, `perf` on Linux) showing where its time goes, and a benchmark against scanpy (golden rule 8: same data, same work) at 50k and about 1M cells and at 1, 4 and all threads, with time and peak RSS. (added Nov 21, 2026, at the user's request)
-  - Depends: M3, M4, M5 done (10.6's publish excepted); 10.3 (the benchmark harness)
-  - Done when: `performance.md` has one dated table of every step (time, peak memory, kyto and scanpy, load average stated), each step's top hotspots named from its profile, and the steps ranked by their share of the workflow's time and by their gap to scanpy.
-  - First pass (Nov 27, 2026, at `374d9ad`; `performance.md`, "Every step on the Mac, first pass"): every step timed at 50k cells against scanpy at 1, 4 and 10 threads with peak RSS, kyto alone at 1M (approximate at 1, 4, 10 threads; exact at 10), the Metal paths at 50k, and the ranked list that became 12.4–12.10. Left: scanpy at 1M (under `guard.py`, reporting an out-of-memory stop honestly), kyto on Metal at 1M, and the `samply` profiles with each step's hotspots. Each of 12.4–12.10 profiles its own step, so 12.1 closes once the 1M comparison is in.
 - [ ] **12.2 A speed strategy for each step.** Split by step (user, Nov 28, 2026: one session per slow step, not one session for all of them): each of 12.4–12.10 writes and gets approval for its own strategy, so 12.2 is done when they are. From 12.1, write one strategy per step that is slower than scanpy or large in the workflow's time: the cause (from the profile), the options (algorithmic, memory traffic, SIMD, threading, I/O, GPU; on Apple Silicon also Accelerate's BLAS and vDSP for the matrix products, the Metal GPU through wgpu (9.2, 9.8, 9.10), and unified memory to skip host copies between devices), the expected gain, the accuracy risk under the rule above, and the order to do them in. Fold the earlier findings (5.22–5.24, 6.15, 6.18, 10.4) into it. (added Nov 21, 2026)
   - Depends: 12.1
   - Done when: the strategies are in `performance.md` and the user has approved them and a stop condition for each (a target time or a time box, AGENTS.md); each approved strategy is a plan task under 12.3 with a measurable Done-when.
@@ -210,23 +208,30 @@ Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identic
 Tasks 12.4–12.10 are the ranked list from 12.1's first pass (`performance.md`). Each one runs in its own session, alone on the machine, and does three things in order: profile its step with `samply` and name the hotspots; write the strategy in `performance.md` (cause, options, expected gain, accuracy risk under the rule above) and stop for the user's approval of it and of a stop condition; then implement, re-measure on the 12.1 benchmark (50k at 1, 4 and 10 threads, and 1M where the step runs there) and record before and after. Numbers below are kyto / scanpy at 50k cells, 10 threads, from Nov 27, 2026. (added Nov 28, 2026, at the user's request)
 
 - [ ] **12.4 Exact neighbours.** 4.12 / 0.33 s (12x slower; 25.3 / 0.93 s on one thread, 27x), and 1,652 s of the 2,018 s exact run at 1M. The search is blocked brute force, O(n²). Carries 6.18's exact-search part.
+  - Hotspots (12.1 profile, Nov 28): the all-pairs distance kernel `kernels::RowPairs` is 93.6% of the step's CPU time, the top-k closure in `neighbors::exact` 5.9%.
   - Depends: 12.1 (first pass)
   - Done when: the approved stop condition is met or its time box runs out, the result is bit-identical across thread counts (R11), and the before/after table is in `performance.md`.
 - [ ] **12.5 Approximate neighbours (HNSW).** 5.29 / 0.33 s (16x slower), slower than kyto's exact search at 50k and flat from 4 threads up (insertion is sequential for R11); 573 s of the 950 s approximate run at 1M. Recall of at least 0.99 against exact stays. Carries 6.18's HNSW part.
+  - Hotspots (12.1 profile, Nov 28): distances (`kernels::RowPairs`) 41.0%, `neighbors_hnsw::Index::search_layer` 39.8%, the candidate `BinaryHeap` pops 11.4% and `into_sorted_vec` 2.9%. Recall at 50k: 0.9995 (scanpy's pynndescent: 0.889).
   - Depends: 12.1 (first pass)
   - Done when: as 12.4, plus recall stated.
 - [ ] **12.6 UMAP.** 15.9 / 14.1 s (1.1x slower) but the largest share of the 50k run, and about 340 s at 1M. Carries 6.15 (libm `pow` was about 58% of the SGD).
+  - Hotspots (12.1 profile, Nov 28): `umap::layout` 43%, libm (`libsystem_m`, unsymbolized; `pow` per 6.15) about 20%, `umap_spectral::extend` 3.4%; CPU time equals wall time, so the step runs on one thread.
   - Depends: 12.1 (first pass)
   - Done when: as 12.4.
 - [ ] **12.7 The Metal paths.** At 50k, `on(device="auto")` is slower than kyto's CPU on every step except exact neighbours on one thread (normalize + log1p 3.4x, QC 1.8x, PCA 1.7x slower at 10 threads). Likely causes from 9.8: a host round trip per block (9.6 rule 5), a host CSC copy per PCA fold, untiled kernels. Options include keeping blocks on the device and unified memory.
+  - Hotspots (12.1 profile, Nov 28): in the GPU calls, host copies (`memmove`) 33.1%, CubeCL `submit_inner` 30.5% and `submit_blocking` 8.0%, waiting on the GPU (`semaphore_wait_trap`) 16.2%; PCA on Metal adds `pca::gpu::fold` 8.0% and `sparse_transposed_dense` 6.1%. At 1M, exact neighbours on Metal were stopped at 60 minutes (CPU: 1,652 s).
   - Depends: 12.1 (first pass)
   - Done when: as 12.4, and `auto` never picks a GPU path that is slower than the CPU on the 12.1 benchmark (or the note says why).
 - [ ] **12.8 The sinks.** `sink_h5ad` 0.64 / 0.14 s (4.5x slower at 10 threads), and `sink_zarr` 0.67 / 0.13 s on one thread (5.3x). Carries 5.24, including its rule to first time scanpy writing the same content.
+  - Hotspots (12.1 profile, Nov 28): the export uses 0.15 CPU s of its about 0.6 s: `pwrite` 21.6%, re-reading the written store (`LayerReader::read_parts_of` 13.0%, zstd 8.9%), `close` 11.9%; it waits on serial, uncompressed writes more than it computes.
   - Depends: 12.1 (first pass)
   - Done when: as 12.4.
 - [ ] **12.9 `rank_genes_groups`, t-test.** 0.23 / 0.07 s (3.3x slower), the same at every thread count; Wilcoxon is already faster than scanpy.
+  - Hotspots (12.1 profile, Nov 28): `read` syscalls 26.6% (reading the layer), `GroupMoments::add_cell` 5.5%; the step is I/O and single-threaded, not arithmetic.
   - Depends: 12.1 (first pass)
   - Done when: as 12.4, with the 10.2 tolerances unchanged.
 - [ ] **12.10 Preprocessing on one thread.** On one thread QC + filters take 0.88 / 0.41 s (2.2x), HVG 1.67 / 0.53 s (3.1x) and PCA 2.91 / 1.91 s (1.5x); from 4 threads up all three are faster than scanpy. Carries 5.22 and 5.23.
+  - Hotspots (12.1 profile, Nov 28, 1 thread): tile decode (`ZSTD_decompressSequences`) 21.1%, `PcaAccumulator::fold_rows` closures 25.1% (f64 accumulation), `GeneSelection::apply` 6.8%, `Kernels::log1p` 6.4%, `cell_block::check_parts` 5.6%.
   - Depends: 12.1 (first pass)
   - Done when: as 12.4, without losing the 4 and 10 thread times.

@@ -129,6 +129,7 @@ def main() -> None:
             os.environ[name] = str(arguments.threads)
 
     import scanpy as sc
+    from scipy import sparse
     from threadpoolctl import threadpool_limits
 
     if arguments.threads is not None:
@@ -149,6 +150,16 @@ def main() -> None:
 
     start = time.perf_counter()
     annotated = sc.read_h5ad(arguments.input_path)
+    matrix = annotated.X
+    if (
+        isinstance(matrix, sparse.csr_matrix)
+        and matrix.indptr.dtype != matrix.indices.dtype
+        and matrix.nnz < 2**31
+    ):
+        # make_data.py --stream writes an int64 indptr beside int32 indices; scipy's
+        # kernels refuse the mix (12.1: QC failed at 1M cells). scipy itself picks
+        # int32 for both when nnz fits, so this is the matrix scanpy would build.
+        matrix.indptr = matrix.indptr.astype(matrix.indices.dtype)
     read_seconds = round(time.perf_counter() - start, 3)
     read_peak_mb = round(peak_rss_mb())
     result = run(annotated, arguments.output_path)
