@@ -903,6 +903,90 @@ one thread per output value without tiling or shared memory; neighbours copy eve
 for each 4,096-query call and re-rank candidates on the host; on heavily tied data (small integers) most rows fail the candidate check and are searched again on the CPU, so the GPU is as slow as the CPU there (bug-hunter, 9,000 cells: 4.4-5.8 s against 4.8-6.2 s). Keeping blocks on the
 device (12.2), cuSPARSE/cuBLAS on CUDA (9.3) and tiled kernels are where M6 would look.
 
+## Every step on the Mac, first pass (task 12.1)
+
+Measured Nov 27, 2026, at `374d9ad` (release extension with the Metal kernels, `--features wgpu`),
+by `benchmarks/scanpy_workflow/measure_12_1.sh`. **Partial:** the run was stopped during
+its last job (kyto at 1M cells on Metal), so the tables hold what finished. Still missing,
+and left to task 12.1: scanpy at 1M cells, kyto on Metal at 1M, and the `samply` profiles
+(no hotspots are named yet).
+
+- **Machine:** Apple M4 Mac, 10 cores (4 performance + 6 efficiency), 16 GB RAM, macOS 27.2.
+  **1-minute load average** before each job: 1.7 to 4.4 across the 50k jobs, 2.0 to 2.9
+  across the 1M jobs (logged in `raw/load.log`).
+- **Data:** `make_data.py`, seeded synthetic counts, 20,000 genes, 8 clusters: 50,000 cells,
+  and 1,000,000 cells (1.42 billion nonzeros, 11.5 GB as `.h5ad`, written with `--stream`).
+- **Workflow:** as in the 10.8 table above. 50k steps are `kyto_steps.py` medians of 3 runs
+  (fresh process per prefix); 1M steps come from one `run_kyto_timed.py` run each, split by
+  the store's provenance node timings, so QC and normalize fall inside the HVG pass there.
+- `read` compares scanpy's `read_h5ad` with kyto's one-off `ky.convert` to its store; they
+  are not the same work, and the row is not counted in the totals.
+
+Seconds, `kyto / scanpy (kyto/scanpy)`; **bold** where kyto takes more than 1.2x.
+
+| Step | 50k, 1 thr | 50k, 4 thr | 50k, 10 thr | 1M, 1 thr | 1M, 4 thr | 1M, 10 thr |
+|---|---|---|---|---|---|---|
+| read (scanpy) / convert (kyto, once per dataset) | 1.14 / 0.11 (**10.02x**) | 1.14 / 0.11 (**10.02x**) | 1.14 / 0.11 (**10.02x**) | 41.29 / - | 41.29 / - | 41.29 / - |
+| QC + filters | 0.88 / 0.41 (**2.18x**) | 0.29 / 0.40 (0.71x) | 0.21 / 0.41 (0.51x) | (fused) | (fused) | (fused) |
+| normalize + log1p | 0.25 / 0.21 (1.18x) | 0.10 / 0.17 (0.55x) | 0.07 / 0.17 (0.41x) | (fused) | (fused) | (fused) |
+| HVG + keep HVGs (1M: the HVG pass, QC and normalize fused in) | 1.67 / 0.53 (**3.14x**) | 0.60 / 0.45 (**1.34x**) | 0.45 / 0.44 (1.03x) | 31.93 / - | 11.39 / - | 8.14 / - |
+| PCA | 2.91 / 1.91 (**1.52x**) | 1.02 / 2.01 (0.51x) | 0.76 / 1.91 (0.40x) | 57.01 / - | 18.41 / - | 12.76 / - |
+| neighbours, kyto exact | 25.26 / 0.93 (**27.30x**) | 7.18 / 0.42 (**17.05x**) | 4.12 / 0.33 (**12.34x**) | - | - | 1,652 / - |
+| neighbours, kyto approximate (HNSW) | 8.12 / 0.93 (**8.78x**) | 5.57 / 0.42 (**13.23x**) | 5.29 / 0.33 (**15.84x**) | 842 / - | 596 / - | 573 / - |
+| Leiden | 0.16 / 0.66 (0.24x) | 0.21 / 0.67 (0.32x) | 0.17 / 0.67 (0.26x) | 6.63 / - | 6.64 / - | 6.87 / - |
+| UMAP | 16.03 / 14.04 (1.14x) | 15.68 / 14.10 (1.11x) | 15.93 / 14.10 (1.13x) | 348 / - | 342 / - | 336 / - |
+| write: kyto `sink_zarr` (1M: stream + write) / scanpy `write_h5ad` | 0.67 / 0.13 (**5.27x**) | 0.20 / 0.13 (**1.60x**) | 0.07 / 0.14 (0.48x) | 44.61 / - | 14.82 / - | 10.81 / - |
+| write: kyto `sink_h5ad` / scanpy `write_h5ad` | 1.25 / 0.13 (**9.76x**) | 0.75 / 0.13 (**5.84x**) | 0.64 / 0.14 (**4.47x**) | - | - | - |
+| rank_genes_groups (t-test) | 0.28 / 0.08 (**3.45x**) | 0.23 / 0.07 (**3.33x**) | 0.23 / 0.07 (**3.29x**) | - | - | - |
+| rank_genes_groups (wilcoxon) | 0.55 / 2.27 (0.24x) | 0.51 / 0.98 (0.52x) | 0.51 / 0.77 (0.66x) | - | - | - |
+| metacells (kyto only, opt-in) | 0.78 / - | 0.22 / - | 0.19 / - | - | - | - |
+| **total**, exact (scanpy read through write; kyto the plan to `sink_zarr`) | 47.83 / 18.93 (**2.53x**) | 25.27 / 18.46 (**1.37x**) | 21.77 / 18.29 (1.19x) | - | - | 2,018 / - |
+| **total**, kyto approximate | 30.69 / 18.93 (**1.62x**) | 23.98 / 18.46 (**1.30x**) | 23.11 / 18.29 (**1.26x**) | 1,332 / - | 991 / - | 950 / - |
+
+Metal (`on(device="auto")`: QC, normalize, log1p, PCA and exact neighbours on the GPU), 50k, seconds `kyto Metal / kyto CPU`:
+
+| Step | 1 thr | 4 thr | 10 thr |
+|---|---|---|---|
+| qc_filter | 1.15 / cpu 0.88 (**1.30x**) | 0.45 / cpu 0.29 (**1.56x**) | 0.37 / cpu 0.21 (**1.78x**) |
+| normalize_log1p | 0.43 / cpu 0.25 (**1.76x**) | 0.27 / cpu 0.10 (**2.83x**) | 0.23 / cpu 0.07 (**3.41x**) |
+| hvg | 2.08 / cpu 1.67 (**1.24x**) | 0.90 / cpu 0.60 (**1.49x**) | 0.80 / cpu 0.45 (**1.76x**) |
+| pca | 3.11 / cpu 2.91 (1.07x) | 1.70 / cpu 1.02 (**1.67x**) | 1.28 / cpu 0.76 (**1.68x**) |
+| neighbors | 9.08 / cpu 25.26 (0.36x) | 9.09 / cpu 7.18 (**1.27x**) | 9.01 / cpu 4.12 (**2.19x**) |
+| leiden | 0.18 / cpu 0.16 (1.12x) | 0.07 / cpu 0.21 (0.33x) | 0.12 / cpu 0.17 (0.70x) |
+| umap | 16.73 / cpu 16.03 (1.04x) | 16.39 / cpu 15.68 (1.05x) | 16.41 / cpu 15.93 (1.03x) |
+| write | 0.66 / cpu 0.67 (0.99x) | 0.35 / cpu 0.20 (**1.71x**) | 0.01 / cpu 0.07 (0.12x) |
+
+Peak RSS (MB) of the run through each step, `kyto / scanpy`:
+
+| Step | 50k, 1 thr | 50k, 4 thr | 50k, 10 thr | 1M approx, 1 thr | 1M approx, 4 thr | 1M approx, 10 thr |
+|---|---|---|---|---|---|---|
+| qc_filter | 356 / 2,692 | 593 / 2,692 | 551 / 2,692 |  |  |  |
+| normalize_log1p | 486 / 2,767 | 766 / 2,766 | 729 / 2,766 |  |  |  |
+| hvg | 476 / 3,500 | 842 / 3,500 | 779 / 3,500 |  |  |  |
+| pca | 606 / 3,552 | 911 / 3,551 | 881 / 3,552 |  |  |  |
+| neighbors | 616 / 3,873 | 921 / 3,871 | 883 / 3,869 |  |  |  |
+| leiden | 641 / 3,873 | 953 / 3,871 | 897 / 3,869 |  |  |  |
+| umap | 693 / 3,873 | 999 / 3,871 | 947 / 3,869 |  |  |  |
+| write | 839 / 3,873 | 1,086 / 3,871 | 1,015 / 3,869 | 4,314 / - | 6,311 / - | 6,094 / - |
+
+### Ranked list (50k, all threads unless noted)
+
+Each entry is its own optimization task (12.4 to 12.10 in the plan): profile it, propose a
+strategy with a stop condition for the user's approval, then implement and re-measure.
+
+| Rank | Step | kyto / scanpy | Why it ranks here |
+|---|---|---|---|
+| 1 | Neighbours, exact | 4.12 / 0.33 s (12x slower; 27x on one thread) | Almost the whole gap to scanpy; 1,652 s of 2,018 s at 1M |
+| 2 | Neighbours, approximate (HNSW) | 5.29 / 0.33 s (16x slower) | 573 s of 950 s at 1M; slower than exact at 50k |
+| 3 | UMAP | 15.9 / 14.1 s (1.1x slower) | The largest share of the 50k time, about 340 s at 1M |
+| 4 | Metal paths | slower than kyto's CPU on every step but one | Host round trips per block (9.6 rule 5); untiled kernels (9.8) |
+| 5 | `sink_h5ad` | 0.64 / 0.14 s (4.5x slower) | `sink_zarr` is 2x faster than scanpy's write on the same data |
+| 6 | `rank_genes_groups`, t-test | 0.23 / 0.07 s (3.3x slower) | Flat across threads; Wilcoxon is already faster than scanpy |
+| 7 | One-thread preprocessing | QC 2.2x, HVG 3.1x, PCA 1.5x slower | Faster than scanpy from 4 threads up; matters for small machines |
+
+Already ahead: peak memory (about 1.0 GB against 3.9 GB, 4x smaller), Leiden (4x faster),
+QC, normalize and PCA from 4 threads up, Wilcoxon.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

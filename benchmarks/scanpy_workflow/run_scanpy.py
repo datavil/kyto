@@ -74,6 +74,10 @@ def run(annotated: Any, output_path: str | None) -> dict[str, Any]:
         now = time.perf_counter()
         seconds[step_name] = round(now - clock, 3)
         peak_mb[step_name] = round(peak_rss_mb())
+        # Progress on stderr (12.1): a run killed past the memory limit still says
+        # which steps finished.
+        print(step_name, seconds[step_name], peak_mb[step_name], file=sys.stderr)
+        sys.stderr.flush()
         clock = now
 
     annotated.var["mt"] = annotated.var["symbol"].str.startswith("MT-")
@@ -134,7 +138,11 @@ def main() -> None:
     warmup_seconds = 0.0
     if arguments.warmup:
         start = time.perf_counter()
-        small = sc.read_h5ad(arguments.input_path)[: arguments.warmup].copy()
+        # Backed, so only the warm-up's cells are loaded (12.1: 1M cells do not fit
+        # twice); the same values as reading everything and slicing.
+        backed = sc.read_h5ad(arguments.input_path, backed="r")
+        small = backed[: arguments.warmup].to_memory()
+        backed.file.close()
         run(small, None)
         del small
         warmup_seconds = round(time.perf_counter() - start, 3)

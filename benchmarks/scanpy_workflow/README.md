@@ -5,17 +5,23 @@ timing scripts, run by hand.
 
 | Script | What it does |
 |---|---|
-| `make_data.py N OUT.h5ad` | Seeded synthetic counts: N cells × 20,000 genes, 8 clusters, ~7% nonzero, 13 `MT-` genes |
+| `make_data.py N OUT.h5ad [--stream]` | Seeded synthetic counts: N cells × 20,000 genes, 8 clusters, ~7% nonzero, 13 `MT-` genes; `--stream` writes block by block with the same values (12.1: 1M cells is 1.42 billion nonzeros, 11.5 GB, more than fits in memory twice) |
 | `run_scanpy.py IN.h5ad OUT.h5ad [--threads N] [--warmup CELLS]` | The workflow in scanpy; prints seconds and peak RSS per step as JSON. `--threads` caps numba, BLAS, OpenMP and `n_jobs`; `--warmup` first runs the workflow on that many cells in the same process (compiles numba out of the timed run) |
 | `run_kyto.py IN.h5ad STORE OUT SEARCH` | `ky.convert`, then the same workflow as one plan run by `sink_zarr`; `SEARCH` is `exact` or `approximate` |
 | `kyto_breakdown.py STORE OUT [--with-umap]` | Runs the kyto plan cut after each step; prints cumulative seconds |
-| `kyto_steps.py STORE OUT [--threads 1,4,10] [--repeats 3] [--with-write] [--search exact\|approximate]` | Per-step seconds and peak RSS (task 10.8): each `kyto_breakdown.py` prefix streamed to nowhere (`_execute`) in a fresh process, median of the repeats, steps as differences; `write` is the full `sink_zarr` minus the UMAP prefix |
+| `kyto_steps.py STORE OUT [--threads 1,4,10] [--repeats 3] [--with-write] [--search exact\|approximate] [--device cpu\|wgpu\|auto] [--sink zarr\|h5ad] [--only-write]` | Per-step seconds and peak RSS (task 10.8): each `kyto_breakdown.py` prefix streamed to nowhere (`_execute`) in a fresh process, median of the repeats, steps as differences; `write` is the full `sink_zarr` (or `sink_h5ad`) minus the UMAP prefix; `--device` ends each prefix with `on(device=...)` (12.1: `auto` runs the Metal kernels where they exist; strict `wgpu` refuses the steps without one, KY-E501) |
 | `compare_labels.py SCANPY.h5ad KYTO_STORE` | Cells kept, Leiden clusters and the ARI between the two outputs, aligned by cell ID |
 | `measure.py SCRIPT ARGS...` | Runs a script and prints its peak RSS in MB (bytes on macOS, kilobytes on Linux) |
 | `pca_timing.py STORE WORK` | kyto's PCA alone (on the HVG store it writes to `WORK` once) and in the workflow, input held vs streamed, at 1, 4 and 10 threads; checks the embeddings are bit-identical (task 5.12). `--cases stage` times PCA alone with no sink (`_execute`), the stage 5.15 measures |
 | `thread_scaling.py STORE WORK` | Preprocessing (streamed to nowhere), QC through PCA and PCA alone at 1, 4 and 10 threads (`--threads`); speedups and bit checks across thread counts (task 5.13) |
 | `pca_scanpy.py IN.h5ad [--kyto WORK/kyto_pca.npy]` | scanpy's `pp.pca` alone on the same HVG matrix, threads capped by threadpoolctl; compares kyto's embedding |
 | `metacells.py STORE [--seeds 10] [--threads N]` | Task 6.16: kyto's `metacells` (e-means, 3 epochs) against scikit-learn's Lloyd at 25 iterations, k = n/50 and n/200, mean training MSE and median seconds over the seeds; checks the result is bit-identical at 1, 4 and all threads |
+| `run_kyto_timed.py STORE OUT [--threads N] [--search ...] [--device ...]` | Task 12.1: the full plan once by `sink_zarr`, split by step from the store's `provenance.json` node timings (fused per-cell steps and the writes fall under the sink node); for 1M cells, where `kyto_steps.py`'s prefixes would take hours |
+| `extra_steps.py read\|rank\|metacells ...` | Task 12.1: `ky.convert` against `read_h5ad`; `rank_genes_groups` (t-test, Wilcoxon) on each tool's own processed output; kyto's `metacells`; fresh processes, median time, peak RSS |
+| `neighbor_recall.py EXACT_KYTO_OUT SCANPY_OUT.h5ad [APPROXIMATE_KYTO_OUT]` | Task 12.1: per-cell kNN recall of scanpy's and kyto's approximate graphs against kyto's exact graph (mean, minimum, cells below 0.5 and 0.9); not yet run for the 12.1 table |
+| `guard.py [--rss-mb] [--swap-mb] [--timeout] -- COMMAND` | Task 12.1: runs a command under a memory watchdog (macOS swaps instead of failing) and records how far it got: status, sampled peak RSS, swap growth, the last progress lines |
+| `hotspots.py PROFILE.json.gz [--stage NAME=REGEX ...]` | Task 12.1: top self-time functions of a `samply` profile, overall and per stage, weighted by thread CPU time |
+| `measure_12_1.sh DATA 50k\|1m\|profile` | Task 12.1: every timed run and profile behind performance.md's 12.1 table, with the load average logged before each |
 
 scanpy, leidenalg and scikit-learn are in the dev environment (`uv sync`, which also
 builds the release extension), so one environment runs both sides. The full workflow
@@ -47,3 +53,12 @@ uv run python pca_scanpy.py synthetic_50000.h5ad --kyto work/kyto_pca.npy
 
 A cold scanpy run (empty numba cache) spends about 27 s compiling numba code, nearly
 all of it in neighbours; report it beside the warm runs.
+
+Task 12.1, every step at 50k and 1M cells with the release extension built with the Metal
+kernels (`DATA` on a disk with about 30 GB free; the script's header has the build command):
+
+```bash
+bash benchmarks/scanpy_workflow/measure_12_1.sh DATA 50k
+bash benchmarks/scanpy_workflow/measure_12_1.sh DATA 1m
+uv run --no-project python benchmarks/scanpy_workflow/report_12_1.py DATA/raw
+```

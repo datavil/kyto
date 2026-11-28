@@ -86,13 +86,13 @@ Goal: any plan runs within a memory limit, uses every core, and gives the same a
 
 Done (5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11, 5.12, 5.13, 5.14, 5.15, 5.16, 5.17, 5.18, 5.19, 5.20, 5.21): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#5-streaming-cpu-executor-kyto-exec).
 
-- [ ] **5.22 Preprocessing on 1 thread at scanpy's time.** In 10.8's workflow at 50k cells, kyto's QC + filters take 0.89 s against scanpy's 0.41 s (2.1x), and its HVG step takes 1.68 s against 0.53 s (3.2x; 1.29x at 4 threads). kyto decodes the store on every pass; scanpy holds the matrix after a 0.11 s read. Profile the passes on 1 thread (decode, QC, the HVG statistics pass) and cut the largest cost. (added Nov 20, 2026, from 10.8's measurement)
+- [ ] **5.22 Preprocessing on 1 thread at scanpy's time.** In 10.8's workflow at 50k cells, kyto's QC + filters take 0.89 s against scanpy's 0.41 s (2.1x), and its HVG step takes 1.68 s against 0.53 s (3.2x; 1.29x at 4 threads). kyto decodes the store on every pass; scanpy holds the matrix after a 0.11 s read. Profile the passes on 1 thread (decode, QC, the HVG statistics pass) and cut the largest cost. (added Nov 20, 2026, from 10.8's measurement) Carried out as 12.10 (Nov 28, 2026).
   - Depends: 5.18
   - Done when: `kyto_steps.py --threads 1,4` on the 50k data gives a `hvg` prefix (QC through HVG, cumulative) of at most 1.5 s on 1 thread (1.2x scanpy's warm read through HVG, 1.26 s) and an HVG step of at most 1.2x scanpy's at 4 threads; outputs bit-identical across thread counts (R11); `performance.md` updated.
-- [ ] **5.23 PCA in the workflow on 1 thread.** In 10.8's workflow, the PCA step takes 2.95 s on 1 thread against scanpy's 1.92 s (1.54x), while PCA alone is at par (0.95x, 5.15). Find what the workflow step adds (the stream pass that holds the HVG-filtered input, the held copy) and cut it. (added Nov 20, 2026, from 10.8's measurement)
+- [ ] **5.23 PCA in the workflow on 1 thread.** In 10.8's workflow, the PCA step takes 2.95 s on 1 thread against scanpy's 1.92 s (1.54x), while PCA alone is at par (0.95x, 5.15). Find what the workflow step adds (the stream pass that holds the HVG-filtered input, the held copy) and cut it. (added Nov 20, 2026, from 10.8's measurement) Carried out as 12.10 (Nov 28, 2026).
   - Depends: 5.18
   - Done when: `kyto_steps.py --threads 1` gives a PCA step (the `pca` prefix minus the `hvg` prefix) of at most 2.3 s (1.2x scanpy's warm 1.92 s); the embedding bit-identical to before; `performance.md` updated.
-- [ ] **5.24 The workflow's write on 1 thread.** In 10.8's workflow, kyto's `sink_zarr` adds 0.70 s on 1 thread to the run, against scanpy's 0.13 s `.h5ad` write (5.4x); on 4 and 10 threads the difference is inside the run-to-run spread. That is not equal work: kyto compresses the `counts` and `log1p` layers and also writes its tables, embeddings and graphs. First time scanpy writing an AnnData with the same content (both layers, `obsm`, `obsp`, the same compression); then cut kyto's write. (added Nov 20, 2026, from 10.8's measurement)
+- [ ] **5.24 The workflow's write on 1 thread.** In 10.8's workflow, kyto's `sink_zarr` adds 0.70 s on 1 thread to the run, against scanpy's 0.13 s `.h5ad` write (5.4x); on 4 and 10 threads the difference is inside the run-to-run spread. That is not equal work: kyto compresses the `counts` and `log1p` layers and also writes its tables, embeddings and graphs. First time scanpy writing an AnnData with the same content (both layers, `obsm`, `obsp`, the same compression); then cut kyto's write. (added Nov 20, 2026, from 10.8's measurement) Carried out as 12.8 (Nov 28, 2026).
   - Depends: 5.20
   - Done when: `benchmarks/scanpy_workflow` times scanpy's equal-content write, and kyto's `write` step (`kyto_steps.py --with-write`, or a direct timing of the sink if the difference stays noisy) is at most 1.2x that on 1 thread and no slower on 4; stores byte-identical across thread counts (except `provenance.json`); `performance.md` updated.
 
@@ -102,12 +102,12 @@ Goal: the standard scanpy workflow, streamed, with each step checked against sca
 
 Done (6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 6.11, 6.12, 6.13, 6.14, 6.16, 6.17): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#6-algorithms-kyto-algo).
 
-- [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there)
+- [ ] **6.15 UMAP power kernel.** Replace libm `pow` in the UMAP SGD (`umap.rs` `optimize`) with kyto's own kernel (`exp(b · ln x)`), so the layout is faster and has the same bits on every platform (R11). (added Nov 14, 2026, at the user's request: `pow` is about 58% of the SGD's time on macOS, where kyto's UMAP equals scanpy's, 15 to 17 s against 15.6 s at 50k cells; performance.md measured 4× slower on a 2-core Linux box, not reproduced and not yet profiled there) Carried out as 12.6 (Nov 28, 2026).
   - Depends: 6.9, 5.3
   - Done when: UMAP on the `benchmarks/scanpy_workflow` 50k data takes at most scanpy's time on Linux x86 and on macOS; trustworthiness stays inside the 6.9 range; the layout is bit-identical across thread counts.
   - Parity: [`umap_parity.rs`](crates/kyto-exec/tests/it/umap_parity.rs) must keep passing with the new kernel; [tolerances](tests/parity/tolerances.toml) `umap.*`.
   - Open: (1) profile the SGD on Linux x86 first, to confirm `pow` is the cause of the gap there.
-- [ ] **6.18 Neighbours on 1 thread at scanpy's time.** In 10.8's workflow, neighbours on 1 thread take 29.0 s with exact search (blocked brute force, O(n²)) and 20.9 s with HNSW, against pynndescent's 9.8 s warm (3.0x, 2.1x). HNSW is also slower than exact search from 4 threads up (14 s, flat: insertion is sequential for R11). Make one search, with recall of at least 0.99, reach scanpy's time on 1 thread without losing the exact search's 4 and 10 thread times. (added Nov 20, 2026, from 10.8's measurement)
+- [ ] **6.18 Neighbours on 1 thread at scanpy's time.** In 10.8's workflow, neighbours on 1 thread take 29.0 s with exact search (blocked brute force, O(n²)) and 20.9 s with HNSW, against pynndescent's 9.8 s warm (3.0x, 2.1x). HNSW is also slower than exact search from 4 threads up (14 s, flat: insertion is sequential for R11). Make one search, with recall of at least 0.99, reach scanpy's time on 1 thread without losing the exact search's 4 and 10 thread times. (added Nov 20, 2026, from 10.8's measurement) Carried out as 12.4 and 12.5 (Nov 28, 2026).
   - Depends: 6.17
   - Done when: `kyto_steps.py` on the 50k data gives a neighbours step of at most 11.8 s on 1 thread (1.2x scanpy's warm 9.8 s) with mean recall of at least 0.99 against exact search and Leiden ARI of 1.0 against scanpy; neighbours on 4 and 10 threads no slower than 10.8's exact times (8.2 s, 4.6 s); results identical across thread counts (R11); `performance.md` and deviations.md updated.
   - Parity: [`neighbors_parity.rs`](crates/kyto-exec/tests/it/neighbors_parity.rs) must keep passing; [tolerances](tests/parity/tolerances.toml) `neighbors.*`.
@@ -185,7 +185,7 @@ M4 can start 9.1 and 9.2 right after M2, but 9.3 and 9.4 wait for CPU PCA and ne
 | M3 Full analysis | 2.9, 5.12–5.15, 6.4–6.10, 6.12, 6.16–6.17, 7.8, 8.4–8.7, 10.7 |
 | M4 GPU backend | 9.1–9.2, 9.5–9.6, 9.8–9.10 |
 | M5 1.0 release | 2.7–2.8, 6.11, 10.5–10.6 |
-| M6 Optimization | 12.1–12.3, and the speed tasks it absorbs: 5.22–5.24, 6.15, 6.18, 10.4 |
+| M6 Optimization | 12.1, 12.4–12.10 (one task per slow step), and the speed tasks they absorb: 5.22–5.24, 6.15, 6.18, 10.4 |
 | Later: other platforms | 9.3, 9.4, 9.7, 9.11 (NVIDIA and GPU CI) |
 
 M6 starts only when M3 to M5 are done (decided by the user, Nov 21, 2026: "premature optimization is a curse"). Since the Mac proof of concept is the aim (Nov 27, 2026), the NVIDIA-only and GPU CI tasks moved to "Later: other platforms" and do not hold M6 back, and neither does 10.6's publish to PyPI, which waits for the user. Until then tasks build features and correctness; a task that touches a hot path still records its time and peak memory in `performance.md` (AGENTS.md), but nobody chases speed. Speed tasks found earlier (5.22–5.24, 6.15, 6.18, 10.4) wait for M6 and feed 12.1.
@@ -199,9 +199,34 @@ Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identic
 - [ ] **12.1 Profile and benchmark every performance-critical step.** Steps: convert/read, QC + filters, normalize, log1p, HVG, PCA, neighbours (exact and approximate), Leiden, UMAP, rank_genes_groups, the sinks, and the GPU paths that exist by then. For each: a profile (flamegraph or `samply` on macOS, `perf` on Linux) showing where its time goes, and a benchmark against scanpy (golden rule 8: same data, same work) at 50k and about 1M cells and at 1, 4 and all threads, with time and peak RSS. (added Nov 21, 2026, at the user's request)
   - Depends: M3, M4, M5 done (10.6's publish excepted); 10.3 (the benchmark harness)
   - Done when: `performance.md` has one dated table of every step (time, peak memory, kyto and scanpy, load average stated), each step's top hotspots named from its profile, and the steps ranked by their share of the workflow's time and by their gap to scanpy.
-- [ ] **12.2 A speed strategy for each step.** From 12.1, write one strategy per step that is slower than scanpy or large in the workflow's time: the cause (from the profile), the options (algorithmic, memory traffic, SIMD, threading, I/O, GPU; on Apple Silicon also Accelerate's BLAS and vDSP for the matrix products, the Metal GPU through wgpu (9.2, 9.8, 9.10), and unified memory to skip host copies between devices), the expected gain, the accuracy risk under the rule above, and the order to do them in. Fold the earlier findings (5.22–5.24, 6.15, 6.18, 10.4) into it. (added Nov 21, 2026)
+  - First pass (Nov 27, 2026, at `374d9ad`; `performance.md`, "Every step on the Mac, first pass"): every step timed at 50k cells against scanpy at 1, 4 and 10 threads with peak RSS, kyto alone at 1M (approximate at 1, 4, 10 threads; exact at 10), the Metal paths at 50k, and the ranked list that became 12.4–12.10. Left: scanpy at 1M (under `guard.py`, reporting an out-of-memory stop honestly), kyto on Metal at 1M, and the `samply` profiles with each step's hotspots. Each of 12.4–12.10 profiles its own step, so 12.1 closes once the 1M comparison is in.
+- [ ] **12.2 A speed strategy for each step.** Split by step (user, Nov 28, 2026: one session per slow step, not one session for all of them): each of 12.4–12.10 writes and gets approval for its own strategy, so 12.2 is done when they are. From 12.1, write one strategy per step that is slower than scanpy or large in the workflow's time: the cause (from the profile), the options (algorithmic, memory traffic, SIMD, threading, I/O, GPU; on Apple Silicon also Accelerate's BLAS and vDSP for the matrix products, the Metal GPU through wgpu (9.2, 9.8, 9.10), and unified memory to skip host copies between devices), the expected gain, the accuracy risk under the rule above, and the order to do them in. Fold the earlier findings (5.22–5.24, 6.15, 6.18, 10.4) into it. (added Nov 21, 2026)
   - Depends: 12.1
   - Done when: the strategies are in `performance.md` and the user has approved them and a stop condition for each (a target time or a time box, AGENTS.md); each approved strategy is a plan task under 12.3 with a measurable Done-when.
-- [ ] **12.3 Implement the approved strategies.** One task per strategy (12.3.1, 12.3.2, ...), each measured before and after on the 12.1 benchmark, run alone on a quiet machine, with the accuracy rule checked. (added Nov 21, 2026)
+- [ ] **12.3 Implement the approved strategies.** Carried out inside 12.4–12.10, one step each. One task per strategy (12.3.1, 12.3.2, ...), each measured before and after on the 12.1 benchmark, run alone on a quiet machine, with the accuracy rule checked. (added Nov 21, 2026)
   - Depends: 12.2
   - Done when: every 12.3.x task is done or closed by its stop condition, and the 12.1 table is re-measured with the new numbers.
+
+Tasks 12.4–12.10 are the ranked list from 12.1's first pass (`performance.md`). Each one runs in its own session, alone on the machine, and does three things in order: profile its step with `samply` and name the hotspots; write the strategy in `performance.md` (cause, options, expected gain, accuracy risk under the rule above) and stop for the user's approval of it and of a stop condition; then implement, re-measure on the 12.1 benchmark (50k at 1, 4 and 10 threads, and 1M where the step runs there) and record before and after. Numbers below are kyto / scanpy at 50k cells, 10 threads, from Nov 27, 2026. (added Nov 28, 2026, at the user's request)
+
+- [ ] **12.4 Exact neighbours.** 4.12 / 0.33 s (12x slower; 25.3 / 0.93 s on one thread, 27x), and 1,652 s of the 2,018 s exact run at 1M. The search is blocked brute force, O(n²). Carries 6.18's exact-search part.
+  - Depends: 12.1 (first pass)
+  - Done when: the approved stop condition is met or its time box runs out, the result is bit-identical across thread counts (R11), and the before/after table is in `performance.md`.
+- [ ] **12.5 Approximate neighbours (HNSW).** 5.29 / 0.33 s (16x slower), slower than kyto's exact search at 50k and flat from 4 threads up (insertion is sequential for R11); 573 s of the 950 s approximate run at 1M. Recall of at least 0.99 against exact stays. Carries 6.18's HNSW part.
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4, plus recall stated.
+- [ ] **12.6 UMAP.** 15.9 / 14.1 s (1.1x slower) but the largest share of the 50k run, and about 340 s at 1M. Carries 6.15 (libm `pow` was about 58% of the SGD).
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4.
+- [ ] **12.7 The Metal paths.** At 50k, `on(device="auto")` is slower than kyto's CPU on every step except exact neighbours on one thread (normalize + log1p 3.4x, QC 1.8x, PCA 1.7x slower at 10 threads). Likely causes from 9.8: a host round trip per block (9.6 rule 5), a host CSC copy per PCA fold, untiled kernels. Options include keeping blocks on the device and unified memory.
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4, and `auto` never picks a GPU path that is slower than the CPU on the 12.1 benchmark (or the note says why).
+- [ ] **12.8 The sinks.** `sink_h5ad` 0.64 / 0.14 s (4.5x slower at 10 threads), and `sink_zarr` 0.67 / 0.13 s on one thread (5.3x). Carries 5.24, including its rule to first time scanpy writing the same content.
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4.
+- [ ] **12.9 `rank_genes_groups`, t-test.** 0.23 / 0.07 s (3.3x slower), the same at every thread count; Wilcoxon is already faster than scanpy.
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4, with the 10.2 tolerances unchanged.
+- [ ] **12.10 Preprocessing on one thread.** On one thread QC + filters take 0.88 / 0.41 s (2.2x), HVG 1.67 / 0.53 s (3.1x) and PCA 2.91 / 1.91 s (1.5x); from 4 threads up all three are faster than scanpy. Carries 5.22 and 5.23.
+  - Depends: 12.1 (first pass)
+  - Done when: as 12.4, without losing the 4 and 10 thread times.
