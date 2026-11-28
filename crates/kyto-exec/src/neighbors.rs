@@ -3,11 +3,13 @@
 //! Does: for every row of a dense `float32` embedding (its leading `n_components`
 //! columns), find the `n_neighbors - 1` nearest other rows, as scanpy's `distances`
 //! graph holds them (the cell itself is excluded by its position, so a duplicate cell is
-//! a neighbour at distance 0). Exact search ([`NeighborSearch::Exact`]) is blocked:
-//! blocks of [`QUERY_BLOCK`] query rows run in parallel, each against tiles of
-//! [`POINT_TILE`] rows through the SIMD distance kernels ([`Kernels::squared_distances`],
-//! [`Kernels::dot_products`], `f64` in a fixed lane order), keeping its nearest rows in
-//! a sorted list. Approximate search ([`NeighborSearch::Approximate`]) takes candidates
+//! a neighbour at distance 0). Exact search ([`NeighborSearch::Exact`]) ranks rows by
+//! the SIMD distance kernels ([`Kernels::squared_distances`], [`Kernels::dot_products`],
+//! `f64` in a fixed lane order), keeping each query's nearest rows in a sorted list. Its
+//! result is the brute-force search's ([`brute_force`]: blocks of [`QUERY_BLOCK`] query
+//! rows in parallel, each against tiles of [`POINT_TILE`] rows); since task 12.4 the
+//! CPU computes it by ranking only the candidates an `f32` matrix-product filter
+//! proves sufficient (`neighbors_exact.rs`), the same graph bit for bit. Approximate search ([`NeighborSearch::Approximate`]) takes candidates
 //! from an HNSW index (`neighbors_hnsw.rs`) and ranks them with the same exact
 //! distances. Rows are ranked by (distance, row position), so ties go to the earlier
 //! cell, and every row's result is computed alone: the same graph on any thread count
@@ -33,6 +35,7 @@ use rayon::prelude::*;
 
 use crate::connectivities::ConnectivityGraph;
 use crate::kernels::Kernels;
+use crate::neighbors_exact;
 use crate::neighbors_gpu;
 use crate::neighbors_hnsw;
 use crate::run_control::RunControl;
@@ -299,7 +302,7 @@ pub(crate) fn search(
     let nearest = match params.search {
         NeighborSearch::Exact => match gpu {
             Some(gpu) => neighbors_gpu::exact(&space, k, gpu, control)?,
-            None => exact(&space, k, control)?,
+            None => neighbors_exact::exact(&space, k, control)?,
         },
         NeighborSearch::Approximate => {
             neighbors_hnsw::approximate(&space, k, params.seed, control)?
@@ -330,7 +333,7 @@ pub(crate) struct Space<'a> {
 }
 
 impl<'a> Space<'a> {
-    fn new(points: Cow<'a, [f32]>, width: usize, metric: Metric) -> Self {
+    pub(crate) fn new(points: Cow<'a, [f32]>, width: usize, metric: Metric) -> Self {
         let kernels = Kernels::detected();
         let n_rows = points.len() / width;
         let norms = match metric {
@@ -475,8 +478,14 @@ impl Nearest {
     }
 }
 
-/// Exact search: each row's `k` nearest other rows, ranked, `k` entries a row.
-fn exact(space: &Space<'_>, k: usize, control: &RunControl) -> Result<Vec<(f64, u32)>, KytoError> {
+/// Brute-force exact search: each row's `k` nearest other rows, ranked, `k` entries a
+/// row, every row against every row. The reference the filtered search
+/// (`neighbors_exact.rs`) equals, and its fallback.
+pub(crate) fn brute_force(
+    space: &Space<'_>,
+    k: usize,
+    control: &RunControl,
+) -> Result<Vec<(f64, u32)>, KytoError> {
     let n = space.n_rows();
     let mut nearest = vec![(0.0, 0_u32); n * k];
     nearest
@@ -505,6 +514,25 @@ fn exact(space: &Space<'_>, k: usize, control: &RunControl) -> Result<Vec<(f64, 
             Ok(())
         })?;
     Ok(nearest)
+}
+
+/// Row `query`'s `k` nearest other rows, searched against every row as
+/// [`brute_force`] does.
+pub(crate) fn search_row(space: &Space<'_>, k: usize, query: usize) -> Nearest {
+    let n = space.n_rows();
+    let mut found = Nearest::new(k);
+    let mut keys = vec![0.0; POINT_TILE.min(n)];
+    for start in (0..n).step_by(POINT_TILE) {
+        let keys = &mut keys[..POINT_TILE.min(n - start)];
+        space.keys(query, start, keys);
+        for (offset, &key) in keys.iter().enumerate() {
+            let row = start + offset;
+            if row != query {
+                found.offer(key, row as u32);
+            }
+        }
+    }
+    found
 }
 
 #[cfg(test)]

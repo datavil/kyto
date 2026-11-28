@@ -1,7 +1,8 @@
 //! SIMD kernels over the values of CSR rows: row sums, row sums of squares, row nnz,
 //! row scaling, row division (task 6.2) and `log1p` (task 5.3); and over dense rows:
 //! squared distances and dot products from one row to many (nearest neighbours, task
-//! 6.6).
+//! 6.6); and `f32` matrix products of row blocks ([`f32_products`], task 12.4), whose
+//! bits are the BLAS's, not fixed (see `products.rs`).
 //!
 //! Does: run each kernel through `pulp`'s runtime dispatch ([`Kernels::detected`]: AVX-512
 //! with `x86-v4`, AVX2 + FMA with `x86-v3`, NEON on aarch64) or on pulp's scalar
@@ -27,8 +28,10 @@
 //! callers pass a checked `CellBlock`'s `indptr` and values.
 
 mod log1p;
+mod products;
 
 pub use log1p::log1p;
+pub use products::f32_products;
 
 use pulp::{Arch, Simd, WithSimd};
 

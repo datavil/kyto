@@ -21,7 +21,7 @@ use kyto_gpu::{DeviceKernels, PairwiseKey};
 use kyto_plan::Metric;
 use rayon::prelude::*;
 
-use crate::neighbors::{Nearest, POINT_TILE, QUERY_BLOCK, Space};
+use crate::neighbors::{Nearest, QUERY_BLOCK, Space, search_row};
 use crate::run_control::RunControl;
 
 /// The operation the GPU's errors name.
@@ -156,25 +156,6 @@ fn rank_candidates(
     };
     let kth = found.entries().last()?.0;
     (floor > kth).then_some(found)
-}
-
-/// Row `query`'s `k` nearest other rows, searched against every row as the CPU's exact
-/// search does.
-fn search_row(space: &Space<'_>, k: usize, query: usize) -> Nearest {
-    let n = space.n_rows();
-    let mut found = Nearest::new(k);
-    let mut keys = vec![0.0; POINT_TILE.min(n)];
-    for start in (0..n).step_by(POINT_TILE) {
-        let keys = &mut keys[..POINT_TILE.min(n - start)];
-        space.keys(query, start, keys);
-        for (offset, &key) in keys.iter().enumerate() {
-            let row = start + offset;
-            if row != query {
-                found.offer(key, row as u32);
-            }
-        }
-    }
-    found
 }
 
 /// The CPU's exact search for the rows `queries` (all of them: `k` entries a row).

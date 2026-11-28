@@ -190,7 +190,7 @@ M6 starts only when M3 to M5 are done (decided by the user, Nov 21, 2026: "prema
 
 Goal: every performance-critical step is profiled, benchmarked against scanpy, and made faster by a written, approved strategy, with no loss of accuracy. The target machine is an Apple Silicon Mac, and the aim is to beat scanpy there in time and in peak memory, preferably many times over (section 0, Nov 27, 2026); other platforms are measured later.
 
-Done (12.1): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#12-optimization-m6-after-the-feature-milestones).
+Done (12.1, 12.4): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#12-optimization-m6-after-the-feature-milestones).
 
 Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identical output (R11) at every thread count; a change that alters the algorithm (an approximation, a different solver, lower precision) stays inside the 10.2 tolerance table without loosening any entry, keeps the cluster labels (ARI against the unoptimized run reported), and is recorded in `deviations.md`. A speed-up that fails this is not taken.
 
@@ -203,10 +203,6 @@ Accuracy rule for all of 12: a change that keeps the algorithm gives bit-identic
 
 Tasks 12.4–12.10 are the ranked list from 12.1's first pass (`performance.md`). Each one runs in its own session, alone on the machine, and does three things in order: profile its step with `samply` and name the hotspots; write the strategy in `performance.md` (cause, options, expected gain, accuracy risk under the rule above) and stop for the user's approval of it and of a stop condition; then implement, re-measure on the 12.1 benchmark (50k at 1, 4 and 10 threads, and 1M where the step runs there) and record before and after. Numbers below are kyto / scanpy at 50k cells, 10 threads, from Nov 27, 2026. (added Nov 28, 2026, at the user's request)
 
-- [ ] **12.4 Exact neighbours.** 4.12 / 0.33 s (12x slower; 25.3 / 0.93 s on one thread, 27x), and 1,652 s of the 2,018 s exact run at 1M. The search is blocked brute force, O(n²). Carries 6.18's exact-search part.
-  - Hotspots (12.1 profile, Nov 28): the all-pairs distance kernel `kernels::RowPairs` is 93.6% of the step's CPU time, the top-k closure in `neighbors::exact` 5.9%.
-  - Depends: 12.1 (first pass)
-  - Done when: the approved stop condition is met or its time box runs out, the result is bit-identical across thread counts (R11), and the before/after table is in `performance.md`.
 - [ ] **12.5 Approximate neighbours (HNSW).** 5.29 / 0.33 s (16x slower), slower than kyto's exact search at 50k and flat from 4 threads up (insertion is sequential for R11); 573 s of the 950 s approximate run at 1M. Recall of at least 0.99 against exact stays. Carries 6.18's HNSW part.
   - Hotspots (12.1 profile, Nov 28): distances (`kernels::RowPairs`) 41.0%, `neighbors_hnsw::Index::search_layer` 39.8%, the candidate `BinaryHeap` pops 11.4% and `into_sorted_vec` 2.9%. Recall at 50k: 0.9995 (scanpy's pynndescent: 0.889).
   - Depends: 12.1 (first pass)

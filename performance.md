@@ -1046,6 +1046,127 @@ so seconds are CPU seconds summed over threads. Profiles and `*.hotspots.json`:
 Leiden, for scale: 0.17 to 0.21 CPU s in every workflow profile (`Optimiser::move_nodes` about
 30%).
 
+## Exact neighbours (task 12.4)
+
+### Profile (phase 1, Nov 28, 2026)
+
+`samply` on the `neighbors` prefix of `kyto_steps.py` (QC through exact neighbours, k = 15, 50
+components), 50k data from 12.1, release build with line tables, at `b659899`. The machine was
+not quiet (1-minute load average 7.9 and 6.1 before the runs; task 1.7's gate was running), so
+the proportions count, not the seconds. Profiles: `kyto-12-4/profiles/` on the ZKT7 volume.
+
+| Threads | Neighbours, CPU s | `RowPairs` (distance kernel) | `exact` closure (top-k insert) | `memmove` |
+|---|---|---|---|---|
+| 1 | 26.2 | 93.7% (24.5 s) | 5.6% | 0.6% |
+| 10 | 40.2 | 93.7% | 5.8% | 0.4% |
+
+The same shape on 1 and 10 threads, and the same as 12.1's profile. Reading the code
+(`neighbors.rs` `exact`, `kernels.rs` `RowPairs`/`pair_sum`):
+
+- Every query is compared with every row: n(n-1) = 2.49 billion ordered pairs at 50k, each
+  pair computed twice (once from each side), 50 components each.
+- Each pair widens both rows' values to `f64` and runs difference, square and add in `f64`
+  into 8 fixed lanes, then the lane tree (`combine_lanes`). The query row is widened again
+  for every point row, and each call handles one query against one row, so the lanes'
+  add chains limit the loop. Measured: 24.5 s / 2.49e9 = 9.8 ns, about 43 cycles a pair
+  (0.86 cycles a component) on one core. `f64` NEON does 2 values a register, so even a
+  perfect `f64` kernel of this shape stays near 0.3 cycles a component: about 9 s on one
+  thread, 10x scanpy's 0.93 s. Tuning this kernel alone cannot reach scanpy.
+- The top-k list (`Nearest::offer`) rejects most rows with one comparison; it is the 5.7%.
+
+### Cause
+
+Brute force at `f64` precision: 125 billion `f64` component operations, on general-purpose
+NEON, for a result whose ranking almost never needs `f64` to be decided. scanpy's 0.33 s does
+far less work (pynndescent, approximate, recall 0.889).
+
+### Options
+
+Prototype numbers come from NumPy on the real 50k embedding (`kyto-12-4/proto/`; NumPy here
+links Accelerate), load average 4 to 5.
+
+| # | Option | Expected gain (50k) | Accuracy risk under section 12's rule |
+|---|---|---|---|
+| A | **`f32` GEMM filter, exact re-rank.** Per query block and point tile, approximate keys `‖q‖² + ‖p‖² - 2 q·p` from an `f32` matrix product (Accelerate `cblas_sgemm` on macOS, which runs on the M4's matrix unit; `faer`'s `f32` matmul elsewhere). Keep, per query, every row whose approximate key is at most the `k`-th smallest approximate key plus twice a proven error bound `E`; compute those candidates' keys with today's `f64` kernel (`Space::keys`) and rank them by (key, row) with today's `Nearest`. | Measured: the `f32` product of all 50k x 50k pairs takes 0.40 s with Accelerate capped at 1 thread (617 GFLOP/s), 0.35 s uncapped; `f64` 1.7 s. Candidates per row: mean 14.0, max 16 (k - 1 = 14), so the exact re-rank is about 0.8 million pairs, under 10 ms. Estimate with a fused threshold select: about 0.8 to 1.2 s on 1 thread (20-30x), 0.3 to 0.5 s on 10 (8-14x; the matrix unit is shared per cluster, so it scales less than NEON). At 1M: about 150 to 250 s against 1,652 s (the product is 1e14 flops). | **None on the output: bit-identical**, if the bound holds. The final keys, ranking and tie order are today's code on a set proven to contain the true `k` nearest: any true neighbour has exact key ≤ (the `k`-th exact key) ≤ (`k`-th approximate key + `E`), so its approximate key ≤ `k`-th approximate + `2E`; ties at the `k`-th key are all inside the set, so (key, row) picks the same rows. Independent of the BLAS's summation order, FMA or thread count (R11). `E` = `2 (w + 4) u (‖q‖ + max‖p‖)²` (`u` = 2⁻²⁴, the standard dot-product bound, doubled), plus an absolute term for subnormals. Measured: `2E` is 0.02% of the median `k`-th key; 0 of 2,000 sampled rows missed a true neighbour. Risks and guards: (1) a BLAS that silently uses lower precision would break the bound, so every re-ranked candidate also checks `|exact - approximate| ≤ E`, and a row that fails is searched by brute force; (2) heavily tied data (small integers) gives large candidate sets, which costs time, never correctness (the set grows instead of falling back); (3) Accelerate's own threads must be off inside kyto's pool (`BLASSetThreading` single-threaded, or one call per rayon task), so "1 thread" stays one CPU thread (golden rule 8). Cosine: the same with the dot products and a bound of `2 (w + 4) u` on `1 - cos`. |
+| B | Symmetric tiles: compute only tiles J ≥ I and offer each pair to both rows. | 2x on whatever computes keys (A's product, or today's kernel) | None: `(a - b)²` = `(b - a)²` bit for bit, and a top-k by (key, row) is the same whatever order its offers come in. Needs per-thread lists merged, more code. |
+| C | Tuned direct `f64` kernel: widen the query once, 4 point rows per pass for more independent add chains, same lane order. | 1.5 to 2.5x (about 10 to 15 s on 1 thread) | None (same per-pair operations and order). Does not reach scanpy (above). |
+| D | Partial top-k / vectorized select. Today's insert is already partial; after A, the select over n² approximate keys becomes a main cost, so it should be a vectorized compare against the row's current threshold, with rare inserts. | Part of A's estimate (about 0.1 to 0.3 s on 1 thread at 50k) | None (selection on the filter side only). |
+| E | `f32` final keys instead of `f64`. | 2x on the kernel | Changes the distances' last bits and some tie orders: an algorithm change needing a deviation. Not needed: A gets `f32` speed and keeps the `f64` result. **Not proposed.** |
+| F | Exact spatial pruning (ball tree, VP tree, or partial-distance early abandon over the PCs, largest variance first). | Uncertain at 50 dimensions (trees prune little); early abandon about 1.5 to 3x on today's kernel | None if the full key is computed in today's order for survivors; much more code than A for less gain. **Not proposed.** |
+
+The Metal exact path (`neighbors_gpu.rs`, 2.2x slower than the CPU at 50k) is 12.7's; A gives
+the CPU path the same candidate-then-re-rank shape with a tighter, ties-safe rule.
+
+### Recommended order
+
+1. **A + D**: the `f32` product with the threshold select and the exact re-rank, Accelerate on
+   macOS behind `kernels` (the one `unsafe` FFI call, with a `// SAFETY:` note), `faer`
+   elsewhere (no new dependency). Tests: equality with today's brute force on random, tied,
+   duplicate, tiny (n ≤ k + 1) and cosine inputs (proptest with `config`), and the 12.1 50k
+   graph byte-identical to the one from `b659899` at 1, 4 and 10 threads.
+2. **B** on the product (only tiles J ≥ I), if the time box has room and 10 threads are still
+   above target.
+3. C and F are dropped unless A misses badly. E is not taken.
+
+### Stop condition (approved by the user, Nov 28, 2026, with A + D)
+
+- **Target:** 50k exact neighbours (step time in `kyto_steps.py`) at most **1.2 s on 1 thread**
+  (1.3x scanpy's 0.93 s, from 25.3 s) and at most **0.40 s on 10 threads** (1.2x scanpy's
+  0.33 s, from 4.12 s), graph bit-identical to today's on 1, 4 and 10 threads; 1M at 10 threads
+  measured if time allows (expected under 300 s against 1,652 s).
+- **Time box:** one working day of implementation. If it runs out, A alone is taken as long as
+  it passes the accuracy rule and is at least 10x on 1 thread; the rest goes back as a note.
+
+### Result (phase 3, Nov 28, 2026)
+
+Implemented A + D (`neighbors_exact.rs`, `kernels/products.rs`); B, C and F were not needed.
+What the profiles taken on the way changed: blocks of 128 queries against tiles of 1,024
+rows; the dot products turned into keys in place, then scanned 16 at a time against the
+query's threshold (the first version tested every key against a threshold it reloaded, and
+was not vectorized: 0.98 of 1.29 CPU s); and the top-k of approximate keys kept by an
+insertion loop (`Vec::insert` made `memmove` a quarter of the remaining time). Tried and
+dropped: 512 x 512 blocks with keys kept in registers (no change in the step's CPU time).
+
+Measured by `kyto-12-4/proto/time_12_4.sh` (on the ZKT7 volume) on the release extension of
+12.1's build flags: the step is the `neighbors` prefix's median minus the `pca` prefix's
+median (3 runs each, fresh processes), as in 12.1. 1-minute load average 2.5 to 3.4 at 50k
+and 3.4 before the 1M run, with a game client using about 0.6 of a core; task 1.7 was paused.
+Before: 12.1's numbers (Nov 27, load 1.7 to 4.4).
+
+| Exact neighbours | 1 thread | 4 threads | 10 threads |
+|---|---|---|---|
+| 50k, before (12.1) | 25.26 s | 7.18 s | 4.12 s |
+| **50k, after** | **0.99 s** | **0.37 s** | **0.27 s** |
+| speed-up | 25.5x | 19.4x | 15.3x |
+| scanpy (pynndescent, approximate, recall 0.889) | 0.93 s | 0.42 s | 0.33 s |
+| kyto / scanpy, after | 1.07x | **0.88x** | **0.82x** |
+| peak RSS through neighbours, before / after | 616 / 625 MB | 921 / 890 MB | 883 / 894 MB |
+
+At 1M cells, 10 threads (`run_kyto_timed.py`, the exact workflow, provenance timings):
+neighbours **84.4 s against 1,652 s (19.6x)**, the whole exact run 461 s against 2,018 s, peak
+RSS 5,991 MB against 5,989 MB. The exact run is now faster than 12.1's approximate run
+(950 s), and UMAP (334 s) is its largest step.
+
+Profile of the step on 1 thread after the change (`after4-neighbors-1`, load about 6):
+about 0.94 CPU s, of which the key scan 0.40 s, Accelerate's `sgemm` 0.31 s (in `libBLAS`, on
+kyto's own thread: Accelerate started no threads of its own) and the top-k updates 0.17 s;
+the exact `f64` re-rank (`RowPairs`) is 0.01 s.
+
+- **Stop condition met:** 0.99 s ≤ 1.2 s on 1 thread and 0.27 s ≤ 0.40 s on 10 threads, inside
+  the time box. Exact search now beats scanpy's approximate search from 4 threads up and is
+  7% behind it on 1 thread.
+- **Accuracy:** the graph is the brute-force search's, bit for bit. Checked on the 50k data
+  (`graphs/` of a `sink_zarr`, SHA-256) against `b659899`, Euclidean and cosine, at 1, 4 and 10
+  threads: one digest per metric (R11). Unit tests compare with `brute_force` bit for bit on
+  1 and 4 threads (clusters, rows far from the origin, ties and duplicates past the candidate
+  limit, every row the same, `k = n - 1`, cosine zero rows, norms too large for `f32`); a
+  bug-hunter's 400-case fuzz (subnormal scales, outliers, offsets of 1e7, norms near the
+  limit, zero rows) found no difference. No `deviations.md` row: the output is unchanged.
+- **Where it does less well:** the filter's slack grows with the largest row norm, so an
+  embedding with a far outlier keeps more candidates per row, and heavily tied data (small
+  integers) sends rows past the candidate limit back to brute force: slower there, never
+  different. Off macOS the product runs on `faer` (one thread a block), unmeasured here.
+
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).

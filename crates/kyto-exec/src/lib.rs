@@ -61,6 +61,7 @@ mod loess;
 mod memory_limit;
 mod metacells;
 mod neighbors;
+mod neighbors_exact;
 mod neighbors_gpu;
 mod neighbors_hnsw;
 mod operator;
