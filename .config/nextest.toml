@@ -1,0 +1,16 @@
+# cargo-nextest settings for the gate's Rust tests (task 1.7, scripts/rust_tests.py).
+# nextest runs every test in its own process and tests of several binaries at once.
+
+# The test binaries that need the process to themselves (AGENTS.md: a counting or
+# peak-tracking global allocator, or a check of the process's memory) measure peaks that
+# depend on their threads running side by side; under `cargo test` nothing else ran
+# beside them. Run each with no other test beside it, as there.
+[[profile.default.overrides]]
+filter = "binary(cell_block_stream) | binary(estimate_fixtures) | binary(memory_limit) | binary(sink_threads) | binary(concat_memory)"
+threads-required = "num-test-threads"
+
+# The parity tests run pipelines on the pbmc3k fixtures and take minutes each (scrublet's
+# seeded calls about 10): start them first, so the longest one does not begin last.
+[[profile.default.overrides]]
+filter = "test(/_parity::/)"
+priority = 50

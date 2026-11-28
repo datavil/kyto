@@ -56,11 +56,7 @@ kyto is built in 10 workstreams of numbered tasks. An agent takes one unblocked 
 
 Goal: a repo where `import kyto` works, CI is green on Linux, macOS and Windows, and an agent can learn the rules from one file.
 
-Done (1.1, 1.2, 1.3, 1.4, 1.5, 1.6): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#1-workspace-and-tooling).
-
-- [ ] **1.7 A faster local gate.** The gate (AGENTS.md "Run the whole list") takes 30 to 40 minutes, about 25 of them in `cargo test`, and sessions rerun it in full after every rebase and every small fix. Cut the waiting without weakening the rule that a task is done only when the gate passes: (a) drop the forced extension rebuild (`uv sync --reinstall-package kyto`) when the extension is already current, (b) run the Rust tests with `cargo-nextest`, (c) stop building the GPU features twice (clippy and test with `--all-features`), (d) write in AGENTS.md when a session may rerun only a subset: after a lint or stub fix, the failing command; after a rebase with no code conflict and no overlap with the task's files, build, the generated-file checks and the task's own tests; one full run always comes last before the commit. Tooling, not product speed, so M6's rule does not apply; runs after 12.1 so its timings stay clean. (added Nov 27, 2026, at the user's request)
-  - Depends: 1.6
-  - Done when: the gate passes on `main` with the same commands' coverage, its wall time before and after is in `performance.md` (same machine, load stated), and AGENTS.md states the subset rule.
+Done (1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7): see [Implementation Plan - Done.md](Implementation%20Plan%20-%20Done.md#1-workspace-and-tooling).
 
 ## 2. Storage (`kyto-store`)
 

@@ -249,7 +249,8 @@ requires editing many unrelated files, the foundation is wrong: stop and tell th
   exception is a test that needs the process to itself (a counting or peak-tracking
   `#[global_allocator]`, or a check of the process's memory): it stays a separate
   `tests/<name>.rs` (kyto-exec's `cell_block_stream`, `estimate_fixtures`,
-  `memory_limit`).
+  `memory_limit`), and goes into the filter in `.config/nextest.toml`, so the gate's
+  nextest run gives it the machine alone, as `cargo test` did (1.7).
 - Snapshot and reference files live next to the tests that own them. Update them
   only on purpose, and say so in the commit message.
 
@@ -297,14 +298,12 @@ git working tree changed. Change a command here and CI follows; never copy one i
 ### Run by CI
 
 ```bash
-uv sync                                   # dev env; builds and installs the extension into .venv
-uv sync --reinstall-package kyto          # force an extension rebuild (never mix in `maturin develop`)
+uv sync --reinstall-package kyto          # dev env, and the extension rebuilt through cargo's incremental build (~2 s when current; never mix in `maturin develop`)
 uv run cargo build --workspace --locked   # build all crates (uv run: PyO3 sees .venv python)
-uv run cargo test --workspace --locked    # Rust tests, proptests with a fixed seed (Linux: libpython on LD_LIBRARY_PATH, see below)
+uv run python scripts/rust_tests.py --workspace --locked   # Rust tests: cargo-nextest if installed, then the doctests (else cargo test); proptests with a fixed seed (Linux: libpython on LD_LIBRARY_PATH, see below)
 uv run python scripts/remote_store_tests.py   # tile reader suite on S3 in MinIO: native `minio` on PATH, else docker or podman (prints SKIPPED without any)
 uv run cargo clippy --workspace --all-targets --locked -- -D warnings   # Rust lint
-uv run cargo clippy -p kyto-gpu --all-targets --all-features --locked -- -D warnings   # 9.1: lint the GPU features (wgpu, cuda), off in the workspace build
-uv run cargo test -p kyto-gpu --all-features --locked   # 9.1: the device probe with the GPU libraries built in (finds none on a machine without a GPU)
+export RUSTC_WORKSPACE_WRAPPER=clippy-driver CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__; uv run cargo test -p kyto-gpu --all-targets --all-features --locked && uv run cargo test -p kyto-gpu --doc --all-features --locked   # 9.1: lint the GPU features (wgpu, cuda; off in the workspace build) and run the device probe with them (finds none without a GPU), one build: clippy-driver compiles the tests, as `cargo clippy -- -D warnings` would lint them (1.7)
 cargo fmt --all                           # Rust format
 uv run ruff check --fix && uv run ruff format   # Python lint (import sorting on) and format
 uv run pyright                            # Python type check (strict, set in pyproject.toml)
@@ -327,6 +326,31 @@ commands):
 ```bash
 uv run --no-project python scripts/agents_commands.py --list
 uv run --no-project python scripts/agents_commands.py
+```
+
+The Rust tests run through cargo-nextest when it is installed (once per machine:
+`cargo install cargo-nextest --locked`); without it `scripts/rust_tests.py` runs
+`cargo test`, which runs the same tests, only slower.
+
+### Rerunning part of the gate
+
+The full list passes once, as the last check before every task commit lands; a
+partial run never replaces it (decided by the user, task 1.7). Before that last run, a
+session may rerun only part of the list. `--only` takes texts that the commands
+contain (their comments left out) and runs every command containing one of them, in
+the listed order:
+
+- **After a lint, format, stub or other generated-file fix:** rerun the command that
+  failed, for example `--only pyright` or `--only stubs.py llms_txt.py`.
+- **After a rebase onto `main` with no conflict in code and no file of the task changed
+  on `main`:** rerun the build, the generated-file checks and the task's own tests:
+  `--only "uv sync" "cargo build" error_registry.py stubs.py llms_txt.py` (the sync
+  rebuilds the extension the stub checks read), then the task's
+  targeted `cargo test -p <crate> ...` and `pytest -k ...`. A rebase with a conflict in
+  code, or one that changed a file the task touches, reruns the full list.
+
+```bash
+uv run --no-project python scripts/agents_commands.py --only "uv sync" "cargo build" error_registry.py stubs.py llms_txt.py
 ```
 
 ### On purpose only (not run by CI)

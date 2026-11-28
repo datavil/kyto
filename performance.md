@@ -1049,3 +1049,70 @@ Leiden, for scale: 0.17 to 0.21 CPU s in every workflow profile (`Optimiser::mov
 ## Reproducing
 
 Scripts and commands: [benchmarks/scanpy_workflow](benchmarks/scanpy_workflow/README.md).
+
+## The local gate, before and after (task 1.7)
+
+Apple M4, 10 cores, 16 GB, `CARGO_BUILD_JOBS=4`, `uv run --no-project python
+scripts/agents_commands.py --check-clean` in the 1.7 worktree on a warm `target/`
+(cloned from the main checkout, then one full gate run to warm it); the after run is the gate on the 1.7 commit, with 12.4 holding its own gate. Session 12.4 was
+compiling and profiling on the same machine throughout, so the load average (sampled
+every minute) is stated with each run; the runs are not quiet-machine numbers.
+
+| | before (`b659899`) | after (1.7) |
+| --- | ---: | ---: |
+| Whole gate (wall) | 1485 s (24.8 min) | 1000 s (16.7 min) |
+| Rust tests | 1215 s (`cargo test`) | 792 s (`cargo nextest` + `cargo test --doc`) |
+| GPU features: clippy + tests | 0 s + 1 s warm; 50 s + 46 s cold (deps built twice) | 6 s warm (one build) |
+| Extension sync | 0 s + 2 s (`uv sync`, then the forced rebuild) | 3 s (`uv sync --reinstall-package kyto` alone) |
+| pytest | 208 s | 98 s |
+| Load average (1 min), min to max (mean) | 4.7 to 27.2 (11.9) | 2.6 to 14.8 (5.9) |
+
+Per command (seconds; the commands are AGENTS.md "Run by CI", in order):
+
+| Before | s | After | s |
+| --- | ---: | --- | ---: |
+| `uv sync` | 0 | merged into the next line (it implies `uv sync`) | |
+| `uv sync --reinstall-package kyto` | 2 | `uv sync --reinstall-package kyto` | 3 |
+| `uv run cargo build --workspace --locked` | 7 | same | 46 |
+| `uv run cargo test --workspace --locked` | 1215 | `uv run python scripts/rust_tests.py --workspace --locked` (nextest, then `cargo test --doc`) | 792 |
+| `uv run python scripts/remote_store_tests.py` | 0 | same | 0 |
+| `uv run cargo clippy --workspace --all-targets --locked -- -D warnings` | 1 | same | 19 |
+| `uv run cargo clippy -p kyto-gpu --all-targets --all-features --locked -- -D warnings` | 0 | one line: `cargo test -p kyto-gpu --all-targets --all-features` compiled through `clippy-driver` with `-D warnings`, then `--doc` | 6 |
+| `uv run cargo test -p kyto-gpu --all-features --locked` | 1 | (same line as above) | |
+| `cargo fmt --all` | 1 | same | 0 |
+| `uv run ruff check --fix && uv run ruff format` | 0 | same | 0 |
+| `uv run pyright` | 7 | same | 7 |
+| `uv run python scripts/error_registry.py --check` | 0 | same | 0 |
+| `uv run python scripts/stubs.py --check` | 7 | same | 7 |
+| `uv run python scripts/llms_txt.py --check` | 0 | same | 0 |
+| `NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict` | 3 | same | 3 |
+| `uv run pytest` | 208 | same | 98 |
+| `uv run pytest tests/fixtures` | 12 | same | 7 |
+| `uv run python benchmarks/suite/suite.py --smoke` | 6 | same | 3 |
+| `uv run pre-commit install` | 0 | same | 0 |
+| `uv run pre-commit run --all-files` | 12 | same | 10 |
+
+Nothing dropped:
+
+- **Rust tests:** the same 620 test names (`cargo test --workspace -- --list` against
+  `cargo nextest list --workspace --run-ignored all`); before: 621 passed and 7 ignored (614 tests and 7 doctests passed; 6 tests and 1 doctest ignored);
+  after: 614 passed and 6 skipped under nextest, then 7 doctests passed and 1 ignored.
+- **GPU lint:** canaries fail the new line as they fail `cargo clippy -- -D warnings`: a
+  `len_zero` in a `#[cfg(feature = "wgpu")]` function, and an unused variable in a
+  `#[cfg(feature = "cuda")]` test (`-D unused-variables` implied by `-D warnings`).
+- **Extension:** the forced rebuild stays; only the plain `uv sync` it implies is gone.
+
+Where the time goes now: the Rust tests' wall time is bounded by their longest test
+(`scrublet_parity::seeded_calls_agree_with_scanpy_and_repeat`, 576 s under this load in
+a standalone nextest run, where the sum of all test times was 2608 s, 261 s per core);
+without the `_parity::` priority it began last and the step took 914 s; with it, the gate's nextest run took 764 s, its longest test 601 s. The extension's
+forced rebuild was already cheap (maturin's cargo build is incremental), so part (a)
+saves about nothing; the GPU merge saves one build of wgpu, CubeCL and cudarc when they
+are cold (about 45 s) and nothing when warm.
+
+The after run had half the load of the before run (mean 5.9 against 11.9), so part of
+the 485 s saved is the quieter machine: pytest, which 1.7 did not change, went from 208 s
+to 98 s. The Rust tests' 1215 s to 792 s is mostly nextest: by itself, under a load like
+the before run's, it took 914 s with the old ordering, and the run is now bounded by its
+longest test. The build (46 s) and the workspace clippy (19 s) recompiled crates that the
+before run found already built (7 s and 1 s), so the after run is not faster there.

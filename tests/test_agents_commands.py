@@ -1,8 +1,10 @@
-"""AGENTS.md commands are what CI runs, and a failing command fails the run (task 1.6)."""
+"""AGENTS.md commands are what CI runs, and a failing command fails the run (1.6, 1.7)."""
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -39,7 +41,10 @@ def test_lists_the_real_agents_md_block() -> None:
     result = _run_script("--list")
     assert result.returncode == 0, result.stderr
     commands = result.stdout.splitlines()
-    assert commands[0].startswith("uv sync")
+    # 1.7: one sync, the extension rebuilt through cargo's incremental build.
+    assert commands[0].startswith("uv sync --reinstall-package kyto ")
+    assert sum(command.startswith("uv sync") for command in commands) == 1
+    assert any("scripts/rust_tests.py --workspace" in command for command in commands)
     assert any(command.startswith("uv run pytest ") for command in commands)
     assert any(
         command.startswith("uv run pre-commit run --all-files") for command in commands
@@ -113,3 +118,99 @@ def test_headings_inside_code_blocks_are_ignored(tmp_path: Path) -> None:
     result = _run_script("--file", str(path), "--list")
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["echo real"]
+
+
+@needs_bash
+def test_only_runs_the_matching_commands_in_order(tmp_path: Path) -> None:
+    alpha, beta, gamma = (tmp_path / name for name in ("alpha", "beta", "gamma"))
+    path = _agents_file(
+        tmp_path,
+        f"touch '{alpha}'  # gamma\ntouch '{beta}'\ntouch '{gamma}'  # alpha\n",
+    )
+    result = _run_script("--file", str(path), "--only", "gamma", "alpha")
+    assert result.returncode == 0, result.stderr
+    assert alpha.exists() and gamma.exists() and not beta.exists()
+    assert "[1/2]" in result.stdout and "[2/2]" in result.stdout
+    assert "Partial run: 2 of 3 commands passed" in result.stdout
+    listed = _run_script("--file", str(path), "--list", "--only", "beta")
+    assert listed.stdout.splitlines() == [f"touch '{beta}'"]
+    # A text only in a comment selects nothing.
+    path = _agents_file(tmp_path, "true  # gamma\n")
+    assert _run_script("--file", str(path), "--only", "gamma").returncode == 2
+
+
+def test_only_with_an_unknown_step_is_an_error(tmp_path: Path) -> None:
+    path = _agents_file(tmp_path, "echo one\n")
+    result = _run_script("--file", str(path), "--only", "one", "nothing-like-it")
+    assert result.returncode == 2
+    assert "no command contains 'nothing-like-it'" in result.stderr
+    assert _run_script("--file", str(path), "--only", " ").returncode == 2
+
+
+@needs_bash
+def test_a_full_run_does_not_say_partial(tmp_path: Path) -> None:
+    path = _agents_file(tmp_path, "echo one\n")
+    result = _run_script("--file", str(path), "--only", "one")
+    assert result.returncode == 0, result.stderr
+    assert "Partial run" not in result.stdout
+
+
+def test_only_ignores_the_comments() -> None:
+    result = _run_script("--list", "--only", "pyright")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        line
+        for line in _run_script("--list").stdout.splitlines()
+        if line.startswith("uv run pyright ")
+    ]
+    rebase = _run_script(
+        "--list",
+        "--only",
+        "uv sync",
+        "cargo build",
+        "error_registry.py",
+        "stubs.py",
+        "llms_txt.py",
+    )
+    assert len(rebase.stdout.splitlines()) == 5, rebase.stdout
+
+
+def _rust_tests() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "rust_tests", ROOT / "scripts" / "rust_tests.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_nextest_runs_the_doctests_through_cargo_test() -> None:
+    commands = _rust_tests().commands
+    arguments = ["--workspace", "--locked"]
+    assert commands(arguments, True) == [
+        ["cargo", "nextest", "run", "--workspace", "--locked"],
+        ["cargo", "test", "--doc", "--workspace", "--locked"],
+    ]
+    assert commands(arguments, False) == [["cargo", "test", "--workspace", "--locked"]]
+
+
+def test_the_gpu_features_are_linted_while_their_tests_build() -> None:
+    commands = _run_script("--list").stdout.splitlines()
+    gpu = [command for command in commands if "-p kyto-gpu" in command]
+    assert len(gpu) == 1, gpu
+    assert "RUSTC_WORKSPACE_WRAPPER=clippy-driver" in gpu[0]
+    assert "CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__" in gpu[0]
+    assert "--all-targets --all-features" in gpu[0]
+    assert "--doc --all-features" in gpu[0]
+
+
+def test_every_own_process_test_binary_runs_alone_under_nextest() -> None:
+    # A `tests/<name>.rs` outside `tests/it/` exists because it needs the process to
+    # itself (AGENTS.md); nextest must not run other tests beside it (.config/nextest.toml).
+    config = (ROOT / ".config" / "nextest.toml").read_text(encoding="utf-8")
+    binaries = sorted(path.stem for path in ROOT.glob("crates/*/tests/*.rs"))
+    assert binaries, "no own-process test binaries found"
+    missing = [name for name in binaries if f"binary({name})" not in config]
+    assert not missing, f"add to the filter in .config/nextest.toml: {missing}"
+    assert 'threads-required = "num-test-threads"' in config
